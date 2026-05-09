@@ -113,9 +113,9 @@ const getAuthUser = async (req, res) => {
 // @route   GET /api/users/:slug
 // @access  Public
 // ──────────────────────────────────────────────
-const fetchUser = async (req, res) => {
+const fetchUserWithMenu = async (req, res) => {
   try {
-    const { slug } = req.params;
+    const { slug } = req.params
     const slugNormalizado = generateSlug(slug);
  
     const user = await User.findOne({ slug: slugNormalizado, active: true });
@@ -151,6 +151,20 @@ const fetchUser = async (req, res) => {
     };
  
     res.json({ user, menu: menuArmado });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+const fetchUser = async (req, res) => {
+  try {
+    const { slug } = req.params
+    const slugNormalizado = generateSlug(slug);
+ 
+    const user = await User.findOne({ slug: slugNormalizado, active: true });
+    if (!user) return res.status(404).json({ message: "Local no encontrado" });
+ 
+    res.json({ user });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -269,6 +283,7 @@ module.exports = {
   newUser,
   loginUser,
   getAuthUser,
+  fetchUserWithMenu,
   fetchUser,
   editUser,
   uploadImage,

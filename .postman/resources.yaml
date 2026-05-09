@@ -1,0 +1,7 @@
+# Use this workspace to collaborate
+workspace:
+  id: f7845243-3a47-4036-873e-48436dee9e0b
+
+localResources:
+  collections:
+    - ..\MenuDigital.postman_collection.json

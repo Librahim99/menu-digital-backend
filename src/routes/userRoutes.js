@@ -6,6 +6,7 @@ const {
   newUser,
   loginUser,
   getAuthUser,
+  fetchUserWithMenu,
   fetchUser,
   editUser,
   uploadImage,
@@ -31,6 +32,7 @@ router.patch("/active", protect, setActive);
 
 // Ruta pública por slug — va AL FINAL para no interceptar rutas con nombre fijo
 // Ej: GET /api/users/cafe-roma  →  devuelve el user con businessName "cafe roma"
+router.get("/:slug/menu", fetchUserWithMenu);
 router.get("/:slug", fetchUser);
 
 module.exports = router;

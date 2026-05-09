@@ -1,0 +1,932 @@
+{
+  "info": {
+    "name": "Menu Digital API",
+    "description": "Colección completa para testear la API de Menú Digital. Importar en Postman / extensión VS Code.\n\n**Orden recomendado:**\n1. Users → Register\n2. Users → Login (copia el token)\n3. Configurar variable `token` en el entorno\n4. Seguir el orden de las carpetas",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base", "value": "http://localhost:3000/api" },
+    { "key": "token", "value": "PEGAR_TOKEN_AQUI" },
+    { "key": "adminToken", "value": "PEGAR_TOKEN_ADMIN_AQUI" },
+    { "key": "userID", "value": "" },
+    { "key": "menuID_seccion", "value": "" },
+    { "key": "menuID_categoria", "value": "" },
+    { "key": "itemID", "value": "" }
+  ],
+  "item": [
+
+    {
+      "name": "👤 Users",
+      "item": [
+
+        {
+          "name": "✅ Registrar usuario nuevo (local completo)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base}}/users/register", "host": ["{{base}}"], "path": ["users","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"caferoma\",\n  \"password\": \"caferoma123\",\n  \"contactInfo\": {\n    \"bussinessName\": \"Café Roma\",\n    \"mail\": \"info@caferoma.com\",\n    \"number\": 1123456789,\n    \"address\": \"Av. Corrientes 1234, CABA\",\n    \"social\": {\n      \"instagram\": \"@caferoma\",\n      \"facebook\": \"CafeRomaBA\"\n    }\n  }\n}"
+            }
+          },
+          "_postman_notes": "Respuesta esperada: 201 con _id, username y token. El slug se genera automáticamente como 'cafe-roma'."
+        },
+
+        {
+          "name": "✅ Registrar usuario (sin contactInfo todavía)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base}}/users/register", "host": ["{{base}}"], "path": ["users","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"laburger\",\n  \"password\": \"burger456\"\n}"
+            }
+          },
+          "_postman_notes": "Registra un user sin datos de contacto. El slug quedará vacío hasta que editen el perfil."
+        },
+
+        {
+          "name": "✅ Registrar usuario con tildes en el nombre",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base}}/users/register", "host": ["{{base}}"], "path": ["users","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"donjose\",\n  \"password\": \"jose789\",\n  \"contactInfo\": {\n    \"bussinessName\": \"Don José\",\n    \"mail\": \"hola@donjose.com\",\n    \"address\": \"Belgrano 500, Córdoba\"\n  }\n}"
+            }
+          },
+          "_postman_notes": "El slug debe generarse como 'don-jose' (sin tilde, sin mayúscula)."
+        },
+
+        {
+          "name": "❌ Registrar con username duplicado",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base}}/users/register", "host": ["{{base}}"], "path": ["users","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"caferoma\",\n  \"password\": \"otraClave\"\n}"
+            }
+          },
+          "_postman_notes": "Debe responder 400: El username ya está en uso."
+        },
+
+        {
+          "name": "❌ Registrar sin password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base}}/users/register", "host": ["{{base}}"], "path": ["users","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"sinpass\"\n}"
+            }
+          },
+          "_postman_notes": "Debe responder 500 con error de validación de Mongoose."
+        },
+
+        {
+          "name": "✅ Login correcto",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base}}/users/login", "host": ["{{base}}"], "path": ["users","login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"caferoma\",\n  \"password\": \"caferoma123\"\n}"
+            }
+          },
+          "_postman_notes": "Copiá el token de la respuesta y pegalo en la variable 'token' del entorno."
+        },
+
+        {
+          "name": "❌ Login con password incorrecta",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base}}/users/login", "host": ["{{base}}"], "path": ["users","login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"caferoma\",\n  \"password\": \"incorrecta\"\n}"
+            }
+          },
+          "_postman_notes": "Debe responder 401: Credenciales inválidas."
+        },
+
+        {
+          "name": "❌ Login con usuario inexistente",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base}}/users/login", "host": ["{{base}}"], "path": ["users","login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"noexisto\",\n  \"password\": \"12345\"\n}"
+            }
+          },
+          "_postman_notes": "Debe responder 401: Credenciales inválidas."
+        },
+
+        {
+          "name": "✅ Obtener mi perfil (autenticado)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/users/me", "host": ["{{base}}"], "path": ["users","me"] }
+          },
+          "_postman_notes": "Requiere token. Devuelve todos los datos del user autenticado."
+        },
+
+        {
+          "name": "❌ Obtener perfil sin token",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base}}/users/me", "host": ["{{base}}"], "path": ["users","me"] }
+          },
+          "_postman_notes": "Debe responder 401: No autorizado, token requerido."
+        },
+
+        {
+          "name": "✅ Fetch user por slug (público) — cafe-roma",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base}}/users/cafe-roma", "host": ["{{base}}"], "path": ["users","cafe-roma"] }
+          },
+          "_postman_notes": "Ruta pública. Devuelve el user + menú completo armado (secciones → categorías → items)."
+        },
+
+        {
+          "name": "✅ Fetch user por slug — don-jose (con tilde en el nombre original)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base}}/users/don-jose", "host": ["{{base}}"], "path": ["users","don-jose"] }
+          },
+          "_postman_notes": "Aunque el nombre original tiene tilde, el slug está normalizado."
+        },
+
+        {
+          "name": "❌ Fetch user slug inexistente",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{base}}/users/local-que-no-existe", "host": ["{{base}}"], "path": ["users","local-que-no-existe"] }
+          },
+          "_postman_notes": "Debe responder 404: Local no encontrado."
+        },
+
+        {
+          "name": "✅ Editar perfil — actualizar contactInfo completo",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/users/me", "host": ["{{base}}"], "path": ["users","me"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"contactInfo\": {\n    \"bussinessName\": \"Café Roma\",\n    \"mail\": \"nuevo@caferoma.com\",\n    \"number\": 1199887766,\n    \"address\": \"Av. Santa Fe 2000, CABA\",\n    \"location\": { \"lat\": -34.5965, \"lng\": -58.3741 },\n    \"social\": {\n      \"instagram\": \"@caferoma_oficial\",\n      \"facebook\": \"CafeRomaOficial\",\n      \"whatsapp\": \"5491199887766\"\n    }\n  },\n  \"hasDelivery\": true\n}"
+            }
+          },
+          "_postman_notes": "El slug se regenera automáticamente si cambia el bussinessName."
+        },
+
+        {
+          "name": "✅ Editar perfil — solo delivery y template",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/users/me", "host": ["{{base}}"], "path": ["users","me"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hasDelivery\": false,\n  \"template\": 2\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Cambiar template",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/users/template", "host": ["{{base}}"], "path": ["users","template"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": 3\n}"
+            }
+          }
+        },
+
+        {
+          "name": "❌ Cambiar template con valor inválido",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/users/template", "host": ["{{base}}"], "path": ["users","template"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"template\": \"azul\"\n}"
+            }
+          },
+          "_postman_notes": "Debe responder 400: Template debe ser un número."
+        },
+
+        {
+          "name": "✅ Desactivar cuenta (admin activa/desactiva clientes)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/users/active", "host": ["{{base}}"], "path": ["users","active"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"active\": false\n}"
+            }
+          },
+          "_postman_notes": "Usar token de admin. Después de esto, el user no puede loguearse."
+        },
+
+        {
+          "name": "✅ Reactivar cuenta",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{adminToken}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/users/active", "host": ["{{base}}"], "path": ["users","active"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"active\": true\n}"
+            }
+          }
+        }
+
+      ]
+    },
+
+    {
+      "name": "📂 Menús (secciones y categorías)",
+      "item": [
+
+        {
+          "name": "✅ Crear sección general — Comidas",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus", "host": ["{{base}}"], "path": ["menus"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"comidas\",\n  \"title\": \"Comidas\",\n  \"description\": \"Todo nuestro menú de cocina\",\n  \"section\": true\n}"
+            }
+          },
+          "_postman_notes": "section:true = es una sección padre. Guardá el _id como menuID_seccion."
+        },
+
+        {
+          "name": "✅ Crear sección general — Bebidas",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus", "host": ["{{base}}"], "path": ["menus"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"bebidas\",\n  \"title\": \"Bebidas\",\n  \"description\": \"Frescas y calientes\",\n  \"section\": true\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Crear categoría hija — Pizzas (dentro de Comidas)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus", "host": ["{{base}}"], "path": ["menus"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"pizzas\",\n  \"title\": \"Pizzas\",\n  \"description\": \"Masa artesanal, horneadas a la piedra\",\n  \"section\": false,\n  \"sectionID\": \"{{menuID_seccion}}\"\n}"
+            }
+          },
+          "_postman_notes": "Reemplazá {{menuID_seccion}} con el _id de la sección Comidas."
+        },
+
+        {
+          "name": "✅ Crear categoría hija — Hamburguesas (dentro de Comidas)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus", "host": ["{{base}}"], "path": ["menus"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"hamburguesas\",\n  \"title\": \"Hamburguesas\",\n  \"description\": \"Carne de primera, pan brioche\",\n  \"section\": false,\n  \"sectionID\": \"{{menuID_seccion}}\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Crear categoría SIN sección (sinSeccion)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus", "host": ["{{base}}"], "path": ["menus"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"postres\",\n  \"title\": \"Postres\",\n  \"description\": \"Dulce final para tu visita\",\n  \"section\": false\n}"
+            }
+          },
+          "_postman_notes": "Sin sectionID. Va a aparecer en el array 'sinSeccion' del fetchUser."
+        },
+
+        {
+          "name": "✅ Editar categoría — cambiar título y descripción",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus/{{menuID_categoria}}", "host": ["{{base}}"], "path": ["menus","{{menuID_categoria}}"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Pizzas Artesanales\",\n  \"description\": \"Masa madre, ingredientes frescos del día\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Mover categoría a otra sección",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus/{{menuID_categoria}}/move", "host": ["{{base}}"], "path": ["menus","{{menuID_categoria}}","move"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sectionID\": \"{{menuID_seccion}}\"\n}"
+            }
+          },
+          "_postman_notes": "Drag & drop: mueve la categoría a una sección diferente."
+        },
+
+        {
+          "name": "✅ Quitar sección de una categoría (dejarla suelta)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus/{{menuID_categoria}}/move", "host": ["{{base}}"], "path": ["menus","{{menuID_categoria}}","move"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sectionID\": null\n}"
+            }
+          },
+          "_postman_notes": "Con sectionID null, la categoría pasa a 'sinSeccion'."
+        },
+
+        {
+          "name": "✅ Ocultar categoría",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus/{{menuID_categoria}}/hidden", "host": ["{{base}}"], "path": ["menus","{{menuID_categoria}}","hidden"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hidden\": true\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Mostrar categoría (des-ocultar)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus/{{menuID_categoria}}/hidden", "host": ["{{base}}"], "path": ["menus","{{menuID_categoria}}","hidden"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hidden\": false\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Eliminar categoría vacía",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/menus/{{menuID_categoria}}", "host": ["{{base}}"], "path": ["menus","{{menuID_categoria}}"] }
+          },
+          "_postman_notes": "Solo funciona si la categoría no tiene items. Si tiene, responde 400 con la cantidad."
+        },
+
+        {
+          "name": "❌ Eliminar categoría CON items (debe fallar)",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/menus/{{menuID_categoria}}", "host": ["{{base}}"], "path": ["menus","{{menuID_categoria}}"] }
+          },
+          "_postman_notes": "Primero cargá items en esa categoría. Debe responder 400: 'esta categoría tiene N producto(s)'."
+        },
+
+        {
+          "name": "❌ Eliminar sección CON categorías hijas (debe fallar)",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/menus/{{menuID_seccion}}", "host": ["{{base}}"], "path": ["menus","{{menuID_seccion}}"] }
+          },
+          "_postman_notes": "Debe responder 400: 'esta sección tiene N categoría(s)'."
+        },
+
+        {
+          "name": "❌ Editar menú de otro usuario (ownership)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/menus/000000000000000000000000", "host": ["{{base}}"], "path": ["menus","000000000000000000000000"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Hackeo\"\n}"
+            }
+          },
+          "_postman_notes": "Debe responder 404 o 403."
+        }
+
+      ]
+    },
+
+    {
+      "name": "🍕 Items (productos)",
+      "item": [
+
+        {
+          "name": "✅ Crear item completo — Pizza Napolitana",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items", "host": ["{{base}}"], "path": ["items"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"menuID\": \"{{menuID_categoria}}\",\n  \"code\": \"pizza-napo\",\n  \"title\": \"Pizza Napolitana\",\n  \"description\": \"Tomate, mozzarella y albahaca fresca\",\n  \"price\": 2800,\n  \"offerPrice\": 2200,\n  \"offerRange\": {\n    \"from\": \"2025-07-01\",\n    \"to\": \"2025-07-07\"\n  },\n  \"options\": {\n    \"Chica (4 porciones)\": 2200,\n    \"Grande (8 porciones)\": 2800\n  },\n  \"isExtra\": false,\n  \"recommended\": true,\n  \"apt\": {\n    \"vegetariano\": true,\n    \"alérgenos\": \"gluten, lácteos\"\n  }\n}"
+            }
+          },
+          "_postman_notes": "Guardá el _id como itemID. offerRange define el rango de fechas en que aplica la oferta."
+        },
+
+        {
+          "name": "✅ Crear item simple — Coca Cola",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items", "host": ["{{base}}"], "path": ["items"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"menuID\": \"{{menuID_categoria}}\",\n  \"code\": \"coca-cola\",\n  \"title\": \"Coca Cola\",\n  \"price\": 800\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Crear item extra — Salsa de ajo",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items", "host": ["{{base}}"], "path": ["items"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"menuID\": \"{{menuID_categoria}}\",\n  \"code\": \"salsa-ajo\",\n  \"title\": \"Salsa de Ajo\",\n  \"description\": \"Adicional\",\n  \"price\": 350,\n  \"isExtra\": true,\n  \"recommended\": false\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Crear item con oferta programada para el futuro",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items", "host": ["{{base}}"], "path": ["items"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"menuID\": \"{{menuID_categoria}}\",\n  \"code\": \"burger-clasica\",\n  \"title\": \"Burger Clásica\",\n  \"description\": \"200g de carne, queso cheddar, lechuga, tomate\",\n  \"price\": 3200,\n  \"offerPrice\": 2500,\n  \"offerRange\": {\n    \"from\": \"2025-08-01\",\n    \"to\": \"2025-08-31\"\n  },\n  \"recommended\": true\n}"
+            }
+          },
+          "_postman_notes": "La oferta está programada para agosto. Antes y después de esas fechas no debería mostrarse."
+        },
+
+        {
+          "name": "✅ Editar item — actualizar precio y descripción",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items/{{itemID}}", "host": ["{{base}}"], "path": ["items","{{itemID}}"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"price\": 3100,\n  \"description\": \"Tomate perita, mozzarella de búfala y albahaca\"\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Editar item — agregar opción de tamaño",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items/{{itemID}}", "host": ["{{base}}"], "path": ["items","{{itemID}}"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"options\": {\n    \"Chica (4 porciones)\": 2400,\n    \"Grande (8 porciones)\": 3100,\n    \"Familiar (12 porciones)\": 4500\n  }\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Editar item — programar oferta de la semana",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items/{{itemID}}", "host": ["{{base}}"], "path": ["items","{{itemID}}"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"offerPrice\": 2400,\n  \"offerRange\": {\n    \"from\": \"2025-07-14\",\n    \"to\": \"2025-07-20\"\n  }\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Mover item a otra categoría",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items/{{itemID}}/move", "host": ["{{base}}"], "path": ["items","{{itemID}}","move"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"menuID\": \"{{menuID_categoria}}\"\n}"
+            }
+          },
+          "_postman_notes": "Drag & drop: el item cambia de categoría. Verificar que el menuID destino también pertenezca al mismo user."
+        },
+
+        {
+          "name": "❌ Mover item a categoría de otro usuario",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items/{{itemID}}/move", "host": ["{{base}}"], "path": ["items","{{itemID}}","move"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"menuID\": \"000000000000000000000000\"\n}"
+            }
+          },
+          "_postman_notes": "Debe responder 403 o 404."
+        },
+
+        {
+          "name": "✅ Ocultar item",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items/{{itemID}}/hidden", "host": ["{{base}}"], "path": ["items","{{itemID}}","hidden"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hidden\": true\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Mostrar item (des-ocultar)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items/{{itemID}}/hidden", "host": ["{{base}}"], "path": ["items","{{itemID}}","hidden"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hidden\": false\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Marcar item como no disponible (se agotó)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items/{{itemID}}/available", "host": ["{{base}}"], "path": ["items","{{itemID}}","available"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"available\": false\n}"
+            }
+          }
+        },
+
+        {
+          "name": "✅ Marcar item como disponible",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items/{{itemID}}/available", "host": ["{{base}}"], "path": ["items","{{itemID}}","available"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"available\": true\n}"
+            }
+          }
+        },
+
+        {
+          "name": "❌ hidden con valor inválido",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "url": { "raw": "{{base}}/items/{{itemID}}/hidden", "host": ["{{base}}"], "path": ["items","{{itemID}}","hidden"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hidden\": \"si\"\n}"
+            }
+          },
+          "_postman_notes": "Debe responder 400: hidden debe ser un booleano."
+        }
+
+      ]
+    },
+
+    {
+      "name": "📊 Massive (carga masiva Excel)",
+      "item": [
+
+        {
+          "name": "✅ Descargar plantilla Excel (con datos actuales)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/massive/template", "host": ["{{base}}"], "path": ["massive","template"] }
+          },
+          "_postman_notes": "Descarga el .xlsx con los datos del user autenticado. En Postman: Send and Download."
+        },
+
+        {
+          "name": "✅ Preview — subir Excel modificado (sin guardar)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/massive/preview", "host": ["{{base}}"], "path": ["massive","preview"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "archivo",
+                  "type": "file",
+                  "src": "",
+                  "description": "Seleccionar el .xlsx modificado"
+                }
+              ]
+            }
+          },
+          "_postman_notes": "Subir el Excel con cambios. Devuelve resumen: cuántos se crean, actualizan, y errores por fila. NO guarda nada."
+        },
+
+        {
+          "name": "✅ Confirm — aplicar cambios del Excel",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/massive/confirm", "host": ["{{base}}"], "path": ["massive","confirm"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "archivo",
+                  "type": "file",
+                  "src": "",
+                  "description": "El mismo .xlsx del preview"
+                }
+              ]
+            }
+          },
+          "_postman_notes": "Aplica los cambios fila por fila. Devuelve resultado detallado: qué se creó, actualizó y qué filas fallaron."
+        },
+
+        {
+          "name": "❌ Preview sin archivo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/massive/preview", "host": ["{{base}}"], "path": ["massive","preview"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": []
+            }
+          },
+          "_postman_notes": "Debe responder 400: No se recibió ningún archivo."
+        },
+
+        {
+          "name": "❌ Preview con archivo que no es Excel",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/massive/preview", "host": ["{{base}}"], "path": ["massive","preview"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "archivo",
+                  "type": "file",
+                  "src": "",
+                  "description": "Subir un .pdf o .txt para probar"
+                }
+              ]
+            }
+          },
+          "_postman_notes": "Debe fallar al intentar parsear el archivo como Excel."
+        }
+
+      ]
+    },
+
+    {
+      "name": "🖼️ Imágenes (Cloudinary)",
+      "item": [
+
+        {
+          "name": "✅ Subir imagen de perfil del local",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/users/upload-image", "host": ["{{base}}"], "path": ["users","upload-image"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": "",
+                  "description": "JPG, PNG o WEBP"
+                }
+              ]
+            }
+          },
+          "_postman_notes": "Sube a Cloudinary en la carpeta menu-digital/users. Devuelve la URL pública."
+        },
+
+        {
+          "name": "✅ Subir imagen de una categoría",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/menus/{{menuID_categoria}}/upload-image", "host": ["{{base}}"], "path": ["menus","{{menuID_categoria}}","upload-image"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            }
+          }
+        },
+
+        {
+          "name": "✅ Subir imagen de un item",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/items/{{itemID}}/upload-image", "host": ["{{base}}"], "path": ["items","{{itemID}}","upload-image"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "image",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            }
+          }
+        },
+
+        {
+          "name": "❌ Subir imagen sin archivo",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base}}/items/{{itemID}}/upload-image", "host": ["{{base}}"], "path": ["items","{{itemID}}","upload-image"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": []
+            }
+          },
+          "_postman_notes": "Debe responder 400: No se recibió ningún archivo."
+        },
+
+        {
+          "name": "❌ Subir imagen sin token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": { "raw": "{{base}}/users/upload-image", "host": ["{{base}}"], "path": ["users","upload-image"] },
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "image", "type": "file", "src": "" }
+              ]
+            }
+          },
+          "_postman_notes": "Debe responder 401."
+        }
+
+      ]
+    }
+
+  ]
+}
