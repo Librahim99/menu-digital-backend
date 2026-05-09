@@ -39,9 +39,12 @@ const ItemSchema = new mongoose.Schema(
       default: null, // Precio en oferta, si aplica
     },
 
-    offerDate: {
-      type: Date,
-      default: null, // Fecha hasta la que aplica la oferta
+    // Rango de fechas en el que aplica la oferta.
+    // Ej: del lunes al viernes de la semana que viene.
+    // El front/back compara con la fecha actual para saber si mostrar el offerPrice.
+    offerRange: {
+      from: { type: Date, default: null }, // Inicio de la oferta
+      to:   { type: Date, default: null }, // Fin de la oferta
     },
 
     /**

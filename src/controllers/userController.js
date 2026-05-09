@@ -1,5 +1,7 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const Menu = require("../models/Menu");
+const Item = require("../models/Item");
 
 // ──────────────────────────────────────────────
 // Helper: genera un JWT firmado con el ID del user
@@ -80,6 +82,7 @@ const loginUser = async (req, res) => {
     res.json({
       _id: user._id,
       username: user.username,
+      admin: user.admin,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -102,27 +105,52 @@ const getAuthUser = async (req, res) => {
   }
 };
 
-
-//          El front extrae el slug de la URL y lo manda acá.
-//          Devuelve el user completo (sin password) para que el front
-//          use su _id en todas las llamadas siguientes (menus, items, etc.)
+// ──────────────────────────────────────────────
+// @desc    Obtener datos públicos de un local por slug + menú completo armado.
+//          Se ejecuta UNA sola vez cuando el cliente entra a /negocio o /negocio/menu.
+//          Devuelve el user y el menú estructurado para que el front no necesite
+//          más llamadas: secciones → categorías → items anidados.
 // @route   GET /api/users/:slug
 // @access  Public
 // ──────────────────────────────────────────────
 const fetchUser = async (req, res) => {
   try {
     const { slug } = req.params;
-
-    // El slug ya está normalizado en la DB, solo normalizamos el parámetro entrante
     const slugNormalizado = generateSlug(slug);
-
+ 
     const user = await User.findOne({ slug: slugNormalizado, active: true });
-
-    if (!user) {
-      return res.status(404).json({ message: "Local no encontrado" });
-    }
-
-    res.json(user);
+    if (!user) return res.status(404).json({ message: "Local no encontrado" });
+ 
+    // Traemos todos los menus del user
+    const menus = await Menu.find({ userID: user._id, hidden: false });
+    const menuIDs = menus.map((m) => m._id);
+ 
+    // Traemos todos los items de esos menus
+    const allItems = await Item.find({ menuID: { $in: menuIDs }, hidden: false });
+ 
+    // Separamos secciones y categorías
+    const secciones  = menus.filter((m) => m.section === true);
+    const categorias = menus.filter((m) => m.section === false);
+ 
+    const menuArmado = {
+      secciones: secciones.map((sec) => ({
+        ...sec.toObject(),
+        categorias: categorias
+          .filter((cat) => cat.sectionID && cat.sectionID.equals(sec._id))
+          .map((cat) => ({
+            ...cat.toObject(),
+            items: allItems.filter((item) => item.menuID.equals(cat._id)),
+          })),
+      })),
+      sinSeccion: categorias
+        .filter((cat) => !cat.sectionID)
+        .map((cat) => ({
+          ...cat.toObject(),
+          items: allItems.filter((item) => item.menuID.equals(cat._id)),
+        })),
+    };
+ 
+    res.json({ user, menu: menuArmado });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

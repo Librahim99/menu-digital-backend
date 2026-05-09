@@ -26,6 +26,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/menus", require("./routes/menuRoutes"));
 app.use("/api/items", require("./routes/itemRoutes"));
+app.use("/api/massive", require("./routes/massiveRoutes"));
 
 // ──────────────────────────────────────────────
 // Ruta pública multi-tenant: /:businessName/menu
@@ -54,7 +55,7 @@ app.use((req, res) => {
 // ──────────────────────────────────────────────
 // Inicio del servidor
 // ──────────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });

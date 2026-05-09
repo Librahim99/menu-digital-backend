@@ -2,7 +2,8 @@ const Item = require("../models/Item");
 const Menu = require("../models/Menu");
 
 // ──────────────────────────────────────────────
-// Helper: verifica que el menuID pertenezca al user autenticado
+// Helper: verifica que el menuID pertenezca al user autenticado.
+// Se usa en todas las funciones para garantizar ownership.
 // ──────────────────────────────────────────────
 const verifyMenuOwnership = async (menuID, userID) => {
   const menu = await Menu.findById(menuID);
@@ -13,31 +14,25 @@ const verifyMenuOwnership = async (menuID, userID) => {
 };
 
 // ──────────────────────────────────────────────
-// @desc    Crear un nuevo item en un menú
+// @desc    Crear un nuevo item en una categoría
 // @route   POST /api/items
 // @access  Private
 // ──────────────────────────────────────────────
 const newItem = async (req, res) => {
   try {
-    const { menuID, title, description, price, offerPrice, offerDate, options, isExtra, recommended, code, apt } = req.body;
-
+    const {
+      menuID, code, title, description, price,
+      offerPrice, offerRange, options, isExtra, recommended, apt,
+    } = req.body;
+ 
     const { error, status } = await verifyMenuOwnership(menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
-
+ 
     const item = await Item.create({
-      menuID,
-      title,
-      description,
-      price,
-      offerPrice,
-      offerDate,
-      options,
-      isExtra,
-      recommended,
-      code,
-      apt,
+      menuID, code, title, description, price,
+      offerPrice, offerRange, options, isExtra, recommended, apt,
     });
-
+ 
     res.status(201).json(item);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -45,7 +40,11 @@ const newItem = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
-// @desc    Editar un item existente
+// @desc    Editar campos de contenido de un item
+//          (título, descripción, precios, opciones, etc.)
+//          No mueve el item entre categorías — para eso está moveItem.
+//          No cambia imagen — para eso está uploadImage.
+//          No cambia hidden/available — para eso están setHidden/setAvailable.
 // @route   PUT /api/items/:itemID
 // @access  Private
 // ──────────────────────────────────────────────
@@ -53,27 +52,26 @@ const editItem = async (req, res) => {
   try {
     const item = await Item.findById(req.params.itemID);
     if (!item) return res.status(404).json({ message: "Item no encontrado" });
-
+ 
     const { error, status } = await verifyMenuOwnership(item.menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
-
+ 
     const allowedFields = [
-      "title", "description", "price", "offerPrice", "offerDate",
-      "options", "image", "available", "isExtra", "recommended",
-      "hidden", "code", "apt",
+      "code", "title", "description", "price",
+      "offerPrice", "offerRange", "options", "isExtra", "recommended", "apt",
     ];
-
+ 
     const updates = {};
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
-
+ 
     const updated = await Item.findByIdAndUpdate(
       req.params.itemID,
       { $set: updates },
       { new: true, runValidators: true }
     );
-
+ 
     res.json(updated);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -81,26 +79,33 @@ const editItem = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
-// @desc    Editar múltiples items a la vez (ej: reordenar, cambiar precios en lote)
-// @route   PUT /api/items/massive
+// @desc    Mover un item a otra categoría (drag & drop entre categorías)
+//          Verifica ownership tanto de la categoría origen como la destino.
+// @route   PATCH /api/items/:itemID/move
 // @access  Private
-// Body: { items: [{ _id, ...campos }] }
 // ──────────────────────────────────────────────
-const editItemMassive = async (req, res) => {
+const moveItem = async (req, res) => {
   try {
-    const { items } = req.body;
-
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: "Se requiere un array de items" });
-    }
-
-    // Ejecuta todas las actualizaciones en paralelo
-    const updatePromises = items.map(({ _id, ...fields }) =>
-      Item.findByIdAndUpdate(_id, { $set: fields }, { new: true })
+    const { menuID: newMenuID } = req.body;
+    if (!newMenuID) return res.status(400).json({ message: "menuID destino requerido" });
+ 
+    const item = await Item.findById(req.params.itemID);
+    if (!item) return res.status(404).json({ message: "Item no encontrado" });
+ 
+    // Verifica ownership del menú origen
+    const { error: errorOrigen, status: statusOrigen } = await verifyMenuOwnership(item.menuID, req.user._id);
+    if (errorOrigen) return res.status(statusOrigen).json({ message: errorOrigen });
+ 
+    // Verifica ownership del menú destino
+    const { error: errorDestino, status: statusDestino } = await verifyMenuOwnership(newMenuID, req.user._id);
+    if (errorDestino) return res.status(statusDestino).json({ message: errorDestino });
+ 
+    const updated = await Item.findByIdAndUpdate(
+      req.params.itemID,
+      { menuID: newMenuID },
+      { new: true }
     );
-
-    const updated = await Promise.all(updatePromises);
-
+ 
     res.json(updated);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -114,26 +119,21 @@ const editItemMassive = async (req, res) => {
 // ──────────────────────────────────────────────
 const uploadImage = async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ message: "No se recibió ningún archivo" });
-    }
-
+    if (!req.file) return res.status(400).json({ message: "No se recibió ningún archivo" });
+ 
     const item = await Item.findById(req.params.itemID);
     if (!item) return res.status(404).json({ message: "Item no encontrado" });
-
+ 
     const { error, status } = await verifyMenuOwnership(item.menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
-
-    // Cloudinary devuelve la URL pública en req.file.path
-    const imageUrl = req.file.path;
-
+ 
     const updated = await Item.findByIdAndUpdate(
       req.params.itemID,
-      { image: imageUrl },
+      { image: req.file.path }, // Cloudinary devuelve la URL en req.file.path
       { new: true }
     );
-
-    res.json({ imageUrl, item: updated });
+ 
+    res.json({ imageUrl: req.file.path, item: updated });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -147,23 +147,15 @@ const uploadImage = async (req, res) => {
 const setHidden = async (req, res) => {
   try {
     const { hidden } = req.body;
-
-    if (typeof hidden !== "boolean") {
-      return res.status(400).json({ message: "hidden debe ser un booleano" });
-    }
-
+    if (typeof hidden !== "boolean") return res.status(400).json({ message: "hidden debe ser un booleano" });
+ 
     const item = await Item.findById(req.params.itemID);
     if (!item) return res.status(404).json({ message: "Item no encontrado" });
-
+ 
     const { error, status } = await verifyMenuOwnership(item.menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
-
-    const updated = await Item.findByIdAndUpdate(
-      req.params.itemID,
-      { hidden },
-      { new: true }
-    );
-
+ 
+    const updated = await Item.findByIdAndUpdate(req.params.itemID, { hidden }, { new: true });
     res.json({ hidden: updated.hidden });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -178,23 +170,15 @@ const setHidden = async (req, res) => {
 const setAvailable = async (req, res) => {
   try {
     const { available } = req.body;
-
-    if (typeof available !== "boolean") {
-      return res.status(400).json({ message: "available debe ser un booleano" });
-    }
-
+    if (typeof available !== "boolean") return res.status(400).json({ message: "available debe ser un booleano" });
+ 
     const item = await Item.findById(req.params.itemID);
     if (!item) return res.status(404).json({ message: "Item no encontrado" });
-
+ 
     const { error, status } = await verifyMenuOwnership(item.menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
-
-    const updated = await Item.findByIdAndUpdate(
-      req.params.itemID,
-      { available },
-      { new: true }
-    );
-
+ 
+    const updated = await Item.findByIdAndUpdate(req.params.itemID, { available }, { new: true });
     res.json({ available: updated.available });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -204,7 +188,7 @@ const setAvailable = async (req, res) => {
 module.exports = {
   newItem,
   editItem,
-  editItemMassive,
+  moveItem,
   uploadImage,
   setHidden,
   setAvailable,
