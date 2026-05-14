@@ -9,6 +9,7 @@ const {
   fetchUserWithMenu,
   fetchUser,
   editUser,
+  getAllUsers,
   uploadImage,
   useTemplate,
   setActive,
@@ -26,6 +27,7 @@ router.post("/login", loginUser);
 // ──────────────────────────────────────────────
 router.get("/me", protect, getAuthUser);    // Datos del user autenticado (panel admin)
 router.put("/me", protect, editUser);
+router.get("/all", protect, getAllUsers);    // Solo para admin: lista de todos los usuarios
 router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.patch("/template", protect, useTemplate);
 router.patch("/active", protect, setActive);

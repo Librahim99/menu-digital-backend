@@ -107,10 +107,10 @@ const getAuthUser = async (req, res) => {
 
 // ──────────────────────────────────────────────
 // @desc    Obtener datos públicos de un local por slug + menú completo armado.
-//          Se ejecuta UNA sola vez cuando el cliente entra a /negocio o /negocio/menu.
+//          Se ejecuta UNA sola vez cuando el cliente entra a /negocio/menu.
 //          Devuelve el user y el menú estructurado para que el front no necesite
 //          más llamadas: secciones → categorías → items anidados.
-// @route   GET /api/users/:slug
+// @route   GET /api/users/:slug/menu
 // @access  Public
 // ──────────────────────────────────────────────
 const fetchUserWithMenu = async (req, res) => {
@@ -156,6 +156,13 @@ const fetchUserWithMenu = async (req, res) => {
   }
 };
 
+// ──────────────────────────────────────────────
+// @desc    Obtener datos públicos de un local por slug.
+//          Se ejecuta UNA sola vez cuando el cliente entra a /negocio.
+// @route   GET /api/users/:slug
+// @access  Public
+// ──────────────────────────────────────────────
+
 const fetchUser = async (req, res) => {
   try {
     const { slug } = req.params
@@ -200,6 +207,25 @@ const editUser = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// ──────────────────────────────────────────────
+// @desc    Obtener lista de todos los usuarios (solo para admin)
+// @route   GET /api/users/all
+// @access  Private (admin)
+// ──────────────────────────────────────────────
+const getAllUsers = async (req, res) => {
+  try {
+    if (!req.user.admin) {
+      return res.status(403).json({ message: "Acceso denegado" });
+    }
+
+    const users = await User.find().select("-password");
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 
 // ──────────────────────────────────────────────
 // @desc    Subir imagen de perfil/media del local
@@ -279,6 +305,14 @@ const setActive = async (req, res) => {
   }
 };
 
+// ──────────────────────────────────────────────
+// Aquí irían más funciones relacionadas con usuarios, como eliminar cuenta, cambiar password, etc.
+// ──────────────────────────────────────────────
+
+// ──────────────────────────────────────────────
+// Exportamos todas las funciones para usarlas en las rutas
+// ──────────────────────────────────────────────
+
 module.exports = {
   newUser,
   loginUser,
@@ -286,6 +320,7 @@ module.exports = {
   fetchUserWithMenu,
   fetchUser,
   editUser,
+  getAllUsers,
   uploadImage,
   useTemplate,
   setActive,
