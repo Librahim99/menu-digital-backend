@@ -185,6 +185,27 @@ const setAvailable = async (req, res) => {
   }
 };
 
+// ──────────────────────────────────────────────
+// @desc    Eliminar un item del menú
+// @route   DELETE /api/items/:itemID   
+// @access  Private
+// ──────────────────────────────────────────────
+
+const deleteItem = async (req, res) => {
+  try {
+    const item = await Item.findById(req.params.itemID);
+    if (!item) return res.status(404).json({ message: "Item no encontrado" });
+      
+      const { error, status } = await verifyMenuOwnership(item.menuID, req.user._id);
+      if (error) return res.status(status).json({ message: error });
+
+    await Item.findByIdAndDelete(req.params.itemID);
+    res.json({ message: "Item eliminado" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};  
+
 module.exports = {
   newItem,
   editItem,
@@ -192,4 +213,5 @@ module.exports = {
   uploadImage,
   setHidden,
   setAvailable,
+  deleteItem
 };
