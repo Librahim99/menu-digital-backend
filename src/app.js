@@ -23,6 +23,7 @@ app.use(express.urlencoded({ extended: true }));
 // ──────────────────────────────────────────────
 // Rutas de la API
 // ──────────────────────────────────────────────
+app.use("/api/admin", require("./routes/adminRoutes"))
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/menus", require("./routes/menuRoutes"));
 app.use("/api/items", require("./routes/itemRoutes"));

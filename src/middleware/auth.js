@@ -44,4 +44,18 @@ const protect = async (req, res, next) => {
   }
 };
 
-module.exports = { protect };
+
+/**
+ * Middleware que verifica que el user autenticado sea admin.
+ * Siempre se usa después de protect.
+ *
+ * Uso: router.patch("/ruta-admin", protect, isAdmin, controller)
+ */
+const isAdmin = (req, res, next) => {
+  if (!req.user?.admin) {
+    return res.status(403).json({ message: "Acceso restringido a administradores" });
+  }
+  next();
+};
+
+module.exports = { protect, isAdmin };

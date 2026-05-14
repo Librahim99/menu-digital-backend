@@ -131,6 +131,15 @@ const fetchUserWithMenu = async (req, res) => {
     // Separamos secciones y categorías
     const secciones  = menus.filter((m) => m.section === true);
     const categorias = menus.filter((m) => m.section === false);
+
+
+    const userFiltered = {
+      _id: user._id,
+      contactInfo: user.contactInfo,
+      media: user.media,
+      hasDelivery: user.hasDelivery,
+      template: user.template
+    }
  
     const menuArmado = {
       secciones: secciones.map((sec) => ({
@@ -150,7 +159,7 @@ const fetchUserWithMenu = async (req, res) => {
         })),
     };
  
-    res.json({ user, menu: menuArmado });
+    res.json({ user: userFiltered, menu: menuArmado });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -170,8 +179,16 @@ const fetchUser = async (req, res) => {
  
     const user = await User.findOne({ slug: slugNormalizado, active: true });
     if (!user) return res.status(404).json({ message: "Local no encontrado" });
+
+    const userFiltered = {
+      _id: user._id,
+      contactInfo: user.contactInfo,
+      media: user.media,
+      hasDelivery: user.hasDelivery,
+      template: user.template
+    }
  
-    res.json({ user });
+    res.json( userFiltered );
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -203,24 +220,6 @@ const editUser = async (req, res) => {
     );
 
     res.json(user);
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// ──────────────────────────────────────────────
-// @desc    Obtener lista de todos los usuarios (solo para admin)
-// @route   GET /api/users/all
-// @access  Private (admin)
-// ──────────────────────────────────────────────
-const getAllUsers = async (req, res) => {
-  try {
-    if (!req.user.admin) {
-      return res.status(403).json({ message: "Acceso denegado" });
-    }
-
-    const users = await User.find().select("-password");
-    res.json(users);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -320,7 +319,6 @@ module.exports = {
   fetchUserWithMenu,
   fetchUser,
   editUser,
-  getAllUsers,
   uploadImage,
   useTemplate,
   setActive,
