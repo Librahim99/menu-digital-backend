@@ -19,6 +19,7 @@ const {
 // ──────────────────────────────────────────────
 router.post("/register", newUser);
 router.post("/login", loginUser);
+// Acá va la ruta para cuando se olvidan la contraseña
 
 // ──────────────────────────────────────────────
 // Rutas privadas (requieren JWT)
@@ -29,6 +30,8 @@ router.put("/me", protect, editUser);
 router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.patch("/template", protect, useTemplate);
 router.patch("/active", protect, setActive);
+// Acá va la ruta para cambiar la contraseña
+
 
 // Ruta pública por slug — va AL FINAL para no interceptar rutas con nombre fijo
 // Ej: GET /api/users/cafe-roma  →  devuelve el user con businessName "cafe roma"
