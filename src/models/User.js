@@ -39,6 +39,12 @@ const UserSchema = new mongoose.Schema(
       default: false, // Indica si el user tiene menú creado
     },
 
+    subscription: {
+      type: String,
+      enum: ["none", "monthly", "semestral", "annual"],
+      default: "none",
+    },
+
     hasDelivery: {
       type: Boolean,
       default: false,

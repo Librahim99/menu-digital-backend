@@ -41,6 +41,10 @@ app.get("/:businessName/menu", (req, res) => {
   res.redirect(`/api/menus/public/${req.params.businessName}`);
 });
 
+//Mercado Pago
+const paymentRoutes = require("./routes/payment.routes");
+app.use("/api/payments", paymentRoutes);
+
 // ──────────────────────────────────────────────
 // Health check
 // ──────────────────────────────────────────────

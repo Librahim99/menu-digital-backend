@@ -20,4 +20,3 @@
 - Se creó la ruta '/api/admin/stats' que devuelve métricas generales de la base de datos.
 - Se creó la ruta '/api/admin/users/:userID/active' para setear como activo o inactivo un user.
 - Se creó la ruta '/api/admin/:userID' para obtener un usuario por ID.
-

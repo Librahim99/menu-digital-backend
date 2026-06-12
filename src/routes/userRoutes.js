@@ -12,6 +12,7 @@ const {
   uploadImage,
   useTemplate,
   setActive,
+  setSubscription,
 } = require("../controllers/userController");
 
 // ──────────────────────────────────────────────
@@ -30,6 +31,7 @@ router.put("/me", protect, editUser);
 router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.patch("/template", protect, useTemplate);
 router.patch("/active", protect, setActive);
+router.patch("/subscription", protect, setSubscription);
 // Acá va la ruta para cambiar la contraseña
 
 

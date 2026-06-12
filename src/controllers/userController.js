@@ -83,6 +83,7 @@ const loginUser = async (req, res) => {
       _id: user._id,
       username: user.username,
       admin: user.admin,
+      subscription: user.subscription,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -309,6 +310,32 @@ const setActive = async (req, res) => {
 // ──────────────────────────────────────────────
 
 // ──────────────────────────────────────────────
+// @desc    Actualizar la suscripción del usuario
+// @route   PATCH /api/users/subscription
+// @access  Private
+// ──────────────────────────────────────────────
+const setSubscription = async (req, res) => {
+  try {
+    const { subscription } = req.body;
+    const valid = ["none", "monthly", "semestral", "annual"];
+
+    if (!valid.includes(subscription)) {
+      return res.status(400).json({ message: "Valor de suscripción inválido" });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { subscription },
+      { new: true }
+    );
+
+    res.json({ subscription: user.subscription });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ──────────────────────────────────────────────
 // Exportamos todas las funciones para usarlas en las rutas
 // ──────────────────────────────────────────────
 
@@ -322,4 +349,5 @@ module.exports = {
   uploadImage,
   useTemplate,
   setActive,
+  setSubscription,
 };
