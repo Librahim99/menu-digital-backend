@@ -50,6 +50,10 @@ app.use("/api/payments", paymentRoutes);
 // ──────────────────────────────────────────────
 app.get("/", (req, res) => res.json({ status: "API corriendo ✅" }));
 
+app.get('/ping', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 // ──────────────────────────────────────────────
 // Manejo de rutas no encontradas
 // ──────────────────────────────────────────────
