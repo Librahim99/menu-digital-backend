@@ -37,6 +37,7 @@ app.use("/api/massive", require("./routes/massiveRoutes"));
 // ──────────────────────────────────────────────
 app.get('/api/ping', (req, res) => {
   res.json({ status: 'ok' });
+  console.log(`running... ${new Date().toLocaleString()}`)
 });
 
 app.get("/:businessName/menu", (req, res) => {
