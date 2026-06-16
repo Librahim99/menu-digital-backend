@@ -35,8 +35,11 @@ app.use("/api/massive", require("./routes/massiveRoutes"));
 // Esta ruta puede resolverse en el front con React Router,
 // o acá si queremos un SSR / redirect.
 // ──────────────────────────────────────────────
+
+
 app.get('/ping', (req, res) => {
-  res.json({ status: 'ok' });
+  console.log(`running... ${new Date().toLocaleString()}`)
+  res.json({ status: 'ok' }); 
 });
 
 app.get("/:businessName/menu", (req, res) => {
