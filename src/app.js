@@ -15,8 +15,18 @@ const app = express();
 // ──────────────────────────────────────────────
 // Middlewares globales
 // ──────────────────────────────────────────────
-app.use(cors()); // Permite requests desde el frontend (configurar origins en producción)
-app.use(express.json()); // Parsea el body de las requests como JSON
+app.use(cors({
+  origin: [
+    'https://menu-digital-app-v1-gamma.vercel.app',
+    'http://localhost:5173',
+    'http://localhost:3000',
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
+app.options('*', cors());  // preflight
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 
