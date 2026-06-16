@@ -259,6 +259,16 @@ const previewMassive = async (req, res) => {
     }
 
     // ── Procesar productos ────────────────────────────────────────────────
+    // Importante: además de las categorías que ya existen en la base,
+    // sumamos los códigos de categorías presentes en ESTE Excel (incluso si
+    // son nuevas y todavía no se guardaron). Sin esto, un Excel que trae
+    // categorías y productos nuevos a la vez marca error en todos los
+    // productos, porque su categoría "todavía no existe" en la base aunque
+    // sí va a crearse en el mismo import.
+    const codigosCategoriasEnExcel = new Set(
+      menusRows.map((r) => r["codigo"]?.toString().trim()).filter(Boolean)
+    );
+
     for (const row of itemsRows) {
       const codigo = row["codigo"]?.toString().trim();
       if (!codigo) {
@@ -266,9 +276,10 @@ const previewMassive = async (req, res) => {
         continue;
       }
 
-      // Verifica que la categoría exista
+      // Verifica que la categoría exista (ya en la base, o nueva en este mismo Excel)
       const codigoCat = row["codigo_categoria"]?.toString().trim();
-      if (codigoCat && !menusByCode[codigoCat]) {
+      const categoriaValida = !codigoCat || menusByCode[codigoCat] || codigosCategoriasEnExcel.has(codigoCat);
+      if (codigoCat && !categoriaValida) {
         resumen.productos.errores.push({
           fila: row._rowNumber,
           codigo,

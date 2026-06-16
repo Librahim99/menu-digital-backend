@@ -100,7 +100,18 @@ const getAuthUser = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
     if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
-    res.json(user);
+
+    // Contar items y categorías del usuario
+    const menus = await Menu.find({ userID: user._id });
+    const categorias = menus.filter(m => m.section === false);
+    const menuIDs = categorias.map(m => m._id);
+    const itemCount = await Item.countDocuments({ menuID: { $in: menuIDs }, hidden: false });
+
+    res.json({
+      ...user.toObject(),
+      itemCount,
+      categoryCount: categorias.length,
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

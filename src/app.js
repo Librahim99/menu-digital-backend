@@ -35,6 +35,10 @@ app.use("/api/massive", require("./routes/massiveRoutes"));
 // Esta ruta puede resolverse en el front con React Router,
 // o acá si queremos un SSR / redirect.
 // ──────────────────────────────────────────────
+app.get('/api/ping', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 app.get("/:businessName/menu", (req, res) => {
   // Por ahora redirige al endpoint público de la API.
   // En producción esto lo maneja el frontend (React).
@@ -49,10 +53,6 @@ app.use("/api/payments", paymentRoutes);
 // Health check
 // ──────────────────────────────────────────────
 app.get("/", (req, res) => res.json({ status: "API corriendo ✅" }));
-
-app.get('/ping', (req, res) => {
-  res.json({ status: 'ok' });
-});
 
 // ──────────────────────────────────────────────
 // Manejo de rutas no encontradas
