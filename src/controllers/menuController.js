@@ -28,6 +28,10 @@ const newMenu = async (req, res) => {
       if (error) return res.status(status).json({ message: error });
     }
 
+    // Verifica que el código sea único para este usuario
+    const existingMenu = await Menu.findOne({ userID: req.user._id, code });
+    if (existingMenu) return res.status(400).json({ message: "Código de menú ya existe" });
+
     const menu = await Menu.create({
       userID: req.user._id,
       title,
@@ -63,6 +67,14 @@ const editMenu = async (req, res) => {
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
+
+    // Si se está cambiando el código, verifica que el nuevo código no exista ya para este usuario
+    if (updates.code && updates.code !== menu.code) {
+      const existingMenuWithCode = await Menu.findOne({ userID: req.user._id, code: updates.code });
+      if (existingMenuWithCode) {
+        return res.status(400).json({ message: "Código de menú ya existe" });
+      }
+    }
  
     const updated = await Menu.findByIdAndUpdate(
       req.params.menuID,

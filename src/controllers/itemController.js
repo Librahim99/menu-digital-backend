@@ -22,18 +22,20 @@ const newItem = async (req, res) => {
   try {
     const {
       menuID, code, title, description, price, image,
-      offerPrice, offerRange, options, isExtra, recommended, apt,
+      offerPrice, offerRange, options, isExtra, recommended, apt, hidden, available
     } = req.body;
  
     const { error, status } = await verifyMenuOwnership(menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
  
+    // Verifica que el código sea único dentro del menú
+    const existingItem = await Item.findOne({ code });
+    if (existingItem) return res.status(400).json({ message: "Código de item ya existe en este menú" });  
     const item = await Item.create({
-      menuID, code, title, description, price, image,
-      offerPrice, offerRange, options, isExtra, recommended, apt,
-    });
- 
-    res.status(201).json(item);
+        menuID, code, title, description, price, image,
+        offerPrice, offerRange, options, isExtra, recommended, apt, hidden, available
+      });
+        res.status(201).json(item) 
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -74,7 +76,11 @@ const editItem = async (req, res) => {
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
- 
+ const existingItemWithCode = await Item.findOne({ code: updates.code });
+  if(existingItemWithCode && existingItemWithCode._id.toString() !== item._id.toString()) {
+    return res.status(400).json({ message: "Código de item ya existe" });
+  }
+
     const updated = await Item.findByIdAndUpdate(
       req.params.itemID,
       { $set: updates },

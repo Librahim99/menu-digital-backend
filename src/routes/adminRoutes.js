@@ -10,5 +10,5 @@ router.get("/:userID", protect, isAdmin, getUser); // Obtener un usuario por ID
 router.patch("/users/:userID/active", protect, isAdmin, setActiveUser); // Activar o desactivar un usuario
 
 
-module.exports = router;
 
+module.exports = router;
