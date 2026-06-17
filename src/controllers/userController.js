@@ -32,19 +32,30 @@ const generateSlug = (name) =>
 // ──────────────────────────────────────────────
 const newUser = async (req, res) => {
   try {
-    const { username, password, contactInfo } = req.body;
+    const { username, password, contactInfo, acceptedTerms, acceptedTermsAt, acceptedTermsVersion } = req.body;
 
     // Verifica que el username no esté tomado
     const exists = await User.findOne({ username });
     if (exists) {
-      return res.status(400).json({ message: "El username ya está en uso" });
-    }
+  return res.status(400).json({
+    message: "El username ya está en uso",
+  });
+}
+
+if (acceptedTerms !== true) {
+  return res.status(400).json({
+    message: "Debes aceptar los términos y condiciones",
+  });
+}
 
     // Crea el user; el hook pre-save hashea la password automáticamente
     const user = await User.create({
       username,
       password,
       contactInfo,
+      acceptedTerms: true,
+      acceptedTermsAt: new Date(),
+      acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
       // Si ya viene businessName en el registro, generamos el slug desde el inicio
       slug: contactInfo?.businessName ? generateSlug(contactInfo.businessName) : undefined,
     });

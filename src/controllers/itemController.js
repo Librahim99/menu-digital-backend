@@ -21,7 +21,7 @@ const verifyMenuOwnership = async (menuID, userID) => {
 const newItem = async (req, res) => {
   try {
     const {
-      menuID, code, title, description, price,
+      menuID, code, title, description, price, image,
       offerPrice, offerRange, options, isExtra, recommended, apt,
     } = req.body;
  
@@ -29,7 +29,7 @@ const newItem = async (req, res) => {
     if (error) return res.status(status).json({ message: error });
  
     const item = await Item.create({
-      menuID, code, title, description, price,
+      menuID, code, title, description, price, image,
       offerPrice, offerRange, options, isExtra, recommended, apt,
     });
  
@@ -57,9 +57,18 @@ const editItem = async (req, res) => {
     if (error) return res.status(status).json({ message: error });
  
     const allowedFields = [
-      "code", "title", "description", "price",
-      "offerPrice", "offerRange", "options", "isExtra", "recommended", "apt",
-    ];
+  "code",
+  "title",
+  "description",
+  "price",
+  "image",
+  "offerPrice",
+  "offerRange",
+  "options",
+  "isExtra",
+  "recommended",
+  "apt",
+];
  
     const updates = {};
     allowedFields.forEach((field) => {

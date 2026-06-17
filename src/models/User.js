@@ -55,6 +55,20 @@ const UserSchema = new mongoose.Schema(
       default: 1, // Template visual elegido para su landing/menú
     },
 
+    acceptedTerms: {
+  type: Boolean,
+  default: false,
+},
+
+acceptedTermsAt: {
+  type: Date,
+},
+
+acceptedTermsVersion: {
+  type: String,
+  default: null,
+},
+
     // Info de contacto del local (mail, teléfono, ubicación, redes, etc.)
     contactInfo: {
       mail: { type: String, default: "" },
@@ -75,6 +89,7 @@ const UserSchema = new mongoose.Schema(
     timestamps: true, // Agrega createdAt y updatedAt automáticamente
   }
 );
+
 
 // ──────────────────────────────────────────────
 // HOOKS (Middleware de Mongoose)
