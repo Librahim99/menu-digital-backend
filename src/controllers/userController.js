@@ -32,7 +32,7 @@ const generateSlug = (name) =>
 // ──────────────────────────────────────────────
 const newUser = async (req, res) => {
   try {
-    const { username, password, contactInfo, acceptedTerms, acceptedTermsAt, acceptedTermsVersion } = req.body;
+    const { username, password, contactInfo, acceptedTerms } = req.body;
 
     // Verifica que el username no esté tomado
     const exists = await User.findOne({ username });
