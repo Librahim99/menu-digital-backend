@@ -10,6 +10,9 @@ const {
   fetchUser,
   editUser,
   uploadImage,
+  uploadBackground,
+  removeImage,
+  deleteBackground,
   useTemplate,
   setActive,
   setSubscription,
@@ -29,6 +32,9 @@ router.post("/login", loginUser);
 router.get("/me", protect, getAuthUser);    // Datos del user autenticado (panel admin)
 router.put("/me", protect, editUser);
 router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
+router.post("/upload-background", protect, uploadUser.single("image"), uploadBackground);
+router.delete("/remove-image", protect, removeImage);
+router.delete("/background", protect, deleteBackground);
 router.patch("/template", protect, useTemplate);
 router.patch("/active", protect, setActive);
 router.patch("/subscription", protect, setSubscription);

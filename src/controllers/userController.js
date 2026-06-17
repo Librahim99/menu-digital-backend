@@ -267,6 +267,85 @@ const uploadImage = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
+// @desc    Subir imagen de portada (background) del local
+// @route   POST /api/users/upload-background
+// @access  Private
+// ──────────────────────────────────────────────
+const uploadBackground = async (req, res) => {
+  try {
+    // req.file es seteado por multer (configurado en la ruta)
+    if (!req.file) {
+      return res.status(400).json({ message: "No se recibió ningún archivo" });
+    }
+
+    // Cloudinary devuelve la URL pública en req.file.path
+    const imageUrl = req.file.path;
+
+    // Reemplaza la foto de portada del user (no se agrega a un array, es única)
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { "media.backgroundPicture": imageUrl },
+      { new: true }
+    );
+
+    res.json({ imageUrl, media: user.media });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Eliminar una foto puntual de la galería (media.pictures) por índice.
+//          Solo quita la referencia en MongoDB, no borra el archivo en Cloudinary.
+// @route   DELETE /api/users/remove-image
+// @access  Private
+// @body    { index: number }
+// ──────────────────────────────────────────────
+const removeImage = async (req, res) => {
+  try {
+    const { index } = req.body;
+
+    if (typeof index !== "number") {
+      return res.status(400).json({ message: "Falta el índice de la imagen a eliminar" });
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+
+    if (index < 0 || index >= user.media.pictures.length) {
+      return res.status(400).json({ message: "Índice fuera de rango" });
+    }
+
+    user.media.pictures.splice(index, 1);
+    await user.save();
+
+    res.json({ media: user.media });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Eliminar la foto de portada (media.backgroundPicture).
+//          Solo quita la referencia en MongoDB, no borra el archivo en Cloudinary.
+// @route   DELETE /api/users/background
+// @access  Private
+// ──────────────────────────────────────────────
+const deleteBackground = async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { "media.backgroundPicture": "" },
+      { new: true }
+    );
+
+    res.json({ media: user.media });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ──────────────────────────────────────────────
 // @desc    Cambiar el template visual del local
 // @route   PATCH /api/users/template
 // @access  Private
@@ -358,6 +437,9 @@ module.exports = {
   fetchUser,
   editUser,
   uploadImage,
+  uploadBackground,
+  removeImage,
+  deleteBackground,
   useTemplate,
   setActive,
   setSubscription,
