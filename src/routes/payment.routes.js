@@ -57,9 +57,9 @@ router.post("/crear-preferencia", async (req, res) => {
         ],
         // URLs de redirección después del pago
         back_urls: {
-          success: `${process.env.FRONTEND_URL}/register?pago=exitoso`,
-          failure: `${process.env.FRONTEND_URL}/planes?pago=fallido`,
-          pending: `${process.env.FRONTEND_URL}/register?pago=pendiente`,
+        success: `${process.env.FRONTEND_URL}/register`,
+        failure: `${process.env.FRONTEND_URL}/register?from=mp_failure`, 
+        pending: `${process.env.FRONTEND_URL}/register`,
         },
         auto_return: "approved", // redirige automáticamente si el pago es aprobado
         // Datos extra para identificar el pago en webhooks futuros
