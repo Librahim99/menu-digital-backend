@@ -1,16 +1,16 @@
 const mongoose = require("mongoose");
+const dns = require("dns");
 
-/**
- * Conecta la aplicación a MongoDB usando la URI del .env
- * Se llama una sola vez al iniciar el servidor
- */
+// c-ares (Node) usa un DNS que bloquea SRV — forzamos Google/Cloudflare
+dns.setServers(["8.8.8.8", "1.1.1.1"]);
+
 const connectDB = async () => {
   try {
     const conn = await mongoose.connect(process.env.MONGODB_URI);
     console.log(`✅ MongoDB conectado: ${conn.connection.host}`);
   } catch (error) {
     console.error(`❌ Error al conectar MongoDB: ${error.message}`);
-    process.exit(1); // Detiene el proceso si no hay conexión
+    process.exit(1);
   }
 };
 

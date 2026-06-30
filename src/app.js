@@ -59,7 +59,7 @@ app.get("/:businessName/menu", (req, res) => {
 });
 
 //Mercado Pago
-const paymentRoutes = require("./routes/payment.routes");
+const paymentRoutes = require("./routes/paymentRoutes");
 app.use("/api/payments", paymentRoutes);
 
 // ──────────────────────────────────────────────
