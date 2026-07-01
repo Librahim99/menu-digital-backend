@@ -406,6 +406,12 @@ const deleteBackground = async (req, res) => {
   }
 };
 
+// Templates que requieren un plan pago. Debe reflejar el campo `premium`
+// de TEMPLATES en UserEditor.tsx (frontend) — ese lado maneja la UI de
+// bloqueo/upsell, este es el que realmente impide guardarlo si alguien
+// se salta el front (ej. pegando el PATCH directo).
+const PREMIUM_TEMPLATE_IDS = [6, 7];
+
 // ──────────────────────────────────────────────
 // @desc    Cambiar el template visual del local
 // @route   PATCH /api/users/template
@@ -417,6 +423,10 @@ const useTemplate = async (req, res) => {
 
     if (typeof template !== "number") {
       return res.status(400).json({ message: "Template debe ser un número" });
+    }
+
+    if (PREMIUM_TEMPLATE_IDS.includes(template) && req.user.subscription === "none") {
+      return res.status(403).json({ message: "Ese template requiere un plan pago." });
     }
 
     const user = await User.findByIdAndUpdate(
