@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const { MercadoPagoConfig, Preference } = require("mercadopago");
+const { protect } = require("../middleware/auth");
+const { mpWebhook } = require("../controllers/paymentController");
 
 // ── Inicializar cliente MP con el Access Token del .env
 const client = new MercadoPagoConfig({
@@ -28,10 +30,15 @@ const PLANES = {
 
 /**
  * POST /api/payments/crear-preferencia
+ * @access  Private — el usuario ya tiene cuenta (plan gratis) y está
+ *          mejorando a un plan pago desde adentro de la app. Por eso
+ *          requiere estar logueado: así podemos guardar quién es el
+ *          que paga (external_reference) y el webhook puede después
+ *          actualizarle la suscripción a esa misma cuenta.
  * Body: { planId: "mensual" | "semestral" | "anual" }
  * Devuelve: { init_point: "https://..." }
  */
-router.post("/crear-preferencia", async (req, res) => {
+router.post("/crear-preferencia", protect, async (req, res) => {
   const { planId } = req.body;
 
   // Validar que el plan exista
@@ -55,14 +62,19 @@ router.post("/crear-preferencia", async (req, res) => {
             currency_id: "ARS",
           },
         ],
-        // URLs de redirección después del pago
+        // Vuelve al panel (no a /register: el usuario ya tiene cuenta).
+        // El query param es solo para que el front pueda mostrar un
+        // mensaje — la fuente de verdad de si se acreditó el plan es
+        // el webhook, no este redirect.
         back_urls: {
-        success: `${process.env.FRONTEND_URL}/register`,
-        failure: `${process.env.FRONTEND_URL}/register?from=mp_failure`, 
-        pending: `${process.env.FRONTEND_URL}/register`,
+          success: `${process.env.FRONTEND_URL}/user/editor?payment=success`,
+          failure: `${process.env.FRONTEND_URL}/user/editor?payment=failure`,
+          pending: `${process.env.FRONTEND_URL}/user/editor?payment=pending`,
         },
         auto_return: "approved", // redirige automáticamente si el pago es aprobado
-        // Datos extra para identificar el pago en webhooks futuros
+        // Identifica quién paga — lo lee mpWebhook para saber a qué
+        // cuenta actualizarle la suscripción cuando MP confirme el pago.
+        external_reference: req.user._id.toString(),
         metadata: {
           plan_id: planId,
         },
@@ -76,5 +88,12 @@ router.post("/crear-preferencia", async (req, res) => {
     res.status(500).json({ error: "No se pudo crear la preferencia de pago" });
   }
 });
+
+/**
+ * POST /api/payments/webhook
+ * MercadoPago llama acá cuando cambia el estado de un pago.
+ * @access  Public (lo llama MercadoPago, no el frontend)
+ */
+router.post("/webhook", mpWebhook);
 
 module.exports = router;
