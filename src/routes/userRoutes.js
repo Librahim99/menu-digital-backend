@@ -7,6 +7,7 @@ const {
   loginUser,
   getAuthUser,
   fetchUserWithMenu,
+  fetchOwnMenu,
   fetchUser,
   editUser,
   uploadImage,
@@ -30,6 +31,7 @@ router.post("/login", loginUser);
 // IMPORTANTE: /me debe ir ANTES de /:slug para que Express no lo interprete como slug
 // ──────────────────────────────────────────────
 router.get("/me", protect, getAuthUser);    // Datos del user autenticado (panel admin)
+router.get("/me/menu", protect, fetchOwnMenu); // Menú completo del user autenticado, sin filtrar ocultos
 router.put("/me", protect, editUser);
 router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.post("/upload-background", protect, uploadUser.single("image"), uploadBackground);

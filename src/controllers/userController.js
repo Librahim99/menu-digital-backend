@@ -23,7 +23,10 @@ const generateSlug = (name) =>
     .replace(/[\u0300-\u036f]/g, "") // Elimina diacríticos
     .toLowerCase()
     .trim()
-    .replace(/\s+/g, "-");           // Espacios -> guiones
+    .replace(/[^a-z0-9\s-]/g, "")    // Saca todo lo que no sea letra/número/espacio/guión
+    .replace(/\s+/g, "-")            // Espacios -> guiones
+    .replace(/-+/g, "-")             // Colapsa guiones repetidos
+    .replace(/^-+|-+$/g, "");        // Saca guiones al principio/final
 
 // ──────────────────────────────────────────────
 // @desc    Registrar nuevo usuario (local)
@@ -56,8 +59,10 @@ if (acceptedTerms !== true) {
       acceptedTerms: true,
       acceptedTermsAt: new Date(),
       acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
-      // Si ya viene businessName en el registro, generamos el slug desde el inicio
-      slug: contactInfo?.businessName ? generateSlug(contactInfo.businessName) : undefined,
+      // Si ya viene businessName en el registro, generamos el slug desde el inicio.
+      // Si el nombre no deja ningún carácter válido (ej. solo símbolos/emojis),
+      // dejamos slug sin definir en vez de guardar un string vacío.
+      slug: (contactInfo?.businessName && generateSlug(contactInfo.businessName)) || undefined,
     });
 
     res.status(201).json({
@@ -189,6 +194,48 @@ const fetchUserWithMenu = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
+// @desc    Obtener el menú completo del usuario autenticado, para el panel
+//          de administración. A diferencia de fetchUserWithMenu (carta
+//          pública), NO filtra secciones/categorías/items ocultos: el dueño
+//          necesita verlos para poder reactivarlos.
+// @route   GET /api/users/me/menu
+// @access  Private
+// ──────────────────────────────────────────────
+const fetchOwnMenu = async (req, res) => {
+  try {
+    const menus = await Menu.find({ userID: req.user._id });
+    const menuIDs = menus.map((m) => m._id);
+
+    const allItems = await Item.find({ menuID: { $in: menuIDs } });
+
+    const secciones  = menus.filter((m) => m.section === true);
+    const categorias = menus.filter((m) => m.section === false);
+
+    const menuArmado = {
+      secciones: secciones.map((sec) => ({
+        ...sec.toObject(),
+        categorias: categorias
+          .filter((cat) => cat.sectionID && cat.sectionID.equals(sec._id))
+          .map((cat) => ({
+            ...cat.toObject(),
+            items: allItems.filter((item) => item.menuID.equals(cat._id)),
+          })),
+      })),
+      sinSeccion: categorias
+        .filter((cat) => !cat.sectionID)
+        .map((cat) => ({
+          ...cat.toObject(),
+          items: allItems.filter((item) => item.menuID.equals(cat._id)),
+        })),
+    };
+
+    res.json({ menu: menuArmado });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ──────────────────────────────────────────────
 // @desc    Obtener datos públicos de un local por slug.
 //          Se ejecuta UNA sola vez cuando el cliente entra a /negocio.
 // @route   GET /api/users/:slug
@@ -231,9 +278,12 @@ const editUser = async (req, res) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
 
-    // Si actualizaron el businessName, regeneramos el slug automáticamente
+    // Si actualizaron el businessName, regeneramos el slug automáticamente.
+    // Si el nuevo nombre no deja ningún carácter válido, no tocamos el slug
+    // existente (mejor conservar el link viejo que dejarlo vacío).
     if (updates.contactInfo?.businessName) {
-      updates.slug = generateSlug(updates.contactInfo.businessName);
+      const newSlug = generateSlug(updates.contactInfo.businessName);
+      if (newSlug) updates.slug = newSlug;
     }
 
     const user = await User.findByIdAndUpdate(
@@ -445,6 +495,7 @@ module.exports = {
   loginUser,
   getAuthUser,
   fetchUserWithMenu,
+  fetchOwnMenu,
   fetchUser,
   editUser,
   uploadImage,
