@@ -13,17 +13,17 @@ const client = new MercadoPagoConfig({
 const PLANES = {
   mensual: {
     title: "Menú Digital — Plan Mensual",
-    unit_price: 4999,
+    unit_price: 5999,
     description: "Menú digital ilimitado, landing page del local, carga masiva por Excel",
   },
   semestral: {
     title: "Menú Digital — Plan Semestral",
-    unit_price: 24999,
+    unit_price: 29999,
     description: "Todo el plan mensual + 2 meses gratis + estadísticas",
   },
   anual: {
     title: "Menú Digital — Plan Anual",
-    unit_price: 39999,
+    unit_price: 49999,
     description: "Todo el plan semestral + 4 meses gratis + dominio personalizado",
   },
 };

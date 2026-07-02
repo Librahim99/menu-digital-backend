@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { protect } = require("../middleware/auth");
+const { protect, requirePlan } = require("../middleware/auth");
 const { uploadUser } = require("../config/cloudinary");
 const {
   newUser,
@@ -8,6 +8,7 @@ const {
   getAuthUser,
   fetchUserWithMenu,
   fetchOwnMenu,
+  fetchStats,
   fetchUser,
   editUser,
   uploadImage,
@@ -32,6 +33,7 @@ router.post("/login", loginUser);
 // ──────────────────────────────────────────────
 router.get("/me", protect, getAuthUser);    // Datos del user autenticado (panel admin)
 router.get("/me/menu", protect, fetchOwnMenu); // Menú completo del user autenticado, sin filtrar ocultos
+router.get("/me/stats", protect, requirePlan("semestral"), fetchStats); // Estadísticas de visitas (plan semestral+)
 router.put("/me", protect, editUser);
 router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.post("/upload-background", protect, uploadUser.single("image"), uploadBackground);

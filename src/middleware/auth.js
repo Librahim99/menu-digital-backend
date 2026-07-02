@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const { hasMinPlan } = require("../config/plans");
 
 /**
  * Middleware que protege rutas privadas.
@@ -58,4 +59,18 @@ const isAdmin = (req, res, next) => {
   next();
 };
 
-module.exports = { protect, isAdmin };
+/**
+ * Middleware factory que restringe una ruta a usuarios con determinado
+ * plan (o superior, según PLAN_ORDER en config/plans.js). Siempre se usa
+ * después de protect, ya que necesita req.user.subscription.
+ *
+ * Uso: router.post("/ruta-pro", protect, requirePlan("monthly"), controller)
+ */
+const requirePlan = (minPlan) => (req, res, next) => {
+  if (!hasMinPlan(req.user?.subscription, minPlan)) {
+    return res.status(403).json({ message: "Esta función requiere un plan pago." });
+  }
+  next();
+};
+
+module.exports = { protect, isAdmin, requirePlan };

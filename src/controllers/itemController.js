@@ -1,5 +1,6 @@
 const Item = require("../models/Item");
 const Menu = require("../models/Menu");
+const { hasMinPlan, FREE_ITEM_LIMIT } = require("../config/plans");
 
 // ──────────────────────────────────────────────
 // Helper: verifica que el menuID pertenezca al user autenticado.
@@ -27,10 +28,22 @@ const newItem = async (req, res) => {
  
     const { error, status } = await verifyMenuOwnership(menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
- 
+
+    // Plan gratuito: tope de productos totales (todas las categorías juntas).
+    // A partir del plan mensual ("menu_ilimitado") no hay tope.
+    if (!hasMinPlan(req.user.subscription, "monthly")) {
+      const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
+      const itemCount = await Item.countDocuments({ menuID: { $in: userMenuIDs } });
+      if (itemCount >= FREE_ITEM_LIMIT) {
+        return res.status(403).json({
+          message: `Alcanzaste el límite de ${FREE_ITEM_LIMIT} productos del plan gratuito. Mejorá tu plan para agregar productos ilimitados.`,
+        });
+      }
+    }
+
     // Verifica que el código sea único dentro del menú
     const existingItem = await Item.findOne({ code });
-    if (existingItem) return res.status(400).json({ message: "Código de item ya existe en este menú" });  
+    if (existingItem) return res.status(400).json({ message: "Código de item ya existe en este menú" });
     const item = await Item.create({
         menuID, code, title, description, price, image,
         offerPrice, offerRange, options, isExtra, recommended, apt, hidden, available

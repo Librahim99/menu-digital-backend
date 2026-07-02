@@ -2,6 +2,22 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
+const PageView = require("../models/PageView");
+const { hasMinPlan, FREE_ITEM_LIMIT } = require("../config/plans");
+
+// ──────────────────────────────────────────────
+// Helper: suma 1 a la visita de hoy del local (upsert, no bloqueante).
+// Se llama desde la carta pública — nunca debe romper ni frenar esa
+// respuesta si falla, por eso no se hace "await" en el caller.
+// ──────────────────────────────────────────────
+const trackView = (userID) => {
+  const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+  PageView.findOneAndUpdate(
+    { userID, date: today },
+    { $inc: { count: 1 } },
+    { upsert: true }
+  ).catch(() => {});
+};
 
 // ──────────────────────────────────────────────
 // Helper: genera un JWT firmado con el ID del user
@@ -148,11 +164,17 @@ const fetchUserWithMenu = async (req, res) => {
  
     const user = await User.findOne({ slug: slugNormalizado, active: true });
     if (!user) return res.status(404).json({ message: "Local no encontrado" });
- 
+
+    // Esta ruta es la que carga el cliente al ver la carta (ej: al escanear
+    // el QR de la mesa), así que es el lugar correcto para contar la
+    // visita — no se cuenta la landing pública (fetchUser) por separado,
+    // para no duplicar el conteo de una misma sesión de un cliente.
+    trackView(user._id);
+
     // Traemos todos los menus del user
     const menus = await Menu.find({ userID: user._id, hidden: false });
     const menuIDs = menus.map((m) => m._id);
- 
+
     // Traemos todos los items de esos menus
     const allItems = await Item.find({ menuID: { $in: menuIDs }, hidden: false });
  
@@ -229,7 +251,60 @@ const fetchOwnMenu = async (req, res) => {
         })),
     };
 
-    res.json({ menu: menuArmado });
+    // El front usa esto para mostrar "X/15 productos", deshabilitar
+    // "Agregar producto" al llegar al tope, y mostrar el candado en
+    // "Importar desde Excel" — la fuente de verdad real sigue siendo
+    // el check en newItem y el middleware requirePlan en massiveRoutes,
+    // esto es solo para la UI.
+    const unlimited = hasMinPlan(req.user.subscription, "monthly");
+    const limits = {
+      itemCount: allItems.length,
+      itemLimit: unlimited ? null : FREE_ITEM_LIMIT,
+      canImportExcel: unlimited, // misma condición: plan mensual o superior
+    };
+
+    res.json({ menu: menuArmado, limits });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Estadísticas de visitas a la carta pública del usuario
+//          autenticado: total y serie diaria de los últimos 30 días.
+//          El gating a semestral+ lo hace el middleware requirePlan
+//          en la ruta, no este controller.
+// @route   GET /api/users/me/stats
+// @access  Private (semestral+)
+// ──────────────────────────────────────────────
+const fetchStats = async (req, res) => {
+  try {
+    const since = new Date();
+    since.setDate(since.getDate() - 29); // 30 días incluyendo hoy
+    const sinceStr = since.toISOString().slice(0, 10);
+
+    const rows = await PageView.find({
+      userID: req.user._id,
+      date: { $gte: sinceStr },
+    });
+
+    const byDate = {};
+    rows.forEach((r) => { byDate[r.date] = r.count; });
+
+    // Completamos los días sin visitas con 0 para que el front dibuje
+    // una serie continua de 30 puntos en vez de saltear huecos.
+    const last30Days = [];
+    let totalViews = 0;
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      const count = byDate[key] || 0;
+      totalViews += count;
+      last30Days.push({ date: key, count });
+    }
+
+    res.json({ totalViews, last30Days });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -506,6 +581,7 @@ module.exports = {
   getAuthUser,
   fetchUserWithMenu,
   fetchOwnMenu,
+  fetchStats,
   fetchUser,
   editUser,
   uploadImage,
