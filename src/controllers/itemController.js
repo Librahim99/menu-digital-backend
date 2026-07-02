@@ -1,3 +1,4 @@
+const { handleError } = require("../utils/handleError");
 const Item = require("../models/Item");
 const Menu = require("../models/Menu");
 const { hasMinPlan, FREE_ITEM_LIMIT } = require("../config/plans");
@@ -29,10 +30,13 @@ const newItem = async (req, res) => {
     const { error, status } = await verifyMenuOwnership(menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
 
+    // IDs de todas las categorías del usuario — se usan tanto para el tope
+    // del plan gratuito como para el chequeo de código único de acá abajo.
+    const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
+
     // Plan gratuito: tope de productos totales (todas las categorías juntas).
     // A partir del plan mensual ("menu_ilimitado") no hay tope.
     if (!hasMinPlan(req.user.subscription, "monthly")) {
-      const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
       const itemCount = await Item.countDocuments({ menuID: { $in: userMenuIDs } });
       if (itemCount >= FREE_ITEM_LIMIT) {
         return res.status(403).json({
@@ -41,8 +45,10 @@ const newItem = async (req, res) => {
       }
     }
 
-    // Verifica que el código sea único dentro del menú
-    const existingItem = await Item.findOne({ code });
+    // Verifica que el código sea único entre los productos de ESTE usuario
+    // (antes se chequeaba contra TODA la colección — dos locales distintos
+    // no podían usar el mismo código de producto entre sí).
+    const existingItem = await Item.findOne({ code, menuID: { $in: userMenuIDs } });
     if (existingItem) return res.status(400).json({ message: "Código de item ya existe en este menú" });
     const item = await Item.create({
         menuID, code, title, description, price, image,
@@ -50,7 +56,7 @@ const newItem = async (req, res) => {
       });
         res.status(201).json(item) 
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
 
@@ -89,10 +95,18 @@ const editItem = async (req, res) => {
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
- const existingItemWithCode = await Item.findOne({ code: updates.code });
-  if(existingItemWithCode && existingItemWithCode._id.toString() !== item._id.toString()) {
-    return res.status(400).json({ message: "Código de item ya existe" });
-  }
+
+    // Solo chequear unicidad si el código realmente cambia, y solo contra
+    // los items de ESTE usuario (antes: Item.findOne({ code: undefined })
+    // cuando no se mandaba code encontraba cualquier item al azar de TODA
+    // la colección, de cualquier usuario, y podía rechazar la edición por error).
+    if (updates.code !== undefined) {
+      const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
+      const existingItemWithCode = await Item.findOne({ code: updates.code, menuID: { $in: userMenuIDs } });
+      if (existingItemWithCode && existingItemWithCode._id.toString() !== item._id.toString()) {
+        return res.status(400).json({ message: "Código de item ya existe" });
+      }
+    }
 
     const updated = await Item.findByIdAndUpdate(
       req.params.itemID,
@@ -102,7 +116,7 @@ const editItem = async (req, res) => {
  
     res.json(updated);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
 
@@ -136,7 +150,7 @@ const moveItem = async (req, res) => {
  
     res.json(updated);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
 
@@ -163,7 +177,7 @@ const uploadImage = async (req, res) => {
  
     res.json({ imageUrl: req.file.path, item: updated });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
 
@@ -186,7 +200,7 @@ const setHidden = async (req, res) => {
     const updated = await Item.findByIdAndUpdate(req.params.itemID, { hidden }, { new: true });
     res.json({ hidden: updated.hidden });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
 
@@ -209,7 +223,7 @@ const setAvailable = async (req, res) => {
     const updated = await Item.findByIdAndUpdate(req.params.itemID, { available }, { new: true });
     res.json({ available: updated.available });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
 
@@ -230,7 +244,7 @@ const deleteItem = async (req, res) => {
     await Item.findByIdAndDelete(req.params.itemID);
     res.json({ message: "Item eliminado" });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };  
 

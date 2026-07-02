@@ -5,8 +5,10 @@ const { protect, requirePlan } = require("../middleware/auth");
 const { getTemplate, previewMassive, confirmMassive } = require("../controllers/massiveController");
 
 // Multer en memoria — el Excel no se guarda en disco ni en Cloudinary,
-// se procesa directamente desde el buffer y se descarta
-const upload = multer({ storage: multer.memoryStorage() });
+// se procesa directamente desde el buffer y se descarta. Con memoria hay
+// que ser más estricto con el tamaño: un archivo enorme se carga entero en
+// RAM antes de procesarse. 5MB es de sobra para una planilla de productos.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 // La carga masiva por Excel es una función paga ("carga_masiva_excel",
 // desbloqueada desde el plan mensual) — se gatean las 3 rutas.

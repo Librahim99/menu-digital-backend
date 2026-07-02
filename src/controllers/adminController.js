@@ -1,3 +1,4 @@
+const { handleError } = require("../utils/handleError");
 const User = require("../models/User");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
@@ -17,7 +18,7 @@ const getAllUsers = async (req, res) => {
     const users = await User.find().select("-password");
     res.json(users);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -37,7 +38,7 @@ const getUser = async (req, res) => {
     const user = await User.findById(userID).select("-password");
     res.json(user);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 }
 
@@ -82,7 +83,7 @@ const setActiveUser = async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
  
@@ -145,7 +146,7 @@ const getStats = async (req, res) => {
       recientes: recentUsers,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
 

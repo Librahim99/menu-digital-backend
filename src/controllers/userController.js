@@ -1,3 +1,4 @@
+const { handleError } = require("../utils/handleError");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Menu = require("../models/Menu");
@@ -45,6 +46,24 @@ const generateSlug = (name) =>
     .replace(/^-+|-+$/g, "");        // Saca guiones al principio/final
 
 // ──────────────────────────────────────────────
+// Helper: valida la contraseña en el registro.
+// Solo longitud + una lista chica de las más triviales — no pedimos
+// mayúscula/número/símbolo obligatorio: esa regla de "complejidad" está
+// desaconsejada desde NIST 800-63B, porque en la práctica termina en
+// patrones predecibles (ej. "Contraseña1!") en vez de contraseñas más
+// fuertes. Lo que de verdad ayuda es longitud + no ser una de las
+// contraseñas más usadas/filtradas.
+// ──────────────────────────────────────────────
+const COMMON_WEAK_PASSWORDS = new Set([
+  "12345678", "123456789", "1234567890", "password", "password1",
+  "qwertyui", "qwerty123", "11111111", "00000000", "abc12345",
+  "contraseña", "contrasena", "argentina", "administrador",
+]);
+
+const isWeakPassword = (password) =>
+  password.length < 8 || COMMON_WEAK_PASSWORDS.has(password.toLowerCase());
+
+// ──────────────────────────────────────────────
 // @desc    Registrar nuevo usuario (local)
 // @route   POST /api/users/register
 // @access  Public
@@ -52,6 +71,20 @@ const generateSlug = (name) =>
 const newUser = async (req, res) => {
   try {
     const { username, password, contactInfo, acceptedTerms } = req.body;
+
+    // express-mongo-sanitize ya saca claves tipo operador ($ne, $regex) del
+    // body, pero no bloquea otros tipos no-string (ej. un array) — por eso
+    // validamos el tipo acá también, antes de que username/password lleguen
+    // a la query de Mongo o a bcrypt.
+    if (typeof username !== "string" || typeof password !== "string") {
+      return res.status(400).json({ message: "Usuario y contraseña son obligatorios" });
+    }
+
+    if (isWeakPassword(password)) {
+      return res.status(400).json({
+        message: "La contraseña debe tener al menos 8 caracteres y no puede ser una demasiado común.",
+      });
+    }
 
     // Verifica que el username no esté tomado
     const exists = await User.findOne({ username });
@@ -87,7 +120,7 @@ if (acceptedTerms !== true) {
       token: generateToken(user._id),
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -99,6 +132,13 @@ if (acceptedTerms !== true) {
 const loginUser = async (req, res) => {
   try {
     const { username, password } = req.body;
+
+    // Mismo motivo que en newUser: sin esto, mandar username/password como
+    // objeto o array en vez de string puede llegar a la query de Mongo o a
+    // bcrypt.compare con un tipo inesperado.
+    if (typeof username !== "string" || typeof password !== "string") {
+      return res.status(401).json({ message: "Credenciales inválidas" });
+    }
 
     // Incluimos password explícitamente porque tiene select:false en el modelo
     const user = await User.findOne({ username }).select("+password");
@@ -119,7 +159,7 @@ const loginUser = async (req, res) => {
       token: generateToken(user._id),
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -145,7 +185,7 @@ const getAuthUser = async (req, res) => {
       categoryCount: categorias.length,
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -211,7 +251,7 @@ const fetchUserWithMenu = async (req, res) => {
  
     res.json({ user: userFiltered, menu: menuArmado });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -265,7 +305,7 @@ const fetchOwnMenu = async (req, res) => {
 
     res.json({ menu: menuArmado, limits });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -306,7 +346,7 @@ const fetchStats = async (req, res) => {
 
     res.json({ totalViews, last30Days });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -335,7 +375,7 @@ const fetchUser = async (req, res) => {
  
     res.json( userFiltered );
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -346,7 +386,11 @@ const fetchUser = async (req, res) => {
 // ──────────────────────────────────────────────
 const editUser = async (req, res) => {
   try {
-    const allowedFields = ["contactInfo", "hasDelivery", "media", "template"];
+    // "template" queda afuera a propósito: cambiar el template pasa por
+    // PATCH /api/users/template (useTemplate), que valida si es premium y
+    // el usuario tiene plan pago. Si "template" estuviera acá, cualquiera
+    // podría mandarlo por este endpoint y saltarse esa validación.
+    const allowedFields = ["contactInfo", "hasDelivery", "media"];
 
     const updates = {};
     allowedFields.forEach((field) => {
@@ -369,7 +413,7 @@ const editUser = async (req, res) => {
 
     res.json(user);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -398,7 +442,7 @@ const uploadImage = async (req, res) => {
 
     res.json({ imageUrl, media: user.media });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -426,7 +470,7 @@ const uploadBackground = async (req, res) => {
 
     res.json({ imageUrl, media: user.media });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -457,7 +501,7 @@ const removeImage = async (req, res) => {
 
     res.json({ media: user.media });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -477,7 +521,7 @@ const deleteBackground = async (req, res) => {
 
     res.json({ media: user.media });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -512,7 +556,7 @@ const useTemplate = async (req, res) => {
 
     res.json({ template: user.template });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -537,39 +581,13 @@ const setActive = async (req, res) => {
 
     res.json({ active: user.active });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
 // ──────────────────────────────────────────────
 // Aquí irían más funciones relacionadas con usuarios, como eliminar cuenta, cambiar password, etc.
 // ──────────────────────────────────────────────
-
-// ──────────────────────────────────────────────
-// @desc    Actualizar la suscripción del usuario
-// @route   PATCH /api/users/subscription
-// @access  Private
-// ──────────────────────────────────────────────
-const setSubscription = async (req, res) => {
-  try {
-    const { subscription } = req.body;
-    const valid = ["none", "monthly", "semestral", "annual"];
-
-    if (!valid.includes(subscription)) {
-      return res.status(400).json({ message: "Valor de suscripción inválido" });
-    }
-
-    const user = await User.findByIdAndUpdate(
-      req.user._id,
-      { subscription },
-      { new: true }
-    );
-
-    res.json({ subscription: user.subscription });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-};
 
 // ──────────────────────────────────────────────
 // Exportamos todas las funciones para usarlas en las rutas
@@ -590,5 +608,4 @@ module.exports = {
   deleteBackground,
   useTemplate,
   setActive,
-  setSubscription,
 };

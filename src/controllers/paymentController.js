@@ -1,14 +1,62 @@
+const crypto = require("crypto");
 const { MercadoPagoConfig, Payment } = require("mercadopago");
 const User = require("../models/User");
 const { PLAN_MAP } = require("../config/plans");
 
 const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
 
+// ──────────────────────────────────────────────
+// Verifica que el webhook realmente venga de MercadoPago, no de cualquiera
+// que le pegue al endpoint. MP manda un header "x-signature" con
+// "ts=<timestamp>,v1=<hash>", donde hash = HMAC-SHA256(manifest, secret) y
+// el secret es la "Clave secreta" que configurás en tu panel de MP
+// (Tus integraciones → la app → Webhooks). Algoritmo documentado acá:
+// https://www.mercadopago.com.ar/developers/es/docs/your-integrations/notifications/webhooks#editor_2
+//
+// Si todavía no configuraste MP_WEBHOOK_SECRET en el .env, esto NO bloquea
+// el webhook (para no cortar pagos reales de un día para el otro) — pero
+// avisa por consola en cada request hasta que lo configures.
+// ──────────────────────────────────────────────
+const verifyMpSignature = (req) => {
+  const secret = process.env.MP_WEBHOOK_SECRET;
+  if (!secret) {
+    console.warn("⚠️  MP_WEBHOOK_SECRET no configurado — el webhook de MP no está validando firma.");
+    return true;
+  }
+
+  const xSignature = req.headers["x-signature"];
+  const xRequestId = req.headers["x-request-id"];
+  const dataId = req.query["data.id"];
+  if (!xSignature || !xRequestId || !dataId) return false;
+
+  let ts, hash;
+  xSignature.split(",").forEach((part) => {
+    const [key, value] = part.split("=");
+    if (key?.trim() === "ts") ts = value?.trim();
+    if (key?.trim() === "v1") hash = value?.trim();
+  });
+  if (!ts || !hash) return false;
+
+  const manifest = `id:${dataId.toLowerCase()};request-id:${xRequestId};ts:${ts};`;
+  const expectedHash = crypto.createHmac("sha256", secret).update(manifest).digest("hex");
+
+  // timingSafeEqual evita que un atacante pueda ir adivinando el hash
+  // byte a byte midiendo cuánto tarda en responder cada intento.
+  const a = Buffer.from(hash);
+  const b = Buffer.from(expectedHash);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
 // @desc    Recibe la notificación de MercadoPago y confirma el pago
 // @route   POST /api/payments/webhook
 // @access  Public (lo llama MercadoPago, no el frontend)
 const mpWebhook = async (req, res) => {
   try {
+    if (!verifyMpSignature(req)) {
+      console.error("Webhook MP: firma inválida, request rechazado");
+      return res.sendStatus(401);
+    }
+
     const paymentId = req.query["data.id"] || req.query.id || req.body?.data?.id;
     const topic = req.query.type || req.query.topic;
 

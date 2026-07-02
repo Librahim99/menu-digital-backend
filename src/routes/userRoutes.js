@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { protect, requirePlan } = require("../middleware/auth");
+const { authLimiter } = require("../middleware/rateLimiters");
 const { uploadUser } = require("../config/cloudinary");
 const {
   newUser,
@@ -17,14 +18,13 @@ const {
   deleteBackground,
   useTemplate,
   setActive,
-  setSubscription,
 } = require("../controllers/userController");
 
 // ──────────────────────────────────────────────
 // Rutas públicas
 // ──────────────────────────────────────────────
-router.post("/register", newUser);
-router.post("/login", loginUser);
+router.post("/register", authLimiter, newUser);
+router.post("/login", authLimiter, loginUser);
 // Acá va la ruta para cuando se olvidan la contraseña
 
 // ──────────────────────────────────────────────
@@ -41,7 +41,13 @@ router.delete("/remove-image", protect, removeImage);
 router.delete("/background", protect, deleteBackground);
 router.patch("/template", protect, useTemplate);
 router.patch("/active", protect, setActive);
-router.patch("/subscription", protect, setSubscription);
+// NOTA DE SEGURIDAD: existía acá un PATCH /subscription de autoservicio
+// (protect, sin isAdmin) que dejaba que cualquier usuario logueado se
+// asignara a sí mismo cualquier plan pago sin pagar nada — y encima el
+// frontend nunca lo usaba (código muerto). Se eliminó. La única forma
+// legítima de cambiar de plan es pagar de verdad: el webhook de
+// MercadoPago (paymentController.mpWebhook) es quien actualiza
+// User.subscription, después de verificar el pago contra la API de MP.
 // Acá va la ruta para cambiar la contraseña
 
 

@@ -1,9 +1,13 @@
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
+const helmet = require("helmet");
+const mongoSanitize = require("express-mongo-sanitize");
 require("dotenv").config();
 
 const connectDB = require("./config/db");
+const { handleError } = require("./utils/handleError");
+const { apiLimiter } = require("./middleware/rateLimiters");
 
 // ──────────────────────────────────────────────
 // Conexión a la base de datos
@@ -12,9 +16,25 @@ connectDB();
 
 const app = express();
 
+// Detrás de un proxy/balanceador (Koyeb) el request le llega a Express con
+// la IP del proxy, no la del cliente real — sin esto, express-rate-limit
+// contaría a TODOS los usuarios como si fueran una sola IP.
+app.set("trust proxy", 1);
+
 // ──────────────────────────────────────────────
 // Middlewares globales
 // ──────────────────────────────────────────────
+// Headers de seguridad estándar (X-Content-Type-Options, X-Frame-Options,
+// HSTS, saca X-Powered-By, etc.). API pura sin vistas HTML propias, así que
+// el CSP por default de helmet no rompe nada — no servimos páginas.
+// crossOriginResourcePolicy en "same-origin" (el default) es para apps que
+// SIRVEN algo (imágenes, scripts) y no quieren que otros orígenes lo
+// carguen — achá es al revés: el frontend (otro origen) tiene que poder
+// consumir esta API sí o sí, eso ya lo gobierna el allowlist de CORS de
+// abajo, así que lo dejamos en "cross-origin" para no pisarlo.
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
 app.use(cors({
   origin: [
     'https://menu-digital-app-v1-gamma.vercel.app',
@@ -28,6 +48,18 @@ app.use(cors({
 app.options('*', cors());  // preflight
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// Saca claves tipo operador de Mongo ($ne, $regex, etc.) de body/query/params
+// — sin esto, mandar {"username": {"$ne": null}} en vez de un string hace
+// que Mongoose lo interprete como operador de la query en vez de un valor
+// literal (inyección NoSQL).
+// NO se aplica a /api/payments: el webhook de MercadoPago manda el
+// paymentId en un query param literal "data.id" (con punto) — el sanitizer
+// también saca claves con puntos (mismo criterio que las de $) y nos
+// rompía el webhook entero.
+app.use(["/api/users", "/api/menus", "/api/items", "/api/admin", "/api/massive"], mongoSanitize());
+// Red de contención general contra abuso/scraping — los límites más
+// estrictos de login/registro (authLimiter) se suman a este en sus rutas.
+app.use("/api", apiLimiter);
 
 
 // ──────────────────────────────────────────────
@@ -72,6 +104,18 @@ app.get("/", (req, res) => res.json({ status: "API corriendo ✅" }));
 // ──────────────────────────────────────────────
 app.use((req, res) => {
   res.status(404).json({ message: "Ruta no encontrada" });
+});
+
+// ──────────────────────────────────────────────
+// Manejo de errores no capturados — SIEMPRE al final, después de todas las
+// rutas. Antes de esto no existía, así que un error que se escapara de un
+// try/catch (ej. JSON malformado, que body-parser rechaza antes de que
+// cualquier controller lo vea) caía en el handler default de Express, que
+// devuelve el stack trace completo — incluida la ruta real del filesystem
+// del servidor — a quien sea que hizo el request.
+// ──────────────────────────────────────────────
+app.use((err, req, res, next) => {
+  handleError(res, err);
 });
 
 // ──────────────────────────────────────────────

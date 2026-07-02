@@ -25,8 +25,13 @@ const protect = async (req, res, next) => {
   }
 
   try {
-    // Verifica y decodifica el token con el secret
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    // Verifica y decodifica el token con el secret. Se fija el algoritmo
+    // explícitamente (en vez de dejar que jwt.verify lo infiera del header
+    // del token) como defensa en profundidad contra ataques de confusión
+    // de algoritmo — esos tokens siempre se firman con HS256 (ver
+    // generateToken en userController.js), así que no hay motivo para
+    // aceptar ningún otro.
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
 
     // Adjunta el user al request (sin la password)
     req.user = await User.findById(decoded.id).select("-password");

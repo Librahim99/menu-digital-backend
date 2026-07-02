@@ -1,3 +1,4 @@
+const { handleError } = require("../utils/handleError");
 const ExcelJS = require("exceljs");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
@@ -148,7 +149,7 @@ const getTemplate = async (req, res) => {
     await workbook.xlsx.write(res);
     res.end();
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
 
@@ -312,7 +313,7 @@ const previewMassive = async (req, res) => {
       mensaje: `Se crearán ${resumen.categorias.crear.length} categorías y ${resumen.productos.crear.length} productos. Se actualizarán ${resumen.categorias.actualizar.length} categorías y ${resumen.productos.actualizar.length} productos. Errores: ${resumen.categorias.errores.length + resumen.productos.errores.length}.`,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
 
@@ -439,7 +440,7 @@ const confirmMassive = async (req, res) => {
 
     res.json({ resultado });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    handleError(res, err);
   }
 };
 

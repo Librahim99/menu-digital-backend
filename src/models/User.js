@@ -20,7 +20,11 @@ const UserSchema = new mongoose.Schema(
     password: {
       type: String,
       required: [true, "La contraseña es obligatoria"],
-      minlength: 6,
+      // 8 es el piso que recomienda NIST 800-63B — la validación "de verdad"
+      // (longitud + lista de contraseñas trivial-comunes) vive en
+      // newUser (userController.js), esto es una red de contención por si
+      // algún día se crea un User por otro camino.
+      minlength: 8,
       select: false, // No se devuelve en queries por defecto (seguridad)
     },
 

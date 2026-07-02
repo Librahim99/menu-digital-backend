@@ -1,3 +1,4 @@
+const { handleError } = require("../utils/handleError");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const User = require("../models/User");
@@ -46,7 +47,7 @@ const newMenu = async (req, res) => {
 
     res.status(201).json(menu);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -84,7 +85,7 @@ const editMenu = async (req, res) => {
  
     res.json(updated);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -115,7 +116,7 @@ const moveMenu = async (req, res) => {
  
     res.json(updated);
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -142,7 +143,7 @@ const hideMenu = async (req, res) => {
  
     res.json({ hidden: updated.hidden });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -180,7 +181,7 @@ const deleteMenu = async (req, res) => {
     await Menu.findByIdAndDelete(req.params.menuID);
     res.json({ message: "Eliminado correctamente" });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 
@@ -204,7 +205,7 @@ const uploadImage = async (req, res) => {
  
     res.json({ imageUrl: req.file.path, menu: updated });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    handleError(res, error);
   }
 };
 

@@ -48,10 +48,14 @@ const itemStorage = new CloudinaryStorage({
   },
 });
 
+// 8MB — de sobra para una foto de celular, evita que alguien mande archivos
+// enormes que consuman memoria del server o cuota de Cloudinary sin sentido.
+const IMAGE_SIZE_LIMIT = { fileSize: 8 * 1024 * 1024 };
+
 // Exportamos cloudinary por si necesitamos usarlo directamente (ej: eliminar imágenes)
 module.exports = {
   cloudinary,
-  uploadUser: multer({ storage: userStorage }),
-  uploadMenu: multer({ storage: menuStorage }),
-  uploadItem: multer({ storage: itemStorage }),
+  uploadUser: multer({ storage: userStorage, limits: IMAGE_SIZE_LIMIT }),
+  uploadMenu: multer({ storage: menuStorage, limits: IMAGE_SIZE_LIMIT }),
+  uploadItem: multer({ storage: itemStorage, limits: IMAGE_SIZE_LIMIT }),
 };
