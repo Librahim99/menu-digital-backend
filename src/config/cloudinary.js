@@ -1,5 +1,10 @@
+// Ojo acá: cloudinary@2.x sigue exponiendo, en require("cloudinary") a
+// secas, una capa de compatibilidad con la API vieja (v1) — colgaba
+// upload_stream sin nunca llamar al callback. El namespace realmente
+// mantenido y activo sigue siendo .v2 (verificado subiendo un archivo de
+// prueba real contra ambos), igual que antes de actualizar la dependencia.
 const cloudinary = require("cloudinary").v2;
-const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const { CloudinaryStorage } = require("./cloudinaryStorage");
 const multer = require("multer");
 
 // ──────────────────────────────────────────────
