@@ -4,7 +4,7 @@ const User = require("../models/User");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const PageView = require("../models/PageView");
-const { hasMinPlan, FREE_ITEM_LIMIT } = require("../config/plans");
+const { hasMinPlan, FREE_ITEM_LIMIT, TEMPLATE_MIN_PLAN } = require("../config/plans");
 const { buenosAiresDateStr } = require("../utils/dates");
 
 // ──────────────────────────────────────────────
@@ -531,12 +531,6 @@ const deleteBackground = async (req, res) => {
   }
 };
 
-// Templates que requieren un plan pago. Debe reflejar el campo `premium`
-// de TEMPLATES en UserEditor.tsx (frontend) — ese lado maneja la UI de
-// bloqueo/upsell, este es el que realmente impide guardarlo si alguien
-// se salta el front (ej. pegando el PATCH directo).
-const PREMIUM_TEMPLATE_IDS = [6, 7];
-
 // ──────────────────────────────────────────────
 // @desc    Cambiar el template visual del local
 // @route   PATCH /api/users/template
@@ -550,8 +544,16 @@ const useTemplate = async (req, res) => {
       return res.status(400).json({ message: "Template debe ser un número" });
     }
 
-    if (PREMIUM_TEMPLATE_IDS.includes(template) && req.user.subscription === "free") {
-      return res.status(403).json({ message: "Ese template requiere un plan pago." });
+    // TEMPLATE_MIN_PLAN es la fuente de verdad del gating escalonado (ver
+    // config/plans.js). Si el id no está en el mapa es un template inexistente.
+    // Este check es la barrera real: el front muestra candados/upsell, pero
+    // esto impide guardarlo aunque alguien se saltee la UI (PATCH directo).
+    const minPlan = TEMPLATE_MIN_PLAN[template];
+    if (!minPlan) {
+      return res.status(400).json({ message: "Template inválido" });
+    }
+    if (!hasMinPlan(req.user.subscription, minPlan)) {
+      return res.status(403).json({ message: "Ese template requiere un plan superior." });
     }
 
     const user = await User.findByIdAndUpdate(

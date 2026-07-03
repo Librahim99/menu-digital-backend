@@ -27,6 +27,21 @@ const PLAN_FEATURES = {
 // es binario: free vs. cualquier plan pago.
 const FREE_ITEM_LIMIT = 15;
 
+// Plan mínimo requerido para usar cada template visual de la carta pública.
+// Es la fuente de verdad del gating escalonado de templates: el front espeja
+// este mapa (src/lib/plans.ts) para mostrar candados, y useTemplate lo valida
+// del lado del servidor. Cualquier id que no esté acá se considera inválido.
+//   free:    1 Clásico · 3 Natural · 5 Minimal
+//   starter: 2 Moderno · 4 Rojo · 8 Coastal · 9 Charcoal
+//   pro:     10 Terracotta · 11 Lavender · 12 Forest
+//   premium: 6 Aurora · 7 Noir Gold · 13 Platinum
+const TEMPLATE_MIN_PLAN = {
+  1: "free",    3: "free",    5: "free",
+  2: "starter", 4: "starter", 8: "starter", 9: "starter",
+  10: "pro",    11: "pro",    12: "pro",
+  6: "premium", 7: "premium", 13: "premium",
+};
+
 function getFeaturesForPlan(plan) {
   const idx = PLAN_ORDER.indexOf(plan);
   if (idx === -1) return [];
@@ -37,4 +52,4 @@ function hasMinPlan(userPlan, requiredPlan) {
   return PLAN_ORDER.indexOf(userPlan) >= PLAN_ORDER.indexOf(requiredPlan);
 }
 
-module.exports = { PLAN_MAP, PLAN_ORDER, PLAN_FEATURES, FREE_ITEM_LIMIT, getFeaturesForPlan, hasMinPlan };
+module.exports = { PLAN_MAP, PLAN_ORDER, PLAN_FEATURES, FREE_ITEM_LIMIT, TEMPLATE_MIN_PLAN, getFeaturesForPlan, hasMinPlan };
