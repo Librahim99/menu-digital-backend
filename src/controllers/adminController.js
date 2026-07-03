@@ -2,6 +2,7 @@ const { handleError } = require("../utils/handleError");
 const User = require("../models/User");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
+const { logCrmEvent } = require("../utils/crmEvents");
 
 
 // ──────────────────────────────────────────────
@@ -71,7 +72,9 @@ const setActiveUser = async (req, res) => {
  
     user.active = active;
     await user.save();
- 
+
+    await logCrmEvent(user._id, active ? "Cuenta activada por el CEO" : "Cuenta desactivada por el CEO");
+
     res.json({
       message: `Cuenta ${active ? "activada" : "desactivada"} correctamente`,
       user: {

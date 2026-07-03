@@ -14,9 +14,14 @@ const STAGES = ["lead", "onboarding", "activo", "en_riesgo", "baja"];
 
 // Cada nota es una entrada del historial de contacto/seguimiento. author guarda
 // qué admin la escribió (por si mañana hay más de un CEO en el equipo).
+// kind distingue las notas manuales ("note") de los eventos que loguea el
+// propio sistema solo ("event": cambio de plan, activar/desactivar cuenta,
+// cambio de template) — ambos viven en el mismo array así el timeline queda
+// ordenado cronológicamente sin tener que mezclar dos colecciones distintas.
 const NoteSchema = new mongoose.Schema(
   {
     text: { type: String, required: true, trim: true },
+    kind: { type: String, enum: ["note", "event"], default: "note" },
     author: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   },
   { timestamps: { createdAt: true, updatedAt: false } }

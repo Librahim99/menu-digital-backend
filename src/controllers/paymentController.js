@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const { MercadoPagoConfig, Payment } = require("mercadopago");
 const User = require("../models/User");
 const { PLAN_MAP } = require("../config/plans");
+const { logCrmEvent } = require("../utils/crmEvents");
 
 const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
 
@@ -83,7 +84,12 @@ const mpWebhook = async (req, res) => {
       return res.sendStatus(200);
     }
 
+    const previousUser = await User.findById(userId).select("subscription");
     await User.findByIdAndUpdate(userId, { subscription: mappedPlan });
+
+    if (previousUser && previousUser.subscription !== mappedPlan) {
+      await logCrmEvent(userId, `Cambió de plan ${previousUser.subscription} → ${mappedPlan} (pago MercadoPago aprobado)`);
+    }
 
     res.sendStatus(200);
   } catch (error) {

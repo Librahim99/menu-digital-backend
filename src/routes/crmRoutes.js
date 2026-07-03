@@ -7,10 +7,16 @@ const {
   updateProfile,
   addNote,
   deleteNote,
+  getOverdueCount,
+  exportClients,
 } = require("../controllers/crmController");
 
 // CRM interno del panel del CEO. Todas las rutas requieren token + admin.
 router.use(protect, isAdmin);
+
+// Rutas de nombre fijo van ANTES de /clients/:userID para no chocar con el param.
+router.get("/overdue-count", getOverdueCount);
+router.get("/export", exportClients);
 
 router.get("/clients", listClients);
 router.get("/clients/:userID", getClient);

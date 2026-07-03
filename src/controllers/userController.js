@@ -6,6 +6,7 @@ const Item = require("../models/Item");
 const PageView = require("../models/PageView");
 const { hasMinPlan, FREE_ITEM_LIMIT, TEMPLATE_MIN_PLAN } = require("../config/plans");
 const { buenosAiresDateStr } = require("../utils/dates");
+const { logCrmEvent } = require("../utils/crmEvents");
 
 // ──────────────────────────────────────────────
 // Helper: suma 1 a la visita de hoy del local (upsert, no bloqueante).
@@ -556,11 +557,17 @@ const useTemplate = async (req, res) => {
       return res.status(403).json({ message: "Ese template requiere un plan superior." });
     }
 
+    const previousTemplate = req.user.template;
+
     const user = await User.findByIdAndUpdate(
       req.user._id,
       { template },
       { new: true }
     );
+
+    if (previousTemplate !== template) {
+      await logCrmEvent(req.user._id, `Cambió de template #${previousTemplate} → #${template}`);
+    }
 
     res.json({ template: user.template });
   } catch (error) {

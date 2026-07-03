@@ -1,10 +1,21 @@
 const mongoose = require("mongoose");
+const ExcelJS = require("exceljs");
 const { handleError } = require("../utils/handleError");
 const User = require("../models/User");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const CrmProfile = require("../models/CrmProfile");
 const { STAGES } = CrmProfile;
+
+const STAGE_LABEL = {
+  lead: "Lead",
+  onboarding: "Onboarding",
+  activo: "Activo",
+  en_riesgo: "En riesgo",
+  baja: "Baja",
+};
+
+const PLAN_LABEL = { free: "Gratis", starter: "Starter", pro: "Pro", premium: "Premium" };
 
 // Todas las rutas de este controller ya pasan por protect + isAdmin (ver
 // crmRoutes), así que acá no re-chequeamos permisos.
@@ -186,4 +197,101 @@ const deleteNote = async (req, res) => {
   }
 };
 
-module.exports = { listClients, getClient, updateProfile, addNote, deleteNote };
+// ──────────────────────────────────────────────
+// @desc    Cantidad de clientes con seguimiento vencido (nextFollowUp en el
+//          pasado). Endpoint liviano — lo consulta el sidebar del panel para
+//          el badge de alerta, sin traer la lista completa de clientes.
+// @route   GET /api/admin/crm/overdue-count
+// @access  Admin
+// ──────────────────────────────────────────────
+const getOverdueCount = async (req, res) => {
+  try {
+    const count = await CrmProfile.countDocuments({ nextFollowUp: { $ne: null, $lt: new Date() } });
+    res.json({ count });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Exporta el listado de clientes (opcionalmente filtrado por etapa)
+//          a un .xlsx — mismo patrón de ExcelJS que el exportador de menús
+//          (massiveController.getTemplate).
+// @route   GET /api/admin/crm/export?stage=lead
+// @access  Admin
+// ──────────────────────────────────────────────
+const exportClients = async (req, res) => {
+  try {
+    const { stage } = req.query;
+    if (stage && !STAGES.includes(stage)) {
+      return res.status(400).json({ message: "Etapa inválida" });
+    }
+
+    const users = await User.find({ admin: false })
+      .select("username slug subscription active createdAt contactInfo.businessName")
+      .sort({ createdAt: -1 });
+
+    const profiles = await CrmProfile.find({ userID: { $in: users.map((u) => u._id) } })
+      .select("userID stage tags nextFollowUp");
+    const byUser = {};
+    profiles.forEach((p) => { byUser[p.userID.toString()] = p; });
+
+    const rows = users
+      .map((u) => {
+        const p = byUser[u._id.toString()];
+        return {
+          businessName: u.contactInfo?.businessName || "",
+          username: u.username,
+          slug: u.slug || "",
+          subscription: u.subscription,
+          active: u.active,
+          stage: p?.stage || "lead",
+          tags: (p?.tags || []).join(", "),
+          nextFollowUp: p?.nextFollowUp || null,
+          createdAt: u.createdAt,
+        };
+      })
+      .filter((r) => !stage || r.stage === stage);
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Menú Digital";
+    const sheet = workbook.addWorksheet("Clientes CRM");
+
+    sheet.columns = [
+      { header: "Negocio", key: "businessName", width: 30 },
+      { header: "Usuario", key: "username", width: 20 },
+      { header: "Slug", key: "slug", width: 24 },
+      { header: "Plan", key: "subscription", width: 12 },
+      { header: "Estado", key: "active", width: 12 },
+      { header: "Etapa", key: "stage", width: 14 },
+      { header: "Etiquetas", key: "tags", width: 28 },
+      { header: "Próximo seguimiento", key: "nextFollowUp", width: 18 },
+      { header: "Cliente desde", key: "createdAt", width: 14 },
+    ];
+    sheet.getRow(1).font = { bold: true };
+
+    rows.forEach((r) => {
+      sheet.addRow({
+        businessName: r.businessName,
+        username: r.username,
+        slug: r.slug,
+        subscription: PLAN_LABEL[r.subscription] || r.subscription,
+        active: r.active ? "Activo" : "Inactivo",
+        stage: STAGE_LABEL[r.stage] || r.stage,
+        tags: r.tags,
+        nextFollowUp: r.nextFollowUp ? new Date(r.nextFollowUp).toLocaleDateString("es-AR") : "",
+        createdAt: new Date(r.createdAt).toLocaleDateString("es-AR"),
+      });
+    });
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename=crm-clientes${stage ? `-${stage}` : ""}.xlsx`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+module.exports = { listClients, getClient, updateProfile, addNote, deleteNote, getOverdueCount, exportClients };
