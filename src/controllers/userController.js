@@ -5,14 +5,17 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const PageView = require("../models/PageView");
 const { hasMinPlan, FREE_ITEM_LIMIT } = require("../config/plans");
+const { buenosAiresDateStr } = require("../utils/dates");
 
 // ──────────────────────────────────────────────
 // Helper: suma 1 a la visita de hoy del local (upsert, no bloqueante).
 // Se llama desde la carta pública — nunca debe romper ni frenar esa
 // respuesta si falla, por eso no se hace "await" en el caller.
+// El "hoy" se calcula en horario de Buenos Aires (ver utils/dates): así el
+// contador diario corta a la medianoche local y no a las 21:00 (medianoche UTC).
 // ──────────────────────────────────────────────
 const trackView = (userID) => {
-  const today = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+  const today = buenosAiresDateStr(); // "YYYY-MM-DD" en horario argentino
   PageView.findOneAndUpdate(
     { userID, date: today },
     { $inc: { count: 1 } },
@@ -319,9 +322,14 @@ const fetchOwnMenu = async (req, res) => {
 // ──────────────────────────────────────────────
 const fetchStats = async (req, res) => {
   try {
-    const since = new Date();
-    since.setDate(since.getDate() - 29); // 30 días incluyendo hoy
-    const sinceStr = since.toISOString().slice(0, 10);
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    // Ventana de 30 días incluyendo hoy, con las fechas calculadas en horario
+    // de Buenos Aires (mismo criterio que trackView). Buenos Aires no tiene
+    // horario de verano, así que restar días en milisegundos y formatear en
+    // esa zona da siempre la fecha local correcta.
+    const sinceStr = buenosAiresDateStr(new Date(now - 29 * MS_PER_DAY));
 
     const rows = await PageView.find({
       userID: req.user._id,
@@ -336,9 +344,7 @@ const fetchStats = async (req, res) => {
     const last30Days = [];
     let totalViews = 0;
     for (let i = 29; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const key = d.toISOString().slice(0, 10);
+      const key = buenosAiresDateStr(new Date(now - i * MS_PER_DAY));
       const count = byDate[key] || 0;
       totalViews += count;
       last30Days.push({ date: key, count });
