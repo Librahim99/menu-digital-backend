@@ -296,11 +296,11 @@ const fetchOwnMenu = async (req, res) => {
     // "Importar desde Excel" — la fuente de verdad real sigue siendo
     // el check en newItem y el middleware requirePlan en massiveRoutes,
     // esto es solo para la UI.
-    const unlimited = hasMinPlan(req.user.subscription, "monthly");
+    const unlimited = hasMinPlan(req.user.subscription, "starter");
     const limits = {
       itemCount: allItems.length,
       itemLimit: unlimited ? null : FREE_ITEM_LIMIT,
-      canImportExcel: unlimited, // misma condición: plan mensual o superior
+      canImportExcel: unlimited, // misma condición: plan starter o superior
     };
 
     res.json({ menu: menuArmado, limits });
@@ -312,10 +312,10 @@ const fetchOwnMenu = async (req, res) => {
 // ──────────────────────────────────────────────
 // @desc    Estadísticas de visitas a la carta pública del usuario
 //          autenticado: total y serie diaria de los últimos 30 días.
-//          El gating a semestral+ lo hace el middleware requirePlan
+//          El gating a pro+ lo hace el middleware requirePlan
 //          en la ruta, no este controller.
 // @route   GET /api/users/me/stats
-// @access  Private (semestral+)
+// @access  Private (pro+)
 // ──────────────────────────────────────────────
 const fetchStats = async (req, res) => {
   try {
@@ -544,7 +544,7 @@ const useTemplate = async (req, res) => {
       return res.status(400).json({ message: "Template debe ser un número" });
     }
 
-    if (PREMIUM_TEMPLATE_IDS.includes(template) && req.user.subscription === "none") {
+    if (PREMIUM_TEMPLATE_IDS.includes(template) && req.user.subscription === "free") {
       return res.status(403).json({ message: "Ese template requiere un plan pago." });
     }
 

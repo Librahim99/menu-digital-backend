@@ -33,7 +33,7 @@ router.post("/login", authLimiter, loginUser);
 // ──────────────────────────────────────────────
 router.get("/me", protect, getAuthUser);    // Datos del user autenticado (panel admin)
 router.get("/me/menu", protect, fetchOwnMenu); // Menú completo del user autenticado, sin filtrar ocultos
-router.get("/me/stats", protect, requirePlan("semestral"), fetchStats); // Estadísticas de visitas (plan semestral+)
+router.get("/me/stats", protect, requirePlan("pro"), fetchStats); // Estadísticas de visitas (plan pro+)
 router.put("/me", protect, editUser);
 router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.post("/upload-background", protect, uploadUser.single("image"), uploadBackground);

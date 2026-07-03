@@ -9,22 +9,25 @@ const client = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
 });
 
-// ── Mapeo de planes: id → datos
+// ── Mapeo de planes pagos: id → datos de cobro para MercadoPago.
+// El id (starter/pro/premium) es el mismo que después viaja en
+// metadata.plan_id y que el webhook mapea a User.subscription (ver
+// PLAN_MAP en config/plans.js). "free" no está acá: no se paga.
 const PLANES = {
-  mensual: {
-    title: "Menú Digital — Plan Mensual",
+  starter: {
+    title: "Menú Digital — Plan Starter",
     unit_price: 5999,
     description: "Menú digital ilimitado, landing page del local, carga masiva por Excel",
   },
-  semestral: {
-    title: "Menú Digital — Plan Semestral",
+  pro: {
+    title: "Menú Digital — Plan Pro",
     unit_price: 29999,
-    description: "Todo el plan mensual + 2 meses gratis + estadísticas",
+    description: "Todo el plan Starter + estadísticas de visitas",
   },
-  anual: {
-    title: "Menú Digital — Plan Anual",
+  premium: {
+    title: "Menú Digital — Plan Premium",
     unit_price: 49999,
-    description: "Todo el plan semestral + 4 meses gratis + dominio personalizado",
+    description: "Todo el plan Pro + dominio personalizado",
   },
 };
 
@@ -35,7 +38,7 @@ const PLANES = {
  *          requiere estar logueado: así podemos guardar quién es el
  *          que paga (external_reference) y el webhook puede después
  *          actualizarle la suscripción a esa misma cuenta.
- * Body: { planId: "mensual" | "semestral" | "anual" }
+ * Body: { planId: "starter" | "pro" | "premium" }
  * Devuelve: { init_point: "https://..." }
  */
 router.post("/crear-preferencia", protect, async (req, res) => {

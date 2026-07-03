@@ -11,8 +11,8 @@ const { getTemplate, previewMassive, confirmMassive } = require("../controllers/
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 // La carga masiva por Excel es una función paga ("carga_masiva_excel",
-// desbloqueada desde el plan mensual) — se gatean las 3 rutas.
-const requirePro = requirePlan("monthly");
+// desbloqueada desde el plan starter) — se gatean las 3 rutas.
+const requirePro = requirePlan("starter");
 
 // GET  /api/massive/template  → descarga el Excel con los datos actuales
 router.get("/template", protect, requirePro, getTemplate);

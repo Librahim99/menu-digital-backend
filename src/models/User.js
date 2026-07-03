@@ -45,8 +45,10 @@ const UserSchema = new mongoose.Schema(
 
     subscription: {
       type: String,
-      enum: ["none", "monthly", "semestral", "annual"],
-      default: "none",
+      // Niveles de plan (ver PLAN_ORDER en config/plans.js). "free" es el
+      // default: toda cuenta nueva arranca sin pagar.
+      enum: ["free", "starter", "pro", "premium"],
+      default: "free",
     },
 
     hasDelivery: {

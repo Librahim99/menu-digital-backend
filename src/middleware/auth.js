@@ -69,7 +69,7 @@ const isAdmin = (req, res, next) => {
  * plan (o superior, según PLAN_ORDER en config/plans.js). Siempre se usa
  * después de protect, ya que necesita req.user.subscription.
  *
- * Uso: router.post("/ruta-pro", protect, requirePlan("monthly"), controller)
+ * Uso: router.post("/ruta-pro", protect, requirePlan("starter"), controller)
  */
 const requirePlan = (minPlan) => (req, res, next) => {
   if (!hasMinPlan(req.user?.subscription, minPlan)) {
