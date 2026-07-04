@@ -10,6 +10,8 @@ const {
   fetchUserWithMenu,
   fetchOwnMenu,
   fetchStats,
+  trackItemViewEndpoint,
+  fetchItemStats,
   fetchUser,
   editUser,
   uploadImage,
@@ -34,6 +36,7 @@ router.post("/login", authLimiter, loginUser);
 router.get("/me", protect, getAuthUser);    // Datos del user autenticado (panel admin)
 router.get("/me/menu", protect, fetchOwnMenu); // Menú completo del user autenticado, sin filtrar ocultos
 router.get("/me/stats", protect, requirePlan("pro"), fetchStats); // Estadísticas de visitas (plan pro+)
+router.get("/me/item-stats", protect, requirePlan("pro"), fetchItemStats); // Top de productos más vistos (plan pro+)
 router.put("/me", protect, editUser);
 router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.post("/upload-background", protect, uploadUser.single("image"), uploadBackground);
@@ -53,6 +56,7 @@ router.patch("/active", protect, setActive);
 
 // Ruta pública por slug — va AL FINAL para no interceptar rutas con nombre fijo
 // Ej: GET /api/users/cafe-roma  →  devuelve el user con businessName "cafe roma"
+router.post("/:slug/menu/items/:itemID/view", trackItemViewEndpoint); // Tracking de "vista" de un producto puntual
 router.get("/:slug/menu", fetchUserWithMenu);
 router.get("/:slug", fetchUser);
 

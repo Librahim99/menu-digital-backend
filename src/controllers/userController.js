@@ -1,9 +1,11 @@
+const mongoose = require("mongoose");
 const { handleError } = require("../utils/handleError");
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const PageView = require("../models/PageView");
+const ItemView = require("../models/ItemView");
 const { hasMinPlan, FREE_ITEM_LIMIT, TEMPLATE_MIN_PLAN } = require("../config/plans");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { logCrmEvent } = require("../utils/crmEvents");
@@ -19,6 +21,19 @@ const trackView = (userID) => {
   const today = buenosAiresDateStr(); // "YYYY-MM-DD" en horario argentino
   PageView.findOneAndUpdate(
     { userID, date: today },
+    { $inc: { count: 1 } },
+    { upsert: true }
+  ).catch(() => {});
+};
+
+// ──────────────────────────────────────────────
+// Helper: suma 1 a la vista de hoy de un producto puntual (upsert, no
+// bloqueante). Mismo criterio que trackView, a nivel de item.
+// ──────────────────────────────────────────────
+const trackItemView = (userID, itemID) => {
+  const today = buenosAiresDateStr();
+  ItemView.findOneAndUpdate(
+    { userID, itemID, date: today },
     { $inc: { count: 1 } },
     { upsert: true }
   ).catch(() => {});
@@ -358,6 +373,80 @@ const fetchStats = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
+// @desc    Registra que se tocó un producto puntual de la carta pública
+//          (analítica de "platos más vistos"). Resuelve el dueño desde el
+//          slug de la URL en vez de confiar en un userID que mande el
+//          cliente, y valida que el item sea realmente de ese local antes
+//          de contarlo — así datos de otro local no se cuelan en las
+//          estadísticas por un itemID cualquiera.
+// @route   POST /api/users/:slug/menu/items/:itemID/view
+// @access  Public
+// ──────────────────────────────────────────────
+const trackItemViewEndpoint = async (req, res) => {
+  try {
+    const { slug, itemID } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(itemID)) return res.sendStatus(204);
+
+    const slugNormalizado = generateSlug(slug);
+    const user = await User.findOne({ slug: slugNormalizado, active: true }).select("_id");
+    if (!user) return res.sendStatus(204);
+
+    const item = await Item.findById(itemID).select("menuID");
+    if (!item) return res.sendStatus(204);
+
+    const menu = await Menu.findOne({ _id: item.menuID, userID: user._id }).select("_id");
+    if (!menu) return res.sendStatus(204);
+
+    trackItemView(user._id, itemID);
+    res.sendStatus(204);
+  } catch {
+    res.sendStatus(204);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Top de productos más vistos en los últimos 30 días. Mismo gate
+//          de plan que fetchStats. Agrega ItemView por itemID y después
+//          busca el título/imagen actual en Item — un producto borrado
+//          desde entonces se muestra igual, con un texto genérico en vez
+//          de romper la lista.
+// @route   GET /api/users/me/item-stats
+// @access  Private (pro+)
+// ──────────────────────────────────────────────
+const fetchItemStats = async (req, res) => {
+  try {
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const sinceStr = buenosAiresDateStr(new Date(now - 29 * MS_PER_DAY));
+
+    const rows = await ItemView.aggregate([
+      { $match: { userID: req.user._id, date: { $gte: sinceStr } } },
+      { $group: { _id: "$itemID", totalViews: { $sum: "$count" } } },
+      { $sort: { totalViews: -1 } },
+      { $limit: 10 },
+    ]);
+
+    const items = await Item.find({ _id: { $in: rows.map((r) => r._id) } }).select("title image");
+    const byId = {};
+    items.forEach((it) => { byId[it._id.toString()] = it; });
+
+    const topItems = rows.map((r) => {
+      const item = byId[r._id.toString()];
+      return {
+        itemID: r._id,
+        title: item?.title || "(producto eliminado)",
+        image: item?.image || "",
+        totalViews: r.totalViews,
+      };
+    });
+
+    res.json({ topItems, windowDays: 30 });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
 // @desc    Obtener datos públicos de un local por slug.
 //          Se ejecuta UNA sola vez cuando el cliente entra a /negocio.
 // @route   GET /api/users/:slug
@@ -403,6 +492,15 @@ const editUser = async (req, res) => {
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
+
+    // Único campo de contactInfo con validación propia: se renderiza como
+    // link real en la carta pública, así que al menos evitamos guardar
+    // cualquier cosa que no sea una URL (el resto de contactInfo son
+    // strings libres sin validar, a propósito, para no bloquear al dueño).
+    const reviewUrl = updates.contactInfo?.googleReviewUrl;
+    if (reviewUrl && !/^https?:\/\//i.test(reviewUrl)) {
+      return res.status(400).json({ message: "El link de reseñas debe empezar con http:// o https://" });
+    }
 
     // Si actualizaron el businessName, regeneramos el slug automáticamente.
     // Si el nuevo nombre no deja ningún carácter válido, no tocamos el slug
@@ -615,6 +713,8 @@ module.exports = {
   fetchUserWithMenu,
   fetchOwnMenu,
   fetchStats,
+  trackItemViewEndpoint,
+  fetchItemStats,
   fetchUser,
   editUser,
   uploadImage,

@@ -83,6 +83,7 @@ acceptedTermsVersion: {
       address: { type: String, default: "" },
       social: { type: Object, default: {} }, // Ej: { instagram: "", facebook: "" }
       businessName: { type: String, default: "" }, // Nombre visible del local
+      googleReviewUrl: { type: String, default: "" }, // Link "Dejanos tu reseña" (Google Maps)
     },
 
     // Imágenes del local (galería y foto de portada)
