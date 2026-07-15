@@ -70,9 +70,9 @@ router.post("/crear-preferencia", protect, async (req, res) => {
         // mensaje — la fuente de verdad de si se acreditó el plan es
         // el webhook, no este redirect.
         back_urls: {
-          success: `${process.env.FRONTEND_URL}/user/editor?payment=success`,
-          failure: `${process.env.FRONTEND_URL}/user/editor?payment=failure`,
-          pending: `${process.env.FRONTEND_URL}/user/editor?payment=pending`,
+          success: `${process.env.FRONTEND_URL}/dashboard?payment=success`,
+          failure: `${process.env.FRONTEND_URL}/dashboard?payment=failure`,
+          pending: `${process.env.FRONTEND_URL}/dashboard?payment=pending`,
         },
         auto_return: "approved", // redirige automáticamente si el pago es aprobado
         // Identifica quién paga — lo lee mpWebhook para saber a qué
