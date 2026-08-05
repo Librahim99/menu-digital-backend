@@ -9,6 +9,8 @@ const ItemView = require("../models/ItemView");
 const { hasMinPlan, FREE_ITEM_LIMIT, TEMPLATE_MIN_PLAN } = require("../config/plans");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { logCrmEvent } = require("../utils/crmEvents");
+const { buildMenuHTML } = require("../utils/menuPdfTemplate");
+const { getBrowser } = require("../utils/pdfBrowser");
 
 // ──────────────────────────────────────────────
 // Helper: suma 1 a la visita de hoy del local (upsert, no bloqueante).
@@ -271,6 +273,101 @@ const fetchUserWithMenu = async (req, res) => {
     res.json({ user: userFiltered, menu: menuArmado });
   } catch (error) {
     handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Genera y descarga en PDF el menú público de un local, a partir
+//          del slug. Arma secciones → categorías → items igual que
+//          fetchUserWithMenu (mismos filtros de hidden/available), y le pasa
+//          esa estructura al template de utils/menuPdfTemplate para renderizar
+//          el HTML que Puppeteer convierte en PDF.
+// @route   GET /api/users/:slug/menu/pdf
+// @access  Public
+// ──────────────────────────────────────────────
+const downloadMenuPdf = async (req, res) => {
+  let page;
+  try {
+    const { slug } = req.params;
+    const slugNormalizado = generateSlug(slug);
+
+    const user = await User.findOne({ slug: slugNormalizado, active: true });
+    if (!user) return res.status(404).json({ message: "Local no encontrado" });
+
+    const menus = await Menu.find({ userID: user._id, hidden: false });
+    const menuIDs = menus.map((m) => m._id);
+
+    // Solo lo que realmente se ve en la carta: no ocultos, disponibles y
+    // sin contar extras/adicionales (igual criterio que la ruta del menú PDF
+    // que armamos antes, pensado para que el PDF no incluya salsas/bebidas
+    // sueltas como si fueran platos del listado principal).
+    const allItems = await Item.find({
+      menuID: { $in: menuIDs },
+      hidden: false,
+      available: true,
+      isExtra: false,
+    }).select("-__v");
+
+    const secciones  = menus.filter((m) => m.section === true);
+    const categorias = menus.filter((m) => m.section === false);
+
+    // flattenMaps: true convierte item.options (Mongoose Map) a un objeto
+    // plano — sin esto, Object.entries() en el template no itera bien las
+    // variantes/adicionales del item.
+    const menuArmado = {
+      secciones: secciones.map((sec) => ({
+        ...sec.toObject(),
+        categorias: categorias
+          .filter((cat) => cat.sectionID && cat.sectionID.equals(sec._id))
+          .map((cat) => ({
+            ...cat.toObject(),
+            items: allItems
+              .filter((item) => item.menuID.equals(cat._id))
+              .map((item) => item.toObject({ flattenMaps: true })),
+          })),
+      })),
+      sinSeccion: categorias
+        .filter((cat) => !cat.sectionID)
+        .map((cat) => ({
+          ...cat.toObject(),
+          items: allItems
+            .filter((item) => item.menuID.equals(cat._id))
+            .map((item) => item.toObject({ flattenMaps: true })),
+        })),
+    };
+
+    const html = buildMenuHTML({
+      businessName: user.contactInfo?.businessName || "Nuestro Menú",
+      menuArmado,
+    });
+
+    const browser = await getBrowser();
+    page = await browser.newPage();
+
+    // Timeout acotado: si una imagen remota (Cloudinary) se cuelga o tarda
+    // demasiado, esto corta a los 15s en vez de dejar la request colgada
+    // hasta que la tumbe el proxy/plataforma (lo que suele volver como una
+    // respuesta de texto plano de timeout, no como un error nuestro).
+    await page.setContent(html, { waitUntil: "networkidle0", timeout: 15000 });
+
+    const pdfBuffer = Buffer.from(await page.pdf({
+  format: "A4",
+  printBackground: true,
+  margin: { top: "0mm", bottom: "10mm", left: "0mm", right: "0mm" },
+}));
+
+res.set({
+  "Content-Type": "application/pdf",
+  "Content-Disposition": `attachment; filename="${slugNormalizado}-menu.pdf"`,
+  "Content-Length": pdfBuffer.length,
+});
+res.send(pdfBuffer);
+  } catch (error) {
+    handleError(res, error);
+  } finally {
+    // Cerramos solo la página, NO el browser — el browser se reutiliza
+    // entre requests (ver utils/pdfBrowser.js).
+    if (page) await page.close();
   }
 };
 
@@ -711,6 +808,7 @@ module.exports = {
   loginUser,
   getAuthUser,
   fetchUserWithMenu,
+  downloadMenuPdf,
   fetchOwnMenu,
   fetchStats,
   trackItemViewEndpoint,
