@@ -84,6 +84,8 @@ acceptedTermsVersion: {
       social: { type: Object, default: {} }, // Ej: { instagram: "", facebook: "" }
       businessName: { type: String, default: "" }, // Nombre visible del local
       googleReviewUrl: { type: String, default: "" }, // Link "Dejanos tu reseña" (Google Maps)
+      googlePlaceId: { type: String, default: "" }, // Place ID de Google (rating/reseñas reales)
+      reservationMessage: { type: String, default: "" }, // Mensaje pre-cargado del botón "Reservar por WhatsApp"
     },
 
     // Imágenes del local (galería y foto de portada)
