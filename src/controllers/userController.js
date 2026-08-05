@@ -247,7 +247,8 @@ const fetchUserWithMenu = async (req, res) => {
       contactInfo: user.contactInfo,
       media: user.media,
       hasDelivery: user.hasDelivery,
-      template: user.template
+      template: user.template,
+      schedule: user.schedule,
     }
  
     const menuArmado = {
@@ -466,7 +467,8 @@ const fetchUser = async (req, res) => {
       contactInfo: user.contactInfo,
       media: user.media,
       hasDelivery: user.hasDelivery,
-      template: user.template
+      template: user.template,
+      schedule: user.schedule,
     }
  
     res.json( userFiltered );
@@ -486,7 +488,7 @@ const editUser = async (req, res) => {
     // PATCH /api/users/template (useTemplate), que valida si es premium y
     // el usuario tiene plan pago. Si "template" estuviera acá, cualquiera
     // podría mandarlo por este endpoint y saltarse esa validación.
-    const allowedFields = ["contactInfo", "hasDelivery", "media"];
+    const allowedFields = ["contactInfo", "hasDelivery", "media", "schedule"];
 
     const updates = {};
     allowedFields.forEach((field) => {
@@ -500,6 +502,29 @@ const editUser = async (req, res) => {
     const reviewUrl = updates.contactInfo?.googleReviewUrl;
     if (reviewUrl && !/^https?:\/\//i.test(reviewUrl)) {
       return res.status(400).json({ message: "El link de reseñas debe empezar con http:// o https://" });
+    }
+
+    // Validación liviana del horario: mismo criterio que reviewUrl arriba,
+    // solo lo mínimo para que la carta pública no reciba datos que rompan
+    // el cálculo de "abierto ahora" (ver ScheduleSection en UserHome.tsx).
+    // El front (UserEditor.tsx) ya valida esto mismo antes de mandar, esto
+    // es la segunda barrera del lado del servidor.
+    const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+    const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    if (updates.schedule !== undefined) {
+      const sched = updates.schedule;
+      const isValid =
+        sched && typeof sched === "object" &&
+        DAY_KEYS.every((day) => {
+          const d = sched[day];
+          if (!d || typeof d !== "object") return false;
+          if (typeof d.enabled !== "boolean") return false;
+          if (!d.enabled) return true; // open/close no importan si está cerrado
+          return HHMM_RE.test(d.open) && HHMM_RE.test(d.close) && d.open < d.close;
+        });
+      if (!isValid) {
+        return res.status(400).json({ message: "El horario cargado no es válido." });
+      }
     }
 
     // Si actualizaron el businessName, regeneramos el slug automáticamente.

@@ -93,6 +93,22 @@ acceptedTermsVersion: {
       pictures: { type: [String], default: [] }, // Array de URLs
       backgroundPicture: { type: String, default: "" },
     },
+
+    // Horario de atención, un DayHours por día de la semana. Sin `default`
+    // a propósito: si el dueño nunca lo cargó, el campo queda `undefined`
+    // (no un horario 09:00-18:00 inventado) — el front trata su ausencia
+    // como "sin horario cargado" y no muestra la sección. `open`/`close`
+    // son strings "HH:mm"; no se valida el formato acá, se valida en
+    // editUser (userController.js), mismo criterio que contactInfo.
+    schedule: {
+      mon: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
+      tue: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
+      wed: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
+      thu: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
+      fri: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
+      sat: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
+      sun: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
+    },
   },
   {
     timestamps: true, // Agrega createdAt y updatedAt automáticamente
