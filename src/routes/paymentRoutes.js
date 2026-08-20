@@ -85,12 +85,11 @@ router.post("/crear-preferencia", protect, async (req, res) => {
         auto_return: "approved", // redirige automáticamente si el pago es aprobado
         // Identifica quién paga — lo lee mpWebhook para saber a qué
         // cuenta actualizarle la suscripción cuando MP confirme el pago.
-        external_reference: pending._id.toString(),
+        external_reference: req.user._id.toString(),
           metadata: {
           plan_id: planId,
-          months: monthsNum,
-          type: "registration",
-      },
+          type: "upgrade",
+        },
       },
     });
 
@@ -160,17 +159,23 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     }
 
     // Crear pending (password en plain; el pre-save de User la hashea al crear)
-    const pending = await PendingRegistration.create({
-      username: cleanUsername,
-      password,
-      contactInfo: {
-        mail: cleanMail,
-        businessName: cleanBusinessName,
-      },
-      acceptedTerms: true,
-      planId,
-      months: monthsNum,
-    });
+    const pending = new PendingRegistration({
+  username: cleanUsername,
+  password,
+  contactInfo: {
+    mail: cleanMail,
+    businessName: cleanBusinessName,
+  },
+  acceptedTerms: true,
+  planId,
+  months: monthsNum,
+});
+
+await pending.save();
+
+if (!pending._id) {
+  throw new Error("PendingRegistration se guardó sin generar un _id");
+}
 
     const unitPrice = Math.round(plan.unit_price * MONTH_MULTIPLIERS[monthsNum]);
 
@@ -198,11 +203,11 @@ router.post("/crear-preferencia-registro", async (req, res) => {
         auto_return: "approved",
         // external_reference = id del PendingRegistration
         // el webhook lo usa para crear el User cuando el pago se aprueba
-         external_reference: req.user._id.toString(),
+         external_reference: pending._id.toString(),
         metadata: {
           plan_id: planId,
           months: monthsNum,
-          type: "upgrade", // o "registration" si es registro nuevo
+          type: "registration", // o "registration" si es registro nuevo
         },
       },
     });
