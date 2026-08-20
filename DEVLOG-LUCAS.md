@@ -47,11 +47,3 @@
   cuenta" para Basic/Pro.
 - Se verificó el frontend con `typecheck`, `lint`, build y prueba visual responsive.
 - Se publicaron los cambios en `master`: frontend `7fdf28d`; backend `761ea26`.
-
-### ⚠️ Pendiente
-- El circuito Free está listo y redirige al dashboard con sesión iniciada.
-- En producción, el alta Basic/Pro llega a
-  `/api/payments/crear-preferencia-registro` pero responde 500 con
-  `No se pudo crear la preferencia de pago`. El próximo paso es revisar el error
-  interno en los logs de Koyeb para determinar si falla el guardado del
-  `PendingRegistration` o la creación de la preferencia en MercadoPago.

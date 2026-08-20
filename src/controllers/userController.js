@@ -237,6 +237,7 @@ const fetchUserWithMenu = async (req, res) => {
       hasDelivery: user.hasDelivery,
       template: user.template,
       schedule: user.schedule,
+      subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
     }
  
     const menuArmado = {
@@ -552,6 +553,7 @@ const fetchUser = async (req, res) => {
       hasDelivery: user.hasDelivery,
       template: user.template,
       schedule: user.schedule,
+      subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
     }
  
     res.json( userFiltered );
