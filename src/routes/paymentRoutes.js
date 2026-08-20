@@ -85,11 +85,12 @@ router.post("/crear-preferencia", protect, async (req, res) => {
         auto_return: "approved", // redirige automáticamente si el pago es aprobado
         // Identifica quién paga — lo lee mpWebhook para saber a qué
         // cuenta actualizarle la suscripción cuando MP confirme el pago.
-        external_reference: req.user._id.toString(),
-        metadata: {
+        external_reference: pending._id.toString(),
+          metadata: {
           plan_id: planId,
-          type: "upgrade",
-        },
+          months: monthsNum,
+          type: "registration",
+      },
       },
     });
 
