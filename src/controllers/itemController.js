@@ -1,7 +1,7 @@
 const { handleError } = require("../utils/handleError");
 const Item = require("../models/Item");
 const Menu = require("../models/Menu");
-const { hasMinPlan, FREE_ITEM_LIMIT } = require("../config/plans");
+const { getItemLimit, hasMinPlan } = require("../config/plans");
 
 // ──────────────────────────────────────────────
 // Helper: verifica que el menuID pertenezca al user autenticado.
@@ -34,15 +34,20 @@ const newItem = async (req, res) => {
     // del plan gratuito como para el chequeo de código único de acá abajo.
     const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
 
-    // Plan gratuito: tope de productos totales (todas las categorías juntas).
-    // A partir del plan basic ("menu_ilimitado") no hay tope.
-    if (!hasMinPlan(req.user.subscription, "basic")) {
+    // Tope total escalonado por plan (todas las categorías juntas).
+    const itemLimit = getItemLimit(req.user.subscription);
+    if (itemLimit !== null) {
       const itemCount = await Item.countDocuments({ menuID: { $in: userMenuIDs } });
-      if (itemCount >= FREE_ITEM_LIMIT) {
+      if (itemCount >= itemLimit) {
         return res.status(403).json({
-          message: `Alcanzaste el límite de ${FREE_ITEM_LIMIT} productos del plan gratuito. Mejorá tu plan para agregar productos ilimitados.`,
+          message: `Alcanzaste el límite de ${itemLimit} productos de tu plan. Mejorá tu plan para agregar más productos.`,
         });
       }
+    }
+
+    const hasScheduledOffer = offerRange?.from || offerRange?.to;
+    if (hasScheduledOffer && !hasMinPlan(req.user.subscription, "basic")) {
+      return res.status(403).json({ message: "La programación de productos requiere el plan Basic." });
     }
 
     // Verifica que el código sea único entre los productos de ESTE usuario
@@ -95,6 +100,11 @@ const editItem = async (req, res) => {
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
+
+    const hasScheduledOffer = updates.offerRange?.from || updates.offerRange?.to;
+    if (hasScheduledOffer && !hasMinPlan(req.user.subscription, "basic")) {
+      return res.status(403).json({ message: "La programación de productos requiere el plan Basic." });
+    }
 
     // Solo chequear unicidad si el código realmente cambia, y solo contra
     // los items de ESTE usuario (antes: Item.findOne({ code: undefined })

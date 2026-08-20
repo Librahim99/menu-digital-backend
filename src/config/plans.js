@@ -14,29 +14,32 @@ const PLAN_ORDER = ["free", "basic", "pro"];
 // Features que DESBLOQUEA cada nivel (acumulativo vía getFeaturesForPlan:
 // un plan tiene lo suyo + todo lo de los planes inferiores).
 const PLAN_FEATURES = {
-  free:    [],
-  basic:   ["menu_limitado", "landing_page", "carga_masiva_excel"],
-  pro:     ["estadisticas", "dominio_personalizado"]
+  free:    ["menu_editor", "qr", "pedido_whatsapp"],
+  basic:   ["sin_publicidad", "landing_page", "carga_masiva_excel", "programacion_productos", "menu_pdf"],
+  pro:     ["estadisticas", "dominio_personalizado", "productos_ilimitados", "resenas_integradas"]
 };
 
-// Tope de productos del plan gratuito (coincide con lo que promete la
-// landing pública: "Hasta 15 productos"). A partir de "basic" (feature
-// "menu_limitado") no hay tope — no es un límite escalonado por plan,
-// es binario: free vs. cualquier plan pago.
+// Topes de productos. `null` significa ilimitado.
 const FREE_ITEM_LIMIT = 15;
+const BASIC_ITEM_LIMIT = 50;
+const ITEM_LIMITS = {
+  free: FREE_ITEM_LIMIT,
+  basic: BASIC_ITEM_LIMIT,
+  pro: null,
+};
 
 // Plan mínimo requerido para usar cada template visual de la carta pública.
 // Es la fuente de verdad del gating escalonado de templates: el front espeja
 // este mapa (src/lib/plans.ts) para mostrar candados, y useTemplate lo valida
 // del lado del servidor. Cualquier id que no esté acá se considera inválido.
-//   free:    1 Clásico · 3 Natural · 5 Minimal
-//   basic:   2 Moderno · 4 Rojo · 8 Coastal · 9 Charcoal
-//   pro:     10 Terracotta · 11 Lavender · 12 Forest
+//   free:    1 diseño base
+//   basic:   5 diseños totales (1–5)
+//   pro:     15 diseños totales (1–15)
 const TEMPLATE_MIN_PLAN = {
-  1: "free",    3: "free",    5: "free",
-  2: "basic", 4: "basic", 8: "basic", 9: "basic",
-  10: "pro",    11: "pro",    12: "pro",
-  6: "pro", 7: "pro", 13: "pro",
+  1: "free",
+  2: "basic", 3: "basic", 4: "basic", 5: "basic",
+  6: "pro", 7: "pro", 8: "pro", 9: "pro", 10: "pro",
+  11: "pro", 12: "pro", 13: "pro", 14: "pro", 15: "pro",
 };
 
 function getFeaturesForPlan(plan) {
@@ -46,7 +49,20 @@ function getFeaturesForPlan(plan) {
 }
 
 function hasMinPlan(userPlan, requiredPlan) {
-  return PLAN_ORDER.indexOf(userPlan) >= PLAN_ORDER.indexOf(requiredPlan);
+  const userIndex = PLAN_ORDER.indexOf(userPlan);
+  const requiredIndex = PLAN_ORDER.indexOf(requiredPlan);
+  return userIndex !== -1 && requiredIndex !== -1 && userIndex >= requiredIndex;
+}
+
+function getItemLimit(plan) {
+  return Object.prototype.hasOwnProperty.call(ITEM_LIMITS, plan)
+    ? ITEM_LIMITS[plan]
+    : FREE_ITEM_LIMIT;
+}
+
+function getTemplateForPlan(template, plan) {
+  const requiredPlan = TEMPLATE_MIN_PLAN[template];
+  return requiredPlan && hasMinPlan(plan, requiredPlan) ? template : 1;
 }
 
 // Compatibilidad: los usuarios pagos creados antes de incorporar vencimientos
@@ -61,8 +77,12 @@ module.exports = {
   PLAN_ORDER,
   PLAN_FEATURES,
   FREE_ITEM_LIMIT,
+  BASIC_ITEM_LIMIT,
+  ITEM_LIMITS,
   TEMPLATE_MIN_PLAN,
   getFeaturesForPlan,
+  getItemLimit,
+  getTemplateForPlan,
   getEffectivePlan,
   hasMinPlan,
 };

@@ -6,7 +6,13 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const PageView = require("../models/PageView");
 const ItemView = require("../models/ItemView");
-const { getEffectivePlan, hasMinPlan, FREE_ITEM_LIMIT, TEMPLATE_MIN_PLAN } = require("../config/plans");
+const {
+  getEffectivePlan,
+  getItemLimit,
+  getTemplateForPlan,
+  hasMinPlan,
+  TEMPLATE_MIN_PLAN,
+} = require("../config/plans");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { buildMenuHTML } = require("../utils/menuPdfTemplate");
@@ -40,6 +46,27 @@ const trackItemView = (userID, itemID) => {
     { $inc: { count: 1 } },
     { upsert: true }
   ).catch(() => {});
+};
+
+const getContactInfoForPlan = (contactInfo, plan) => {
+  const filtered = contactInfo?.toObject?.() ?? { ...(contactInfo || {}) };
+  if (!hasMinPlan(plan, "pro")) {
+    delete filtered.googleReviewUrl;
+    delete filtered.googlePlaceId;
+    delete filtered.googleRating;
+    delete filtered.googleReviewCount;
+  }
+  return filtered;
+};
+
+const getPublicItemForPlan = (item, plan) => {
+  const filtered = item.toObject({ flattenMaps: true });
+  const hasSchedule = filtered.offerRange?.from || filtered.offerRange?.to;
+  if (hasSchedule && !hasMinPlan(plan, "basic")) {
+    filtered.offerPrice = null;
+    filtered.offerRange = { from: null, to: null };
+  }
+  return filtered;
 };
 
 // ──────────────────────────────────────────────
@@ -185,9 +212,12 @@ const getAuthUser = async (req, res) => {
     const menuIDs = categorias.map(m => m._id);
     const itemCount = await Item.countDocuments({ menuID: { $in: menuIDs }, hidden: false });
 
+    const effectivePlan = getEffectivePlan(user.subscription, user.subscriptionExpiresAt);
     res.json({
       ...user.toObject(),
-      subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
+      contactInfo: getContactInfoForPlan(user.contactInfo, effectivePlan),
+      subscription: effectivePlan,
+      template: getTemplateForPlan(user.template, effectivePlan),
       itemCount,
       categoryCount: categorias.length,
     });
@@ -211,6 +241,7 @@ const fetchUserWithMenu = async (req, res) => {
  
     const user = await User.findOne({ slug: slugNormalizado, active: true });
     if (!user) return res.status(404).json({ message: "Local no encontrado" });
+    const effectivePlan = getEffectivePlan(user.subscription, user.subscriptionExpiresAt);
 
     // Esta ruta es la que carga el cliente al ver la carta (ej: al escanear
     // el QR de la mesa), así que es el lugar correcto para contar la
@@ -232,12 +263,12 @@ const fetchUserWithMenu = async (req, res) => {
 
     const userFiltered = {
       _id: user._id,
-      contactInfo: user.contactInfo,
+      contactInfo: getContactInfoForPlan(user.contactInfo, effectivePlan),
       media: user.media,
       hasDelivery: user.hasDelivery,
-      template: user.template,
+      template: getTemplateForPlan(user.template, effectivePlan),
       schedule: user.schedule,
-      subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
+      subscription: effectivePlan,
     }
  
     const menuArmado = {
@@ -247,14 +278,18 @@ const fetchUserWithMenu = async (req, res) => {
           .filter((cat) => cat.sectionID && cat.sectionID.equals(sec._id))
           .map((cat) => ({
             ...cat.toObject(),
-            items: allItems.filter((item) => item.menuID.equals(cat._id)),
+            items: allItems
+              .filter((item) => item.menuID.equals(cat._id))
+              .map((item) => getPublicItemForPlan(item, effectivePlan)),
           })),
       })),
       sinSeccion: categorias
         .filter((cat) => !cat.sectionID)
         .map((cat) => ({
           ...cat.toObject(),
-          items: allItems.filter((item) => item.menuID.equals(cat._id)),
+          items: allItems
+            .filter((item) => item.menuID.equals(cat._id))
+            .map((item) => getPublicItemForPlan(item, effectivePlan)),
         })),
     };
  
@@ -281,6 +316,10 @@ const downloadMenuPdf = async (req, res) => {
 
     const user = await User.findOne({ slug: slugNormalizado, active: true });
     if (!user) return res.status(404).json({ message: "Local no encontrado" });
+    const effectivePlan = getEffectivePlan(user.subscription, user.subscriptionExpiresAt);
+    if (!hasMinPlan(effectivePlan, "basic")) {
+      return res.status(403).json({ message: "Exportar el menú a PDF requiere el plan Basic." });
+    }
 
     const menus = await Menu.find({ userID: user._id, hidden: false });
     const menuIDs = menus.map((m) => m._id);
@@ -395,16 +434,17 @@ const fetchOwnMenu = async (req, res) => {
         })),
     };
 
-    // El front usa esto para mostrar "X/15 productos", deshabilitar
+    // El front usa esto para mostrar "X/límite productos", deshabilitar
     // "Agregar producto" al llegar al tope, y mostrar el candado en
     // "Importar desde Excel" — la fuente de verdad real sigue siendo
     // el check en newItem y el middleware requirePlan en massiveRoutes,
     // esto es solo para la UI.
-    const unlimited = hasMinPlan(req.user.subscription, "basic");
+    const itemLimit = getItemLimit(req.user.subscription);
     const limits = {
       itemCount: allItems.length,
-      itemLimit: unlimited ? null : FREE_ITEM_LIMIT,
-      canImportExcel: unlimited, // misma condición: plan basic o superior
+      itemLimit,
+      canImportExcel: hasMinPlan(req.user.subscription, "basic"),
+      canExportPdf: hasMinPlan(req.user.subscription, "basic"),
     };
 
     res.json({ menu: menuArmado, limits });
@@ -545,15 +585,22 @@ const fetchUser = async (req, res) => {
  
     const user = await User.findOne({ slug: slugNormalizado, active: true });
     if (!user) return res.status(404).json({ message: "Local no encontrado" });
+    const effectivePlan = getEffectivePlan(user.subscription, user.subscriptionExpiresAt);
+    if (!hasMinPlan(effectivePlan, "basic")) {
+      return res.status(403).json({
+        code: "LANDING_PLAN_REQUIRED",
+        message: "La página principal del negocio requiere el plan Basic.",
+      });
+    }
 
     const userFiltered = {
       _id: user._id,
-      contactInfo: user.contactInfo,
+      contactInfo: getContactInfoForPlan(user.contactInfo, effectivePlan),
       media: user.media,
       hasDelivery: user.hasDelivery,
-      template: user.template,
+      template: getTemplateForPlan(user.template, effectivePlan),
       schedule: user.schedule,
-      subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
+      subscription: effectivePlan,
     }
  
     res.json( userFiltered );
@@ -570,8 +617,8 @@ const fetchUser = async (req, res) => {
 const editUser = async (req, res) => {
   try {
     // "template" queda afuera a propósito: cambiar el template pasa por
-    // PATCH /api/users/template (useTemplate), que valida si es premium y
-    // el usuario tiene plan pago. Si "template" estuviera acá, cualquiera
+    // PATCH /api/users/template (useTemplate), que valida el nivel requerido.
+    // Si "template" estuviera acá, cualquiera
     // podría mandarlo por este endpoint y saltarse esa validación.
     const allowedFields = ["contactInfo", "hasDelivery", "media", "schedule"];
 
@@ -579,6 +626,24 @@ const editUser = async (req, res) => {
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
+
+    const restrictedReviewFields = ["googleReviewUrl", "googlePlaceId"];
+    const triesToUpdateReviews = restrictedReviewFields.some((field) =>
+      Object.prototype.hasOwnProperty.call(updates.contactInfo || {}, field)
+    );
+    if (triesToUpdateReviews && !hasMinPlan(req.user.subscription, "pro")) {
+      return res.status(403).json({ message: "Las reseñas integradas requieren el plan Pro." });
+    }
+
+    // `contactInfo` es un subdocumento. Mezclamos con el valor actual para
+    // que omitir los campos Pro desde un plan inferior no los borre al
+    // guardar otros datos del negocio.
+    if (updates.contactInfo) {
+      updates.contactInfo = {
+        ...(req.user.contactInfo?.toObject?.() ?? {}),
+        ...updates.contactInfo,
+      };
+    }
 
     // Único campo de contactInfo con validación propia: se renderiza como
     // link real en la carta pública, así que al menos evitamos guardar

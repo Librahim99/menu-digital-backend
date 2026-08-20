@@ -20,12 +20,12 @@ const PLANES = {
   basic: {
     title: "Menú Digital — Plan Basic",
     unit_price: 39999,
-    description: "Menú digital ilimitado, landing page del local, carga masiva por Excel",
+    description: "Hasta 50 productos, Excel, landing del local, programación, PDF y 5 diseños",
   },
   pro: {
     title: "Menú Digital — Plan Pro",
     unit_price: 59999,
-    description: "Todo el plan basic + estadísticas de visitas + dominio personalizado",
+    description: "Productos ilimitados, métricas, reseñas integradas, dominio propio y 15 diseños",
   },
 };
 
