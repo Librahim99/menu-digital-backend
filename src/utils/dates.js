@@ -28,4 +28,24 @@ const formatter = new Intl.DateTimeFormat("en-CA", {
  */
 const buenosAiresDateStr = (date = new Date()) => formatter.format(date);
 
-module.exports = { buenosAiresDateStr, TIMEZONE_BA: TZ };
+/**
+ * Suma meses calendario conservando el día cuando existe. Si el mes destino
+ * es más corto, usa su último día (ej: 31/01 + 1 mes = 28/02 o 29/02).
+ */
+const addCalendarMonths = (date, months) => {
+  const result = new Date(date);
+  const originalDay = result.getUTCDate();
+
+  result.setUTCDate(1);
+  result.setUTCMonth(result.getUTCMonth() + months);
+  const lastDayOfTargetMonth = new Date(Date.UTC(
+    result.getUTCFullYear(),
+    result.getUTCMonth() + 1,
+    0
+  )).getUTCDate();
+  result.setUTCDate(Math.min(originalDay, lastDayOfTargetMonth));
+
+  return result;
+};
+
+module.exports = { addCalendarMonths, buenosAiresDateStr, TIMEZONE_BA: TZ };

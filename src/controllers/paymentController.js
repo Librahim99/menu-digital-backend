@@ -4,6 +4,9 @@ const User = require("../models/User");
 const PendingRegistration = require("../models/PendingRegistration"); 
 const { PLAN_MAP } = require("../config/plans");
 const { logCrmEvent } = require("../utils/crmEvents");
+const { addCalendarMonths } = require("../utils/dates");
+const { handleError } = require("../utils/handleError");
+const { generateSlug } = require("../utils/slug");
 
 
 const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
@@ -48,6 +51,36 @@ const verifyMpSignature = (req) => {
   const a = Buffer.from(hash);
   const b = Buffer.from(expectedHash);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
+// @desc    Consultar si el webhook ya completó un alta paga
+// @route   POST /api/payments/registro/estado
+// @access  Public, protegido por un token aleatorio de un solo registro
+const getRegistrationStatus = async (req, res) => {
+  try {
+    const { registrationToken } = req.body;
+    if (
+      typeof registrationToken !== "string" ||
+      !/^[a-f0-9]{64}$/.test(registrationToken)
+    ) {
+      return res.status(400).json({ message: "Token de registro inválido" });
+    }
+
+    const activationTokenHash = crypto
+      .createHash("sha256")
+      .update(registrationToken)
+      .digest("hex");
+    const pending = await PendingRegistration.findOne({ activationTokenHash })
+      .select("status");
+
+    if (!pending) {
+      return res.status(404).json({ message: "Registro no encontrado o vencido" });
+    }
+
+    res.json({ status: pending.status });
+  } catch (error) {
+    handleError(res, error);
+  }
 };
 
 // @desc    Recibe la notificación de MercadoPago y confirma el pago
@@ -95,26 +128,58 @@ const mpWebhook = async (req, res) => {
         return res.sendStatus(200);
       }
 
-      // Evitar duplicados si MP reintenta el webhook
-      const alreadyExists = await User.findOne({ username: pending.username });
-      if (alreadyExists) {
-        await PendingRegistration.findByIdAndDelete(pending._id);
+      if (pending.status === "completed" || pending.status === "failed") {
         return res.sendStatus(200);
       }
+
+      // Evitar duplicados si MP reintenta el webhook
+      const alreadyExists = await User.findOne({ username: pending.username })
+        .select("+password");
+      if (alreadyExists) {
+        const belongsToThisRegistration = pending.password &&
+          await alreadyExists.matchPassword(pending.password);
+        await PendingRegistration.findByIdAndUpdate(pending._id, {
+          $set: {
+            status: belongsToThisRegistration ? "completed" : "failed",
+            userID: belongsToThisRegistration ? alreadyExists._id : null,
+            completedAt: belongsToThisRegistration ? new Date() : null,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          },
+          $unset: { password: 1 },
+        });
+        return res.sendStatus(200);
+      }
+
+      const approvedAtCandidate = new Date(paymentData.date_approved || Date.now());
+      const approvedAt = Number.isNaN(approvedAtCandidate.getTime())
+        ? new Date()
+        : approvedAtCandidate;
+      const subscriptionExpiresAt = addCalendarMonths(approvedAt, pending.months);
 
       const user = await User.create({
         username: pending.username,
         password: pending.password, // pre-save de User la hashea
         contactInfo: pending.contactInfo,
+        slug: generateSlug(pending.contactInfo.businessName) || undefined,
         acceptedTerms: true,
+        acceptedTermsAt: new Date(),
+        acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
         subscription: mappedPlan,
-        // opcional: subscriptionExpiresAt
+        subscriptionExpiresAt,
       });
 
-      await PendingRegistration.findByIdAndDelete(pending._id);
+      await PendingRegistration.findByIdAndUpdate(pending._id, {
+        $set: {
+          status: "completed",
+          userID: user._id,
+          completedAt: new Date(),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+        $unset: { password: 1 },
+      });
       await logCrmEvent(
         user._id,
-        `Alta por pago MP — plan ${mappedPlan} × ${pending.months} mes(es)`
+        `Alta por pago MP — plan ${mappedPlan} × ${pending.months} mes(es), vigente hasta ${subscriptionExpiresAt.toISOString()}`
       );
 
       return res.sendStatus(200);
@@ -138,4 +203,4 @@ const mpWebhook = async (req, res) => {
   }
 };
 
-module.exports = { mpWebhook };
+module.exports = { getRegistrationStatus, mpWebhook };

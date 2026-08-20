@@ -35,8 +35,8 @@ const newItem = async (req, res) => {
     const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
 
     // Plan gratuito: tope de productos totales (todas las categorías juntas).
-    // A partir del plan starter ("menu_ilimitado") no hay tope.
-    if (!hasMinPlan(req.user.subscription, "starter")) {
+    // A partir del plan basic ("menu_ilimitado") no hay tope.
+    if (!hasMinPlan(req.user.subscription, "basic")) {
       const itemCount = await Item.countDocuments({ menuID: { $in: userMenuIDs } });
       if (itemCount >= FREE_ITEM_LIMIT) {
         return res.status(403).json({

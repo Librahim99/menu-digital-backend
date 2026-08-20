@@ -1,8 +1,9 @@
 const express = require("express");
+const crypto = require("crypto");
 const router = express.Router();
 const { MercadoPagoConfig, Preference } = require("mercadopago");
 const { protect } = require("../middleware/auth");
-const { mpWebhook } = require("../controllers/paymentController");
+const { getRegistrationStatus, mpWebhook } = require("../controllers/paymentController");
 const PendingRegistration = require("../models/PendingRegistration");
 const User = require("../models/User");
 
@@ -159,23 +160,30 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     }
 
     // Crear pending (password en plain; el pre-save de User la hashea al crear)
+    const activationToken = crypto.randomBytes(32).toString("hex");
+    const activationTokenHash = crypto
+      .createHash("sha256")
+      .update(activationToken)
+      .digest("hex");
+
     const pending = new PendingRegistration({
-  username: cleanUsername,
-  password,
-  contactInfo: {
-    mail: cleanMail,
-    businessName: cleanBusinessName,
-  },
-  acceptedTerms: true,
-  planId,
-  months: monthsNum,
-});
+      username: cleanUsername,
+      password,
+      contactInfo: {
+        mail: cleanMail,
+        businessName: cleanBusinessName,
+      },
+      acceptedTerms: true,
+      planId,
+      months: monthsNum,
+      activationTokenHash,
+    });
 
-await pending.save();
+    await pending.save();
 
-if (!pending._id) {
-  throw new Error("PendingRegistration se guardó sin generar un _id");
-}
+    if (!pending._id) {
+      throw new Error("PendingRegistration se guardó sin generar un _id");
+    }
 
     const unitPrice = Math.round(plan.unit_price * MONTH_MULTIPLIERS[monthsNum]);
 
@@ -203,7 +211,7 @@ if (!pending._id) {
         auto_return: "approved",
         // external_reference = id del PendingRegistration
         // el webhook lo usa para crear el User cuando el pago se aprueba
-         external_reference: pending._id.toString(),
+        external_reference: pending._id.toString(),
         metadata: {
           plan_id: planId,
           months: monthsNum,
@@ -212,12 +220,19 @@ if (!pending._id) {
       },
     });
 
-    res.json({ init_point: result.init_point });
+    res.json({
+      init_point: result.init_point,
+      registrationToken: activationToken,
+    });
   } catch (error) {
     console.error("Error creando preferencia de registro:", error);
     res.status(500).json({ error: "No se pudo crear la preferencia de pago" });
   }
 });
+
+// El frontend consulta este endpoint al volver de MercadoPago. El token es
+// aleatorio y solo permite conocer si este registro puntual ya fue activado.
+router.post("/registro/estado", getRegistrationStatus);
 
 /**
  * POST /api/payments/webhook

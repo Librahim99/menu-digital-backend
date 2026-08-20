@@ -6,11 +6,12 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const PageView = require("../models/PageView");
 const ItemView = require("../models/ItemView");
-const { hasMinPlan, FREE_ITEM_LIMIT, TEMPLATE_MIN_PLAN } = require("../config/plans");
+const { getEffectivePlan, hasMinPlan, FREE_ITEM_LIMIT, TEMPLATE_MIN_PLAN } = require("../config/plans");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { buildMenuHTML } = require("../utils/menuPdfTemplate");
 const { getBrowser } = require("../utils/pdfBrowser");
+const { generateSlug } = require("../utils/slug");
 
 // ──────────────────────────────────────────────
 // Helper: suma 1 a la visita de hoy del local (upsert, no bloqueante).
@@ -49,22 +50,6 @@ const generateToken = (id) => {
     expiresIn: process.env.JWT_EXPIRES_IN || "7d",
   });
 };
-
-// ──────────────────────────────────────────────
-// Helper: normaliza un string a slug URL-friendly
-// "Café Roma" -> "cafe-roma"
-// "Don José"  -> "don-jose"
-// ──────────────────────────────────────────────
-const generateSlug = (name) =>
-  name
-    .normalize("NFD")                 // Descompone acentos: á -> a + ́
-    .replace(/[\u0300-\u036f]/g, "") // Elimina diacríticos
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9\s-]/g, "")    // Saca todo lo que no sea letra/número/espacio/guión
-    .replace(/\s+/g, "-")            // Espacios -> guiones
-    .replace(/-+/g, "-")             // Colapsa guiones repetidos
-    .replace(/^-+|-+$/g, "");        // Saca guiones al principio/final
 
 // ──────────────────────────────────────────────
 // Helper: valida la contraseña en el registro.
@@ -176,7 +161,7 @@ const loginUser = async (req, res) => {
       _id: user._id,
       username: user.username,
       admin: user.admin,
-      subscription: user.subscription,
+      subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -202,6 +187,7 @@ const getAuthUser = async (req, res) => {
 
     res.json({
       ...user.toObject(),
+      subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
       itemCount,
       categoryCount: categorias.length,
     });
@@ -413,11 +399,11 @@ const fetchOwnMenu = async (req, res) => {
     // "Importar desde Excel" — la fuente de verdad real sigue siendo
     // el check en newItem y el middleware requirePlan en massiveRoutes,
     // esto es solo para la UI.
-    const unlimited = hasMinPlan(req.user.subscription, "starter");
+    const unlimited = hasMinPlan(req.user.subscription, "basic");
     const limits = {
       itemCount: allItems.length,
       itemLimit: unlimited ? null : FREE_ITEM_LIMIT,
-      canImportExcel: unlimited, // misma condición: plan starter o superior
+      canImportExcel: unlimited, // misma condición: plan basic o superior
     };
 
     res.json({ menu: menuArmado, limits });

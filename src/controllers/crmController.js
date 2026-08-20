@@ -15,7 +15,7 @@ const STAGE_LABEL = {
   baja: "Baja",
 };
 
-const PLAN_LABEL = { free: "Gratis", starter: "Starter", pro: "Pro", premium: "Premium" };
+const PLAN_LABEL = { free: "Gratis", basic: "Básico", pro: "Pro" };
 
 // Todas las rutas de este controller ya pasan por protect + isAdmin (ver
 // crmRoutes), así que acá no re-chequeamos permisos.

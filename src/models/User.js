@@ -47,8 +47,15 @@ const UserSchema = new mongoose.Schema(
       type: String,
       // Niveles de plan (ver PLAN_ORDER en config/plans.js). "free" es el
       // default: toda cuenta nueva arranca sin pagar.
-      enum: ["free", "starter", "pro", "premium"],
+      enum: ["free", "basic", "pro"],
       default: "free",
+    },
+
+    // Fin de la vigencia del plan pago. Las cuentas free y las cuentas pagas
+    // anteriores a este campo pueden tenerlo en null.
+    subscriptionExpiresAt: {
+      type: Date,
+      default: null,
     },
 
     hasDelivery: {

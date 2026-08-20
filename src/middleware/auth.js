@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
-const { hasMinPlan } = require("../config/plans");
+const { getEffectivePlan, hasMinPlan } = require("../config/plans");
 
 /**
  * Middleware que protege rutas privadas.
@@ -44,6 +44,13 @@ const protect = async (req, res, next) => {
       return res.status(403).json({ message: "Cuenta desactivada" });
     }
 
+    // El resto de los middlewares/controllers recibe siempre el plan vigente.
+    // No modificamos la base acá: preservamos el plan comprado como historial.
+    req.user.subscription = getEffectivePlan(
+      req.user.subscription,
+      req.user.subscriptionExpiresAt
+    );
+
     next();
   } catch (error) {
     return res.status(401).json({ message: "Token inválido o expirado" });
@@ -69,7 +76,7 @@ const isAdmin = (req, res, next) => {
  * plan (o superior, según PLAN_ORDER en config/plans.js). Siempre se usa
  * después de protect, ya que necesita req.user.subscription.
  *
- * Uso: router.post("/ruta-pro", protect, requirePlan("starter"), controller)
+ * Uso: router.post("/ruta-paga", protect, requirePlan("basic"), controller)
  */
 const requirePlan = (minPlan) => (req, res, next) => {
   if (!hasMinPlan(req.user?.subscription, minPlan)) {

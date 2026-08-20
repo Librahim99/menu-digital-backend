@@ -49,4 +49,20 @@ function hasMinPlan(userPlan, requiredPlan) {
   return PLAN_ORDER.indexOf(userPlan) >= PLAN_ORDER.indexOf(requiredPlan);
 }
 
-module.exports = { PLAN_MAP, PLAN_ORDER, PLAN_FEATURES, FREE_ITEM_LIMIT, TEMPLATE_MIN_PLAN, getFeaturesForPlan, hasMinPlan };
+// Compatibilidad: los usuarios pagos creados antes de incorporar vencimientos
+// no tienen subscriptionExpiresAt y conservan su plan actual.
+function getEffectivePlan(userPlan, subscriptionExpiresAt, now = new Date()) {
+  if (userPlan === "free" || !subscriptionExpiresAt) return userPlan;
+  return new Date(subscriptionExpiresAt).getTime() > now.getTime() ? userPlan : "free";
+}
+
+module.exports = {
+  PLAN_MAP,
+  PLAN_ORDER,
+  PLAN_FEATURES,
+  FREE_ITEM_LIMIT,
+  TEMPLATE_MIN_PLAN,
+  getFeaturesForPlan,
+  getEffectivePlan,
+  hasMinPlan,
+};
