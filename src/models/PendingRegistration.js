@@ -14,6 +14,10 @@ const pendingRegistrationSchema = new mongoose.Schema(
     // sparse permite desplegar el índice aunque todavía existan registros
     // pendientes creados antes de incorporar este token.
     activationTokenHash: { type: String, required: true, unique: true, sparse: true },
+    // Se conserva la preferencia para que volver atrás o reintentar no cree
+    // otro checkout cobrable. Si cambia plan/período, se actualiza esta misma.
+    preferenceId: { type: String, default: null },
+    initPoint: { type: String, default: null },
     status: {
       type: String,
       enum: ["pending", "completed", "failed"],

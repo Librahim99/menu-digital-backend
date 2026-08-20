@@ -154,7 +154,11 @@ const mpWebhook = async (req, res) => {
       const approvedAt = Number.isNaN(approvedAtCandidate.getTime())
         ? new Date()
         : approvedAtCandidate;
-      const subscriptionExpiresAt = addCalendarMonths(approvedAt, pending.months);
+      const metadataMonths = Number(paymentData.metadata?.months);
+      const paidMonths = [1, 3, 6, 12].includes(metadataMonths)
+        ? metadataMonths
+        : pending.months;
+      const subscriptionExpiresAt = addCalendarMonths(approvedAt, paidMonths);
 
       const user = await User.create({
         username: pending.username,
@@ -172,6 +176,8 @@ const mpWebhook = async (req, res) => {
         $set: {
           status: "completed",
           userID: user._id,
+          planId: mappedPlan,
+          months: paidMonths,
           completedAt: new Date(),
           expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         },
@@ -179,7 +185,7 @@ const mpWebhook = async (req, res) => {
       });
       await logCrmEvent(
         user._id,
-        `Alta por pago MP — plan ${mappedPlan} × ${pending.months} mes(es), vigente hasta ${subscriptionExpiresAt.toISOString()}`
+        `Alta por pago MP — plan ${mappedPlan} × ${paidMonths} mes(es), vigente hasta ${subscriptionExpiresAt.toISOString()}`
       );
 
       return res.sendStatus(200);

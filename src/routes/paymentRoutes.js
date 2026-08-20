@@ -19,12 +19,12 @@ const client = new MercadoPagoConfig({
 const PLANES = {
   basic: {
     title: "Menú Digital — Plan Basic",
-    unit_price: 5999,
+    unit_price: 39999,
     description: "Menú digital ilimitado, landing page del local, carga masiva por Excel",
   },
   pro: {
     title: "Menú Digital — Plan Pro",
-    unit_price: 29999,
+    unit_price: 59999,
     description: "Todo el plan basic + estadísticas de visitas + dominio personalizado",
   },
 };
@@ -36,6 +36,42 @@ const MONTH_MULTIPLIERS = {
   6: 5,    // ~17% off
   12: 9,   // 25% off
 };
+
+const hashRegistrationToken = (token) =>
+  crypto.createHash("sha256").update(token).digest("hex");
+
+const sameSecret = (left, right) => {
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  const a = Buffer.from(left);
+  const b = Buffer.from(right);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+
+const buildRegistrationPreference = ({ pendingID, plan, planId, months, unitPrice }) => ({
+  items: [
+    {
+      id: planId,
+      title: `${plan.title} — ${months} mes(es)`,
+      description: plan.description,
+      quantity: 1,
+      unit_price: unitPrice,
+      currency_id: "ARS",
+    },
+  ],
+  notification_url: process.env.MP_WEBHOOK_URL,
+  back_urls: {
+    success: `${process.env.FRONTEND_URL}/register/success`,
+    failure: `${process.env.FRONTEND_URL}/register/plans?payment=failure`,
+    pending: `${process.env.FRONTEND_URL}/register/plans?payment=pending`,
+  },
+  auto_return: "approved",
+  external_reference: pendingID.toString(),
+  metadata: {
+    plan_id: planId,
+    months,
+    type: "registration",
+  },
+});
 
 /**
  * POST /api/payments/crear-preferencia
@@ -116,7 +152,15 @@ router.post("/crear-preferencia", protect, async (req, res) => {
  * Devuelve: { init_point: "https://..." }
  */
 router.post("/crear-preferencia-registro", async (req, res) => {
-  const { username, password, acceptedTerms, contactInfo, planId, months } = req.body;
+  const {
+    username,
+    password,
+    acceptedTerms,
+    contactInfo,
+    planId,
+    months,
+    registrationToken,
+  } = req.body;
 
   // --- Validaciones ---
   if (
@@ -147,6 +191,13 @@ router.post("/crear-preferencia-registro", async (req, res) => {
   const cleanMail = String(contactInfo.mail).trim().toLowerCase();
   const cleanBusinessName = String(contactInfo.businessName).trim();
 
+  if (
+    registrationToken !== undefined &&
+    (typeof registrationToken !== "string" || !/^[a-f0-9]{64}$/.test(registrationToken))
+  ) {
+    return res.status(400).json({ error: "Token de registro inválido" });
+  }
+
   try {
     // Username o email ya usados
     const existing = await User.findOne({
@@ -159,70 +210,121 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       return res.status(409).json({ error: "Usuario o email ya registrado" });
     }
 
-    // Crear pending (password en plain; el pre-save de User la hashea al crear)
-    const activationToken = crypto.randomBytes(32).toString("hex");
-    const activationTokenHash = crypto
-      .createHash("sha256")
-      .update(activationToken)
-      .digest("hex");
+    const now = new Date();
+    let activationToken = registrationToken;
+    let pending = null;
 
-    const pending = new PendingRegistration({
-      username: cleanUsername,
-      password,
-      contactInfo: {
-        mail: cleanMail,
-        businessName: cleanBusinessName,
-      },
-      acceptedTerms: true,
-      planId,
-      months: monthsNum,
-      activationTokenHash,
-    });
+    // Retry de la misma pestaña: el token identifica exactamente el intento.
+    if (activationToken) {
+      pending = await PendingRegistration.findOne({
+        activationTokenHash: hashRegistrationToken(activationToken),
+        status: "pending",
+        expiresAt: { $gt: now },
+      });
+    }
 
-    await pending.save();
+    // Si cerró la pestaña, sessionStorage desaparece. Recuperamos el intento
+    // por identidad, pero solo si también conoce la misma contraseña.
+    if (!pending) {
+      const candidate = await PendingRegistration.findOne({
+        status: "pending",
+        expiresAt: { $gt: now },
+        $or: [
+          { username: cleanUsername },
+          { "contactInfo.mail": cleanMail },
+        ],
+      }).sort({ createdAt: -1 });
+
+      if (candidate) {
+        const sameIdentity =
+          candidate.username === cleanUsername &&
+          candidate.contactInfo.mail === cleanMail &&
+          sameSecret(candidate.password, password);
+
+        if (!sameIdentity) {
+          return res.status(409).json({
+            error: "Ya existe un intento de registro pendiente para ese usuario o email",
+          });
+        }
+
+        pending = candidate;
+        activationToken = crypto.randomBytes(32).toString("hex");
+        pending.activationTokenHash = hashRegistrationToken(activationToken);
+      }
+    }
+
+    if (pending) {
+      const sameIdentity =
+        pending.username === cleanUsername &&
+        pending.contactInfo.mail === cleanMail &&
+        sameSecret(pending.password, password);
+
+      if (!sameIdentity) {
+        return res.status(409).json({ error: "Los datos no coinciden con el registro pendiente" });
+      }
+    } else {
+      // Primer intento: todavía no existe un User. La contraseña queda solo en
+      // este documento temporal y el pre-save de User la hashea al aprobarse.
+      activationToken = crypto.randomBytes(32).toString("hex");
+      pending = new PendingRegistration({
+        username: cleanUsername,
+        password,
+        contactInfo: {
+          mail: cleanMail,
+          businessName: cleanBusinessName,
+        },
+        acceptedTerms: true,
+        planId,
+        months: monthsNum,
+        activationTokenHash: hashRegistrationToken(activationToken),
+      });
+
+      await pending.save();
+    }
 
     if (!pending._id) {
       throw new Error("PendingRegistration se guardó sin generar un _id");
     }
 
     const unitPrice = Math.round(plan.unit_price * MONTH_MULTIPLIERS[monthsNum]);
-
-    const preference = new Preference(client);
-    const result = await preference.create({
-      body: {
-        items: [
-          {
-            id: planId,
-            title: `${plan.title} — ${monthsNum} mes(es)`,
-            description: plan.description,
-            quantity: 1,
-            unit_price: unitPrice,
-            currency_id: "ARS",
-          },
-        ],
-
-        notification_url: process.env.MP_WEBHOOK_URL,
-
-        back_urls: {
-          success: `${process.env.FRONTEND_URL}/register/success`,
-          failure: `${process.env.FRONTEND_URL}/register/plans?payment=failure`,
-          pending: `${process.env.FRONTEND_URL}/register/plans?payment=pending`,
-        },
-        auto_return: "approved",
-        // external_reference = id del PendingRegistration
-        // el webhook lo usa para crear el User cuando el pago se aprueba
-        external_reference: pending._id.toString(),
-        metadata: {
-          plan_id: planId,
-          months: monthsNum,
-          type: "registration", // o "registration" si es registro nuevo
-        },
-      },
+    const preferenceBody = buildRegistrationPreference({
+      pendingID: pending._id,
+      plan,
+      planId,
+      months: monthsNum,
+      unitPrice,
     });
+    const preference = new Preference(client);
+    const wasReused = Boolean(pending.preferenceId);
+    const result = wasReused
+      ? await preference.update({
+          id: pending.preferenceId,
+          updatePreferenceRequest: preferenceBody,
+          requestOptions: {
+            idempotencyKey: `registration-${pending._id}-${planId}-${monthsNum}`,
+          },
+        })
+      : await preference.create({
+          body: preferenceBody,
+          requestOptions: { idempotencyKey: `registration-${pending._id}` },
+        });
+
+    const initPoint = result.init_point || pending.initPoint;
+    if (!initPoint) {
+      throw new Error("MercadoPago no devolvió una URL de checkout");
+    }
+
+    pending.planId = planId;
+    pending.months = monthsNum;
+    pending.preferenceId = result.id || pending.preferenceId;
+    pending.initPoint = initPoint;
+    pending.expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await pending.save();
 
     res.json({
-      init_point: result.init_point,
+      init_point: initPoint,
       registrationToken: activationToken,
+      reused: wasReused,
     });
   } catch (error) {
     console.error("Error creando preferencia de registro:", error);
