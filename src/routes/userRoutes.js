@@ -8,6 +8,7 @@ const {
   loginUser,
   getAuthUser,
   fetchUserWithMenu,
+  downloadMenuPdf,
   fetchOwnMenu,
   fetchStats,
   trackItemViewEndpoint,
@@ -57,6 +58,7 @@ router.patch("/active", protect, setActive);
 // Ruta pública por slug — va AL FINAL para no interceptar rutas con nombre fijo
 // Ej: GET /api/users/cafe-roma  →  devuelve el user con businessName "cafe roma"
 router.post("/:slug/menu/items/:itemID/view", trackItemViewEndpoint); // Tracking de "vista" de un producto puntual
+router.get("/:slug/menu/pdf", downloadMenuPdf); // Descarga del menú en PDF
 router.get("/:slug/menu", fetchUserWithMenu);
 router.get("/:slug", fetchUser);
 
