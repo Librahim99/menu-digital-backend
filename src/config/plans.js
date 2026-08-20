@@ -3,27 +3,25 @@
 // mapa como capa de indirección: el webhook lo usa para validar que el
 // plan_id recibido sea uno conocido antes de tocar la suscripción del user.
 const PLAN_MAP = {
-  starter: "starter",
-  pro:     "pro",
-  premium: "premium",
+  basic: "basic",
+  pro:   "pro",
 };
 
 // Orden de menor a mayor. hasMinPlan() compara por índice, así que el orden
 // de este array ES la jerarquía de planes. "free" es el piso (sin pagar).
-const PLAN_ORDER = ["free", "starter", "pro", "premium"];
+const PLAN_ORDER = ["free", "basic", "pro"];
 
 // Features que DESBLOQUEA cada nivel (acumulativo vía getFeaturesForPlan:
 // un plan tiene lo suyo + todo lo de los planes inferiores).
 const PLAN_FEATURES = {
   free:    [],
-  starter: ["menu_ilimitado", "landing_page", "carga_masiva_excel"],
-  pro:     ["estadisticas"],
-  premium: ["dominio_personalizado"],
+  basic:   ["menu_limitado", "landing_page", "carga_masiva_excel"],
+  pro:     ["estadisticas", "dominio_personalizado"]
 };
 
 // Tope de productos del plan gratuito (coincide con lo que promete la
-// landing pública: "Hasta 15 productos"). A partir de "starter" (feature
-// "menu_ilimitado") no hay tope — no es un límite escalonado por plan,
+// landing pública: "Hasta 15 productos"). A partir de "basic" (feature
+// "menu_limitado") no hay tope — no es un límite escalonado por plan,
 // es binario: free vs. cualquier plan pago.
 const FREE_ITEM_LIMIT = 15;
 
@@ -32,14 +30,13 @@ const FREE_ITEM_LIMIT = 15;
 // este mapa (src/lib/plans.ts) para mostrar candados, y useTemplate lo valida
 // del lado del servidor. Cualquier id que no esté acá se considera inválido.
 //   free:    1 Clásico · 3 Natural · 5 Minimal
-//   starter: 2 Moderno · 4 Rojo · 8 Coastal · 9 Charcoal
+//   basic:   2 Moderno · 4 Rojo · 8 Coastal · 9 Charcoal
 //   pro:     10 Terracotta · 11 Lavender · 12 Forest
-//   premium: 6 Aurora · 7 Noir Gold · 13 Platinum
 const TEMPLATE_MIN_PLAN = {
   1: "free",    3: "free",    5: "free",
-  2: "starter", 4: "starter", 8: "starter", 9: "starter",
+  2: "basic", 4: "basic", 8: "basic", 9: "basic",
   10: "pro",    11: "pro",    12: "pro",
-  6: "premium", 7: "premium", 13: "premium",
+  6: "pro", 7: "pro", 13: "pro",
 };
 
 function getFeaturesForPlan(plan) {

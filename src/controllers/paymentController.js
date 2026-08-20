@@ -1,8 +1,10 @@
 const crypto = require("crypto");
 const { MercadoPagoConfig, Payment } = require("mercadopago");
 const User = require("../models/User");
+const PendingRegistration = require("../models/PendingRegistration"); 
 const { PLAN_MAP } = require("../config/plans");
 const { logCrmEvent } = require("../utils/crmEvents");
+
 
 const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
 
@@ -54,20 +56,17 @@ const verifyMpSignature = (req) => {
 const mpWebhook = async (req, res) => {
   try {
     if (!verifyMpSignature(req)) {
-      console.error("Webhook MP: firma inválida, request rechazado");
+      console.error("Webhook MP: firma inválida");
       return res.sendStatus(401);
     }
 
     const paymentId = req.query["data.id"] || req.query.id || req.body?.data?.id;
     const topic = req.query.type || req.query.topic;
 
-    // Solo nos interesan eventos de tipo "payment"; respondemos 200 al resto
-    // para que MP no reintente notificaciones que no vamos a procesar.
     if (topic !== "payment" || !paymentId) {
       return res.sendStatus(200);
     }
 
-    // Verificamos el estado REAL contra la API de MP (nunca confiar en el query string)
     const payment = new Payment(client);
     const paymentData = await payment.get({ id: paymentId });
 
@@ -75,26 +74,67 @@ const mpWebhook = async (req, res) => {
       return res.sendStatus(200);
     }
 
-    const userId  = paymentData.external_reference;
-    const planId  = paymentData.metadata?.plan_id;
+    const externalRef = paymentData.external_reference;
+    const planId = paymentData.metadata?.plan_id;
     const mappedPlan = PLAN_MAP[planId];
+    const isRegistration = paymentData.metadata?.type === "registration";
 
-    if (!userId || !mappedPlan) {
-      console.error("Webhook MP: falta external_reference o plan_id inválido", { userId, planId });
+    if (!externalRef || !mappedPlan) {
+      console.error("Webhook MP: falta external_reference o plan_id inválido", {
+        externalRef,
+        planId,
+      });
       return res.sendStatus(200);
     }
 
-    const previousUser = await User.findById(userId).select("subscription");
-    await User.findByIdAndUpdate(userId, { subscription: mappedPlan });
+    // ── Flujo REGISTRO ──
+    if (isRegistration) {
+      const pending = await PendingRegistration.findById(externalRef);
+      if (!pending) {
+        // Ya se procesó o expiró
+        return res.sendStatus(200);
+      }
+
+      // Evitar duplicados si MP reintenta el webhook
+      const alreadyExists = await User.findOne({ username: pending.username });
+      if (alreadyExists) {
+        await PendingRegistration.findByIdAndDelete(pending._id);
+        return res.sendStatus(200);
+      }
+
+      const user = await User.create({
+        username: pending.username,
+        password: pending.password, // pre-save de User la hashea
+        contactInfo: pending.contactInfo,
+        acceptedTerms: true,
+        subscription: mappedPlan,
+        // opcional: subscriptionExpiresAt
+      });
+
+      await PendingRegistration.findByIdAndDelete(pending._id);
+      await logCrmEvent(
+        user._id,
+        `Alta por pago MP — plan ${mappedPlan} × ${pending.months} mes(es)`
+      );
+
+      return res.sendStatus(200);
+    }
+
+    // ── Flujo UPGRADE (usuario ya existente) ──
+    const previousUser = await User.findById(externalRef).select("subscription");
+    await User.findByIdAndUpdate(externalRef, { subscription: mappedPlan });
 
     if (previousUser && previousUser.subscription !== mappedPlan) {
-      await logCrmEvent(userId, `Cambió de plan ${previousUser.subscription} → ${mappedPlan} (pago MercadoPago aprobado)`);
+      await logCrmEvent(
+        externalRef,
+        `Cambió de plan ${previousUser.subscription} → ${mappedPlan} (pago MercadoPago aprobado)`
+      );
     }
 
     res.sendStatus(200);
   } catch (error) {
     console.error("Error en webhook de MP:", error);
-    res.sendStatus(200); // 200 igual, para evitar reintentos infinitos de MP en errores no recuperables
+    res.sendStatus(200);
   }
 };
 
