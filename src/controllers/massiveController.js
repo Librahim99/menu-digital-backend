@@ -3,6 +3,7 @@ const ExcelJS = require("exceljs");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const { getItemLimit } = require("../config/plans");
+const { normalizeOffer } = require("../utils/offers");
 
 // ──────────────────────────────────────────────
 // Helper: normaliza SI/NO a boolean
@@ -150,8 +151,8 @@ const getTemplate = async (req, res) => {
         descripcion:      item.description || "",
         precio:           item.price ?? "",
         precio_oferta:    item.offerPrice ?? "",
-        inicio_oferta:    item.offerRange?.from ? new Date(item.offerRange.from).toLocaleDateString("es-AR") : "",
-        fin_oferta:       item.offerRange?.to   ? new Date(item.offerRange.to).toLocaleDateString("es-AR")   : "",
+        inicio_oferta:    item.offerRange?.from ? new Date(item.offerRange.from).toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" }) : "",
+        fin_oferta:       item.offerRange?.to   ? new Date(item.offerRange.to).toLocaleDateString("es-AR", { timeZone: "America/Argentina/Buenos_Aires" })   : "",
         extra:            item.isExtra    ? "SI" : "NO",
         destacado:        item.recommended ? "SI" : "NO",
         oculto:           item.hidden     ? "SI" : "NO",
@@ -210,15 +211,25 @@ const parseExcel = async (buffer) => {
 // ──────────────────────────────────────────────
 // Helper: parsea una fecha DD/MM/AAAA a Date o null
 // ──────────────────────────────────────────────
-const parseDate = (val) => {
+const parseDate = (val, endOfDay = false) => {
   if (!val) return null;
-  // ExcelJS puede devolver un Date directamente si la celda tiene formato fecha
-  if (val instanceof Date) return val;
-  const str = val.toString().trim();
-  if (!str) return null;
-  const [d, m, y] = str.split("/");
+  let d;
+  let m;
+  let y;
+  // ExcelJS representa las celdas de fecha como medianoche UTC. Tomamos sus
+  // componentes, pero aplicamos el día comercial completo en horario argentino.
+  if (val instanceof Date) {
+    d = String(val.getUTCDate());
+    m = String(val.getUTCMonth() + 1);
+    y = String(val.getUTCFullYear());
+  } else {
+    const str = val.toString().trim();
+    if (!str) return null;
+    [d, m, y] = str.split("/");
+  }
   if (!d || !m || !y) return null;
-  const date = new Date(`${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}`);
+  const time = endOfDay ? "23:59:59.999" : "00:00:00.000";
+  const date = new Date(`${y}-${m.padStart(2, "0")}-${d.padStart(2, "0")}T${time}-03:00`);
   return isNaN(date) ? null : date;
 };
 
@@ -435,15 +446,23 @@ const confirmMassive = async (req, res) => {
           continue;
         }
 
+        const price = row["precio"] !== "" ? Number(row["precio"]) : null;
+        const normalizedOffer = normalizeOffer({
+          price,
+          offerPrice: row["precio_oferta"] !== "" ? Number(row["precio_oferta"]) : null,
+          offerRange: {
+            from: parseDate(row["inicio_oferta"]),
+            to: parseDate(row["fin_oferta"], true),
+          },
+        });
+        if (normalizedOffer.error) throw new Error(normalizedOffer.error);
+
         const data = {
           title:       row["titulo"]?.toString().trim() || undefined,
           description: row["descripcion"]?.toString().trim() || "",
-          price:       row["precio"] !== "" ? Number(row["precio"]) : null,
-          offerPrice:  row["precio_oferta"] !== "" ? Number(row["precio_oferta"]) : null,
-          offerRange: {
-            from: parseDate(row["inicio_oferta"]),
-            to:   parseDate(row["fin_oferta"]),
-          },
+          price,
+          offerPrice: normalizedOffer.offerPrice,
+          offerRange: normalizedOffer.offerRange,
           isExtra:     parseBool(row["extra"]),
           recommended: parseBool(row["destacado"]),
           hidden:      parseBool(row["oculto"]),

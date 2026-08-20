@@ -14,12 +14,6 @@ function escapeHTML(str = "") {
     .replace(/'/g, "&#039;");
 }
 
-function isOfferActive(offerRange) {
-  if (!offerRange || !offerRange.from || !offerRange.to) return false;
-  const now = new Date();
-  return now >= new Date(offerRange.from) && now <= new Date(offerRange.to);
-}
-
 function formatPrice(value) {
   if (value === null || value === undefined) return "";
   return new Intl.NumberFormat("es-AR", {
@@ -30,7 +24,9 @@ function formatPrice(value) {
 }
 
 function renderPriceBlock(item) {
-  const offerActive = isOfferActive(item.offerRange) && item.offerPrice != null;
+  // userController ya filtra offerPrice cuando la oferta todavía no comenzó
+  // o ya finalizó; el template solo representa el estado público recibido.
+  const offerActive = item.offerPrice != null;
 
   if (offerActive) {
     return `

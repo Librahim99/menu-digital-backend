@@ -1,5 +1,13 @@
 const mongoose = require("mongoose");
 
+const TimeRangeSchema = new mongoose.Schema(
+  {
+    from: { type: String, required: true },
+    to: { type: String, required: true },
+  },
+  { _id: false }
+);
+
 /**
  * Item representa un producto del menú (ej: "Pizza Napolitana").
  * Pertenece a un Menu específico mediante menuID.
@@ -39,9 +47,8 @@ const ItemSchema = new mongoose.Schema(
       default: null, // Precio en oferta, si aplica
     },
 
-    // Rango de fechas en el que aplica la oferta.
-    // Ej: del lunes al viernes de la semana que viene.
-    // El front/back compara con la fecha actual para saber si mostrar el offerPrice.
+    // Rango de fecha y hora en el que aplica la oferta. Sin rango, el
+    // offerPrice es manual/permanente; la API pública resuelve la vigencia.
     offerRange: {
       from: { type: Date, default: null }, // Inicio de la oferta
       to:   { type: Date, default: null }, // Fin de la oferta
@@ -65,6 +72,19 @@ const ItemSchema = new mongoose.Schema(
     available: {
       type: Boolean,
       default: true, // Si está disponible para pedir
+    },
+
+    // Ventanas semanales de disponibilidad del producto. `available` sigue
+    // siendo el interruptor manual principal; este horario solo lo restringe.
+    availabilitySchedule: {
+      enabled: { type: Boolean, default: false },
+      mon: { type: [TimeRangeSchema], default: [] },
+      tue: { type: [TimeRangeSchema], default: [] },
+      wed: { type: [TimeRangeSchema], default: [] },
+      thu: { type: [TimeRangeSchema], default: [] },
+      fri: { type: [TimeRangeSchema], default: [] },
+      sat: { type: [TimeRangeSchema], default: [] },
+      sun: { type: [TimeRangeSchema], default: [] },
     },
 
     isExtra: {

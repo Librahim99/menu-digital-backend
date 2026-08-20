@@ -18,6 +18,8 @@ const { logCrmEvent } = require("../utils/crmEvents");
 const { buildMenuHTML } = require("../utils/menuPdfTemplate");
 const { getBrowser } = require("../utils/pdfBrowser");
 const { generateSlug } = require("../utils/slug");
+const { isScheduleAvailableAt } = require("../utils/itemAvailability");
+const { isOfferActive } = require("../utils/offers");
 
 // ──────────────────────────────────────────────
 // Helper: suma 1 a la visita de hoy del local (upsert, no bloqueante).
@@ -65,6 +67,16 @@ const getPublicItemForPlan = (item, plan) => {
   if (hasSchedule && !hasMinPlan(plan, "basic")) {
     filtered.offerPrice = null;
     filtered.offerRange = { from: null, to: null };
+  }
+  if (filtered.offerPrice != null && !isOfferActive(filtered)) {
+    filtered.offerPrice = null;
+  }
+  if (
+    filtered.available &&
+    hasMinPlan(plan, "basic") &&
+    filtered.availabilitySchedule?.enabled
+  ) {
+    filtered.available = isScheduleAvailableAt(filtered.availabilitySchedule);
   }
   return filtered;
 };
@@ -328,12 +340,14 @@ const downloadMenuPdf = async (req, res) => {
     // sin contar extras/adicionales (igual criterio que la ruta del menú PDF
     // que armamos antes, pensado para que el PDF no incluya salsas/bebidas
     // sueltas como si fueran platos del listado principal).
-    const allItems = await Item.find({
+    const allItems = (await Item.find({
       menuID: { $in: menuIDs },
       hidden: false,
       available: true,
       isExtra: false,
-    }).select("-__v");
+    }).select("-__v")).filter((item) =>
+      getPublicItemForPlan(item, effectivePlan).available
+    );
 
     const secciones  = menus.filter((m) => m.section === true);
     const categorias = menus.filter((m) => m.section === false);
@@ -350,7 +364,7 @@ const downloadMenuPdf = async (req, res) => {
             ...cat.toObject(),
             items: allItems
               .filter((item) => item.menuID.equals(cat._id))
-              .map((item) => item.toObject({ flattenMaps: true })),
+              .map((item) => getPublicItemForPlan(item, effectivePlan)),
           })),
       })),
       sinSeccion: categorias
@@ -359,7 +373,7 @@ const downloadMenuPdf = async (req, res) => {
           ...cat.toObject(),
           items: allItems
             .filter((item) => item.menuID.equals(cat._id))
-            .map((item) => item.toObject({ flattenMaps: true })),
+            .map((item) => getPublicItemForPlan(item, effectivePlan)),
         })),
     };
 
@@ -445,6 +459,8 @@ const fetchOwnMenu = async (req, res) => {
       itemLimit,
       canImportExcel: hasMinPlan(req.user.subscription, "basic"),
       canExportPdf: hasMinPlan(req.user.subscription, "basic"),
+      canScheduleItems: hasMinPlan(req.user.subscription, "basic"),
+      canScheduleOffers: hasMinPlan(req.user.subscription, "basic"),
     };
 
     res.json({ menu: menuArmado, limits });

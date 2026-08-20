@@ -47,3 +47,10 @@
   cuenta" para Basic/Pro.
 - Se verificó el frontend con `typecheck`, `lint`, build y prueba visual responsive.
 - Se publicaron los cambios en `master`: frontend `7fdf28d`; backend `761ea26`.
+- Se incorporó la programación semanal de disponibilidad por producto para Basic+:
+  varios rangos por día, soporte de horarios que cruzan medianoche y cálculo en el
+  huso de Buenos Aires. `available` continúa como interruptor manual principal y la
+  validación del plan y de los rangos se realiza en backend.
+- Se agregó la programación de ofertas por fecha y hora para Basic+, con validación
+  centralizada de precios y períodos. La carta web, el PDF y la importación Excel
+  comparten ahora el mismo criterio de vigencia y horario argentino.

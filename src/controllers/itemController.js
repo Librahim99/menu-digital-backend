@@ -2,6 +2,8 @@ const { handleError } = require("../utils/handleError");
 const Item = require("../models/Item");
 const Menu = require("../models/Menu");
 const { getItemLimit, hasMinPlan } = require("../config/plans");
+const { validateAvailabilitySchedule } = require("../utils/itemAvailability");
+const { normalizeOffer } = require("../utils/offers");
 
 // ──────────────────────────────────────────────
 // Helper: verifica que el menuID pertenezca al user autenticado.
@@ -24,7 +26,7 @@ const newItem = async (req, res) => {
   try {
     const {
       menuID, code, title, description, price, image,
-      offerPrice, offerRange, options, isExtra, recommended, apt, hidden, available
+      offerPrice, offerRange, availabilitySchedule, options, isExtra, recommended, apt, hidden, available
     } = req.body;
  
     const { error, status } = await verifyMenuOwnership(menuID, req.user._id);
@@ -45,9 +47,20 @@ const newItem = async (req, res) => {
       }
     }
 
-    const hasScheduledOffer = offerRange?.from || offerRange?.to;
-    if (hasScheduledOffer && !hasMinPlan(req.user.subscription, "basic")) {
-      return res.status(403).json({ message: "La programación de productos requiere el plan Basic." });
+    const normalizedOffer = normalizeOffer({ price, offerPrice, offerRange });
+    if (normalizedOffer.error) return res.status(400).json({ message: normalizedOffer.error });
+    if (normalizedOffer.isScheduled && !hasMinPlan(req.user.subscription, "basic")) {
+      return res.status(403).json({ message: "La programación de ofertas requiere el plan Basic." });
+    }
+
+    let normalizedAvailabilitySchedule;
+    if (availabilitySchedule !== undefined) {
+      const validation = validateAvailabilitySchedule(availabilitySchedule);
+      if (validation.error) return res.status(400).json({ message: validation.error });
+      if (validation.schedule.enabled && !hasMinPlan(req.user.subscription, "basic")) {
+        return res.status(403).json({ message: "Programar la disponibilidad requiere el plan Basic." });
+      }
+      normalizedAvailabilitySchedule = validation.schedule;
     }
 
     // Verifica que el código sea único entre los productos de ESTE usuario
@@ -57,7 +70,9 @@ const newItem = async (req, res) => {
     if (existingItem) return res.status(400).json({ message: "Código de item ya existe en este menú" });
     const item = await Item.create({
         menuID, code, title, description, price, image,
-        offerPrice, offerRange, options, isExtra, recommended, apt, hidden, available
+        offerPrice: normalizedOffer.offerPrice, offerRange: normalizedOffer.offerRange,
+        availabilitySchedule: normalizedAvailabilitySchedule,
+        options, isExtra, recommended, apt, hidden, available
       });
         res.status(201).json(item) 
   } catch (err) {
@@ -90,6 +105,7 @@ const editItem = async (req, res) => {
   "image",
   "offerPrice",
   "offerRange",
+  "availabilitySchedule",
   "options",
   "isExtra",
   "recommended",
@@ -101,9 +117,33 @@ const editItem = async (req, res) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
 
-    const hasScheduledOffer = updates.offerRange?.from || updates.offerRange?.to;
-    if (hasScheduledOffer && !hasMinPlan(req.user.subscription, "basic")) {
-      return res.status(403).json({ message: "La programación de productos requiere el plan Basic." });
+    const changesOffer = updates.offerPrice !== undefined || updates.offerRange !== undefined;
+    const changesPrice = updates.price !== undefined && (
+      updates.price == null ? item.price != null : Number(updates.price) !== Number(item.price)
+    );
+    if (changesPrice || changesOffer) {
+      const normalizedOffer = normalizeOffer({
+        price: updates.price !== undefined ? updates.price : item.price,
+        offerPrice: updates.offerPrice !== undefined ? updates.offerPrice : item.offerPrice,
+        offerRange: updates.offerRange !== undefined ? updates.offerRange : item.offerRange,
+      });
+      if (normalizedOffer.error) return res.status(400).json({ message: normalizedOffer.error });
+      if (changesOffer && normalizedOffer.isScheduled && !hasMinPlan(req.user.subscription, "basic")) {
+        return res.status(403).json({ message: "La programación de ofertas requiere el plan Basic." });
+      }
+      if (changesOffer) {
+        updates.offerPrice = normalizedOffer.offerPrice;
+        updates.offerRange = normalizedOffer.offerRange;
+      }
+    }
+
+    if (updates.availabilitySchedule !== undefined) {
+      const validation = validateAvailabilitySchedule(updates.availabilitySchedule);
+      if (validation.error) return res.status(400).json({ message: validation.error });
+      if (validation.schedule.enabled && !hasMinPlan(req.user.subscription, "basic")) {
+        return res.status(403).json({ message: "Programar la disponibilidad requiere el plan Basic." });
+      }
+      updates.availabilitySchedule = validation.schedule;
     }
 
     // Solo chequear unicidad si el código realmente cambia, y solo contra
