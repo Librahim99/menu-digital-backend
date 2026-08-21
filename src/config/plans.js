@@ -14,8 +14,8 @@ const PLAN_ORDER = ["free", "basic", "pro"];
 // Features que DESBLOQUEA cada nivel (acumulativo vía getFeaturesForPlan:
 // un plan tiene lo suyo + todo lo de los planes inferiores).
 const PLAN_FEATURES = {
-  free:    ["menu_editor", "qr", "pedido_whatsapp"],
-  basic:   ["sin_publicidad", "landing_page", "carga_masiva_excel", "programacion_productos", "menu_pdf"],
+  free:    ["menu_editor", "qr", "pedido_whatsapp", "landing_page"],
+  basic:   ["sin_publicidad", "carga_masiva_excel", "programacion_productos", "menu_pdf"],
   pro:     ["estadisticas", "dominio_personalizado", "productos_ilimitados", "resenas_integradas"]
 };
 

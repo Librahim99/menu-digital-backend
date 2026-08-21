@@ -201,6 +201,7 @@ const loginUser = async (req, res) => {
       username: user.username,
       admin: user.admin,
       subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
+      subscriptionExpiresAt: user.subscriptionExpiresAt,
       token: generateToken(user._id),
     });
   } catch (error) {
@@ -602,12 +603,6 @@ const fetchUser = async (req, res) => {
     const user = await User.findOne({ slug: slugNormalizado, active: true });
     if (!user) return res.status(404).json({ message: "Local no encontrado" });
     const effectivePlan = getEffectivePlan(user.subscription, user.subscriptionExpiresAt);
-    if (!hasMinPlan(effectivePlan, "basic")) {
-      return res.status(403).json({
-        code: "LANDING_PLAN_REQUIRED",
-        message: "La página principal del negocio requiere el plan Basic.",
-      });
-    }
 
     const userFiltered = {
       _id: user._id,

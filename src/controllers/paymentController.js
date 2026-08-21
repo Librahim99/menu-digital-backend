@@ -192,15 +192,45 @@ const mpWebhook = async (req, res) => {
     }
 
     // ── Flujo UPGRADE (usuario ya existente) ──
-    const previousUser = await User.findById(externalRef).select("subscription");
-    await User.findByIdAndUpdate(externalRef, { subscription: mappedPlan });
-
-    if (previousUser && previousUser.subscription !== mappedPlan) {
-      await logCrmEvent(
+    const rawUpgradeMonths = paymentData.metadata?.months;
+    const metadataMonths = rawUpgradeMonths === undefined
+      ? 1 // Preferencias de upgrade creadas antes de incorporar el selector.
+      : Number(rawUpgradeMonths);
+    if (![1, 3, 6, 12].includes(metadataMonths)) {
+      console.error("Webhook MP: duración de upgrade inválida", {
         externalRef,
-        `Cambió de plan ${previousUser.subscription} → ${mappedPlan} (pago MercadoPago aprobado)`
-      );
+        planId,
+        months: paymentData.metadata?.months,
+      });
+      return res.sendStatus(200);
     }
+
+    const approvedAtCandidate = new Date(paymentData.date_approved || Date.now());
+    const approvedAt = Number.isNaN(approvedAtCandidate.getTime())
+      ? new Date()
+      : approvedAtCandidate;
+    const previousUser = await User.findById(externalRef).select("subscription subscriptionExpiresAt");
+    if (!previousUser) return res.sendStatus(200);
+
+    const isRenewal = paymentData.metadata?.payment_mode === "renewal"
+      && previousUser.subscription === mappedPlan;
+    const renewalBaseCandidate = new Date(paymentData.metadata?.renewal_base || "");
+    const expiryBase = isRenewal
+      && !Number.isNaN(renewalBaseCandidate.getTime())
+      && renewalBaseCandidate > approvedAt
+      ? renewalBaseCandidate
+      : approvedAt;
+    const subscriptionExpiresAt = addCalendarMonths(expiryBase, metadataMonths);
+
+    await User.findByIdAndUpdate(externalRef, {
+      subscription: mappedPlan,
+      subscriptionExpiresAt,
+    });
+
+    await logCrmEvent(
+      externalRef,
+      `Pago MP aprobado — ${isRenewal ? `renovación ${mappedPlan}` : `plan ${previousUser.subscription} → ${mappedPlan}`} × ${metadataMonths} mes(es), vigente hasta ${subscriptionExpiresAt.toISOString()}`
+    );
 
     res.sendStatus(200);
   } catch (error) {

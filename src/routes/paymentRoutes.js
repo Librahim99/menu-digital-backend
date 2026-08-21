@@ -6,6 +6,7 @@ const { protect } = require("../middleware/auth");
 const { getRegistrationStatus, mpWebhook } = require("../controllers/paymentController");
 const PendingRegistration = require("../models/PendingRegistration");
 const User = require("../models/User");
+const { PLAN_ORDER } = require("../config/plans");
 
 // ── Inicializar cliente MP con el Access Token del .env
 const client = new MercadoPagoConfig({
@@ -20,7 +21,7 @@ const PLANES = {
   basic: {
     title: "Menú Digital — Plan Basic",
     unit_price: 39999,
-    description: "Hasta 50 productos, Excel, landing del local, programación, PDF y 5 diseños",
+    description: "Hasta 50 productos, sin publicidad, Excel, programación, PDF y 5 diseños",
   },
   pro: {
     title: "Menú Digital — Plan Pro",
@@ -80,30 +81,43 @@ const buildRegistrationPreference = ({ pendingID, plan, planId, months, unitPric
  *          requiere estar logueado: así podemos guardar quién es el
  *          que paga (external_reference) y el webhook puede después
  *          actualizarle la suscripción a esa misma cuenta.
- * Body: { planId: "basic" | "pro" }
+ * Body: { planId: "basic" | "pro", months: 1 | 3 | 6 | 12 }
  * Devuelve: { init_point: "https://..." }
  */
 router.post("/crear-preferencia", protect, async (req, res) => {
   const { planId } = req.body;
+  const months = Number(req.body.months);
 
   // Validar que el plan exista
   const plan = PLANES[planId];
   if (!plan) {
     return res.status(400).json({ error: `Plan inválido: ${planId}` });
   }
+  if (![1, 3, 6, 12].includes(months)) {
+    return res.status(400).json({ error: "Duración inválida. Opciones: 1, 3, 6 o 12 meses" });
+  }
+  if (PLAN_ORDER.indexOf(planId) < PLAN_ORDER.indexOf(req.user.subscription)) {
+    return res.status(400).json({ error: "El plan elegido no puede ser inferior al plan actual" });
+  }
 
   try {
     const preference = new Preference(client);
+    const totalPrice = Math.round(plan.unit_price * MONTH_MULTIPLIERS[months]);
+    const isRenewal = planId === req.user.subscription;
+    const currentExpiry = new Date(req.user.subscriptionExpiresAt || 0);
+    const renewalBase = isRenewal && !Number.isNaN(currentExpiry.getTime()) && currentExpiry > new Date()
+      ? currentExpiry
+      : new Date();
 
     const result = await preference.create({
       body: {
         items: [
           {
             id: planId,
-            title: plan.title,
+            title: `${plan.title} — ${months} mes(es)`,
             description: plan.description,
             quantity: 1,
-            unit_price: plan.unit_price,
+            unit_price: totalPrice,
             currency_id: "ARS",
           },
         ],
@@ -125,7 +139,10 @@ router.post("/crear-preferencia", protect, async (req, res) => {
         external_reference: req.user._id.toString(),
           metadata: {
           plan_id: planId,
+          months,
           type: "upgrade",
+          payment_mode: isRenewal ? "renewal" : "upgrade",
+          ...(isRenewal && { renewal_base: renewalBase.toISOString() }),
         },
       },
     });
