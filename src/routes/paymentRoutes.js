@@ -20,12 +20,12 @@ const client = new MercadoPagoConfig({
 const PLANES = {
   basic: {
     title: "Menú Digital — Plan Basic",
-    unit_price: 39999,
+    unit_price: 2000,
     description: "Hasta 50 productos, sin publicidad, Excel, programación, PDF y 5 diseños",
   },
   pro: {
     title: "Menú Digital — Plan Pro",
-    unit_price: 59999,
+    unit_price: 5000,
     description: "Productos ilimitados, métricas, reseñas integradas, dominio propio y 15 diseños",
   },
 };
