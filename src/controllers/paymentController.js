@@ -373,8 +373,12 @@ const applyExistingUserEntitlement = async ({
 // que le pegue al endpoint. MP manda un header "x-signature" con
 // "ts=<timestamp>,v1=<hash>", donde hash = HMAC-SHA256(manifest, secret) y
 // el secret es la "Clave secreta" que configurás en tu panel de MP
-// (Tus integraciones → la app → Webhooks). Algoritmo documentado acá:
+// (Tus integraciones → la app → Webhooks, pestaña Modo productivo).
+// Algoritmo documentado acá:
 // https://www.mercadopago.com.ar/developers/es/docs/your-integrations/notifications/webhooks#editor_2
+//
+// Loguea (a nivel error) por qué falló una validación, sin nunca loguear
+// el secret en sí, para poder diagnosticar sin adivinar.
 // ──────────────────────────────────────────────
 const verifyMpSignature = (req) => {
   const secret = process.env.MP_WEBHOOK_SECRET;
@@ -386,7 +390,15 @@ const verifyMpSignature = (req) => {
   const xSignature = req.headers["x-signature"];
   const xRequestId = req.headers["x-request-id"];
   const dataId = req.query["data.id"];
-  if (!xSignature || !xRequestId || !dataId) return false;
+  if (!xSignature || !xRequestId || !dataId) {
+    console.error("Webhook MP: faltan datos para validar firma", {
+      hasSignature: Boolean(xSignature),
+      hasRequestId: Boolean(xRequestId),
+      dataId,
+      query: req.query,
+    });
+    return false;
+  }
 
   let ts, hash;
   xSignature.split(",").forEach((part) => {
@@ -403,7 +415,18 @@ const verifyMpSignature = (req) => {
   // byte a byte midiendo cuánto tarda en responder cada intento.
   const a = Buffer.from(hash);
   const b = Buffer.from(expectedHash);
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  const matches = a.length === b.length && crypto.timingSafeEqual(a, b);
+
+  if (!matches) {
+    console.error("Webhook MP: firma no coincide", {
+      manifest,
+      hashRecibido: hash,
+      hashEsperado: expectedHash,
+      secretLength: secret.length, // comparar contra el largo real de la clave del panel — nunca loguear el secret
+    });
+  }
+
+  return matches;
 };
 
 // @desc    Consultar si el webhook ya completó un alta paga
@@ -467,6 +490,574 @@ const getRegistrationStatus = async (req, res) => {
   }
 };
 
+// ──────────────────────────────────────────────
+// Procesa un pago de Mercado Pago de punta a punta: lo trae de la API,
+// registra la transacción, valida el checkout y aplica el alta o el
+// upgrade correspondiente.
+//
+// Es idempotente — llamarla más de una vez con el mismo paymentId no
+// duplica nada, gracias a los guards de entitlementStatus en
+// PaymentTransaction — así que la puede llamar tanto el webhook
+// (mpWebhook, abajo) como un job de reconciliación quc revisa
+// registros/pagos trabados cuando el webhook nunca llegó.
+//
+// No recibe ni usa "res": si algo falla, tira la excepción y que la
+// llame quien la llame decida qué hacer con el error.
+// ──────────────────────────────────────────────
+const processPaymentEvent = async (paymentId) => {
+  const payment = new Payment(client);
+  const paymentData = await payment.get({ id: paymentId });
+
+  const externalRef = paymentData.external_reference;
+  const planId = paymentData.metadata?.plan_id;
+  const rawCheckoutID = toNullableString(paymentData.metadata?.checkout_id);
+  const checkoutID = rawCheckoutID && mongoose.isValidObjectId(rawCheckoutID)
+    ? rawCheckoutID
+    : null;
+  const mappedPlan = PLAN_MAP[planId];
+  const isRegistration = paymentData.metadata?.type === "registration";
+  const operation = getPaymentOperation(paymentData);
+  const normalizedExternalRef = toNullableString(externalRef);
+  const associatedID = mongoose.isValidObjectId(normalizedExternalRef)
+    ? normalizedExternalRef
+    : null;
+  const transactionAssociation = associatedID
+    ? operation === "registration"
+      ? { pendingRegistrationID: associatedID }
+      : operation === "upgrade" || operation === "renewal"
+        ? { userID: associatedID }
+        : {}
+    : {};
+  const paymentUpdatedAtCandidate = new Date(
+    paymentData.date_last_updated || Date.now()
+  );
+  const paymentSnapshot = {
+    paymentID: String(paymentData.id || paymentId),
+    paymentStatus: paymentData.status,
+    paymentStatusDetail: paymentData.status_detail || null,
+    paymentUpdatedAt: Number.isNaN(paymentUpdatedAtCandidate.getTime())
+      ? new Date()
+      : paymentUpdatedAtCandidate,
+  };
+
+  // Se registra antes de cualquier validación o efecto sobre el plan. Así
+  // también quedan auditados pagos pendientes, rechazados o con metadata
+  // inválida. El upsert hace que cada reintento actualice el mismo pago.
+  const paymentTransaction = await PaymentTransaction.findOneAndUpdate(
+    { paymentID: paymentSnapshot.paymentID },
+    {
+      $set: {
+        merchantOrderID: toNullableString(paymentData.order?.id),
+        externalReference: normalizedExternalRef,
+        operation,
+        planId: toNullableString(planId),
+        months: toNullableNumber(paymentData.metadata?.months),
+        amount: toNullableNumber(paymentData.transaction_amount),
+        refundedAmount: toNullableNumber(paymentData.transaction_amount_refunded),
+        currency: toNullableString(paymentData.currency_id),
+        status: toNullableString(paymentData.status),
+        statusDetail: toNullableString(paymentData.status_detail),
+        liveMode: typeof paymentData.live_mode === "boolean"
+          ? paymentData.live_mode
+          : null,
+        paymentCreatedAt: toNullableDate(paymentData.date_created),
+        paymentApprovedAt: toNullableDate(paymentData.date_approved),
+        paymentUpdatedAt: toNullableDate(paymentData.date_last_updated),
+        lastWebhookAt: new Date(),
+        ...compactTransactionFields({ checkoutID: checkoutID || undefined }),
+      },
+      $setOnInsert: transactionAssociation,
+    },
+    {
+      new: true,
+      upsert: true,
+      runValidators: true,
+      setDefaultsOnInsert: true,
+    }
+  );
+  if (!paymentTransaction) {
+    throw new Error("No se pudo persistir la transacción de pago");
+  }
+
+  const expectedLiveMode = getExpectedPaymentLiveMode();
+  if (paymentData.live_mode !== expectedLiveMode) {
+    console.error("Webhook MP: el pago no pertenece al ambiente configurado", {
+      paymentID: paymentSnapshot.paymentID,
+      expectedLiveMode,
+      receivedLiveMode: paymentData.live_mode,
+    });
+    await markPaymentNotApplied({
+      paymentID: paymentSnapshot.paymentID,
+      reason: "payment_environment_mismatch",
+      ...transactionAssociation,
+      checkoutID: checkoutID || undefined,
+    });
+    return;
+  }
+
+  // Una entrega repetida siempre refresca el estado financiero, pero un
+  // beneficio ya aplicado no vuelve a tocar User ni duplica el evento CRM.
+  if (paymentTransaction?.entitlementStatus === "applied") {
+    return;
+  }
+
+  if (paymentData.status !== "approved") {
+    if (!normalizedExternalRef || !associatedID) {
+      await markPaymentNotApplied({
+        paymentID: paymentSnapshot.paymentID,
+        reason: normalizedExternalRef
+          ? "invalid_external_reference"
+          : "missing_external_reference",
+      });
+      return;
+    }
+
+    let pendingRegistration = null;
+    if (isRegistration) {
+      // Solo actualizamos altas todavía pendientes: una notificación
+      // rechazada que llegue tarde nunca debe pisar un pago ya completado.
+      pendingRegistration = await PendingRegistration.findOneAndUpdate(
+        { _id: associatedID, status: "pending" },
+        { $set: paymentSnapshot },
+        { new: true }
+      );
+      await linkPendingRegistration(paymentSnapshot.paymentID, pendingRegistration);
+    }
+    await markPaymentNotApplied({
+      paymentID: paymentSnapshot.paymentID,
+      reason: "payment_not_approved",
+      userID: operation === "upgrade" || operation === "renewal"
+        ? associatedID || undefined
+        : undefined,
+      pendingRegistrationID: pendingRegistration?._id
+        || (isRegistration ? associatedID || undefined : undefined),
+      preferenceId: toNullableString(pendingRegistration?.preferenceId) || undefined,
+    });
+    return;
+  }
+
+  if (!normalizedExternalRef || !associatedID || !mappedPlan) {
+    console.error("Webhook MP: falta external_reference o plan_id inválido", {
+      externalRef,
+      planId,
+    });
+    await markPaymentNotApplied({
+      paymentID: paymentSnapshot.paymentID,
+      reason: !normalizedExternalRef
+        ? "missing_external_reference"
+        : !associatedID
+          ? "invalid_external_reference"
+          : "invalid_plan",
+      userID: operation === "upgrade" || operation === "renewal"
+        ? associatedID || undefined
+        : undefined,
+      pendingRegistrationID: isRegistration
+        ? associatedID || undefined
+        : undefined,
+    });
+    return;
+  }
+
+  if (operation === "unknown") {
+    await markPaymentNotApplied({
+      paymentID: paymentSnapshot.paymentID,
+      reason: "invalid_operation",
+      userID: associatedID || undefined,
+      checkoutID: checkoutID || undefined,
+    });
+    return;
+  }
+
+  let checkout = null;
+  let checkoutValidation = "legacy";
+  let checkoutValidationReason = "checkout_id_missing_legacy";
+  if (rawCheckoutID) {
+    if (!checkoutID) {
+      checkoutValidation = "failed";
+      checkoutValidationReason = "invalid_checkout_id";
+    } else {
+      checkout = await PaymentCheckout.findById(checkoutID);
+      checkoutValidationReason = validateCheckoutSnapshot({
+        checkout,
+        operation,
+        associatedID,
+        planId,
+        months: paymentData.metadata?.months,
+        amount: paymentData.transaction_amount,
+        currency: paymentData.currency_id,
+      });
+      checkoutValidation = checkoutValidationReason ? "failed" : "strict";
+    }
+  }
+
+  await PaymentTransaction.findOneAndUpdate(
+    { paymentID: paymentSnapshot.paymentID },
+    {
+      $set: {
+        checkoutValidation,
+        checkoutValidationReason,
+        ...compactTransactionFields({
+          checkoutID: checkout?._id || checkoutID || undefined,
+          preferenceId: toNullableString(checkout?.preferenceId) || undefined,
+        }),
+      },
+    },
+    { new: true, runValidators: true }
+  );
+
+  if (checkoutValidation === "failed") {
+    await markPaymentNotApplied({
+      paymentID: paymentSnapshot.paymentID,
+      reason: checkoutValidationReason,
+      userID: operation === "upgrade" || operation === "renewal"
+        ? associatedID
+        : undefined,
+      pendingRegistrationID: operation === "registration"
+        ? associatedID
+        : undefined,
+      checkoutID: checkout?._id || checkoutID || undefined,
+      preferenceId: toNullableString(checkout?.preferenceId) || undefined,
+    });
+    return;
+  }
+
+  if (checkout?._id) {
+    await PaymentCheckout.findByIdAndUpdate(checkout._id, {
+      $set: { status: "payment_received", failureReason: null },
+    });
+  }
+
+  const approvedAt = toNullableDate(paymentData.date_approved) || new Date();
+
+  // ── Flujo REGISTRO ──
+  if (isRegistration) {
+    const pending = await PendingRegistration.findById(associatedID)
+      .select("+password +passwordCiphertext +passwordIV +passwordAuthTag");
+    if (!pending) {
+      await markPaymentNotApplied({
+        paymentID: paymentSnapshot.paymentID,
+        reason: "pending_registration_not_found",
+        pendingRegistrationID: associatedID || undefined,
+      });
+      return;
+    }
+
+    const pendingAssociation = {
+      pendingRegistrationID: pending._id,
+      preferenceId: toNullableString(checkout?.preferenceId)
+        || toNullableString(pending.preferenceId)
+        || undefined,
+      checkoutID: checkout?._id || checkoutID || undefined,
+    };
+
+    if (pending.status === "failed") {
+      await markPaymentNotApplied({
+        paymentID: paymentSnapshot.paymentID,
+        reason: "registration_failed",
+        ...pendingAssociation,
+      });
+      return;
+    }
+
+    if (pending.status === "completed") {
+      if (
+        pending.paymentID
+        && String(pending.paymentID) !== paymentSnapshot.paymentID
+      ) {
+        await markPaymentNotApplied({
+          paymentID: paymentSnapshot.paymentID,
+          reason: "registration_completed_by_other_payment",
+          ...pendingAssociation,
+        });
+        return;
+      }
+
+      if (!pending.userID) {
+        await markPaymentNotApplied({
+          paymentID: paymentSnapshot.paymentID,
+          reason: "completed_registration_without_user",
+          ...pendingAssociation,
+        });
+        return;
+      }
+
+      const completedUser = await User.findById(pending.userID)
+        .select("subscription subscriptionExpiresAt");
+      if (!completedUser) {
+        await markPaymentNotApplied({
+          paymentID: paymentSnapshot.paymentID,
+          reason: "completed_registration_user_not_found",
+          ...pendingAssociation,
+        });
+        return;
+      }
+
+      const capturedCompletedMonths = Number(paymentTransaction?.appliedMonths);
+      const completedMonths = [1, 3, 6, 12].includes(capturedCompletedMonths)
+        ? capturedCompletedMonths
+        : [1, 3, 6, 12].includes(Number(pending.months))
+          ? Number(pending.months)
+          : 1;
+      const calculatedCompletedExpiry = addCalendarMonths(
+        approvedAt,
+        completedMonths
+      );
+      const completedExpiry = toNullableDate(
+        paymentTransaction?.subscriptionExpiresAtAfter
+      ) || calculatedCompletedExpiry;
+      await preparePaymentEntitlement({
+        paymentID: paymentSnapshot.paymentID,
+        subscriptionExpiresAtBefore: null,
+        subscriptionExpiresAtAfter: completedExpiry,
+        planId: mappedPlan,
+        months: completedMonths,
+        userID: completedUser._id || pending.userID,
+        ...pendingAssociation,
+      });
+      const newlyApplied = await markPaymentApplied({
+        paymentID: paymentSnapshot.paymentID,
+        userID: completedUser._id || pending.userID,
+        ...pendingAssociation,
+      });
+      if (newlyApplied) {
+        await logCrmEvent(
+          completedUser._id || pending.userID,
+          `Alta por pago MP — plan ${mappedPlan} × ${completedMonths} mes(es), vigente hasta ${completedExpiry.toISOString()}`
+        );
+      }
+      return;
+    }
+
+    const metadataMonths = Number(paymentData.metadata?.months);
+    const paidMonths = [1, 3, 6, 12].includes(metadataMonths)
+      ? metadataMonths
+      : pending.months;
+    const subscriptionExpiresAt = addCalendarMonths(approvedAt, paidMonths);
+
+    const pendingPassword = decryptPendingPassword(pending);
+
+    // Evitar duplicados si MP reintenta el webhook
+    const alreadyExists = await User.findOne({ username: pending.username })
+      .select("+password");
+    if (alreadyExists) {
+      const belongsToThisRegistration = await alreadyExists.matchPassword(
+        pendingPassword
+      );
+      if (!belongsToThisRegistration) {
+        const failedPending = await PendingRegistration.findByIdAndUpdate(
+          pending._id,
+          {
+            $set: {
+              status: "failed",
+              userID: null,
+              completedAt: null,
+              expiresAt: PendingRegistration.getTerminalExpiration(),
+              ...paymentSnapshot,
+            },
+            $unset: {
+              password: 1,
+              passwordCiphertext: 1,
+              passwordIV: 1,
+              passwordAuthTag: 1,
+            },
+          },
+          { new: true }
+        );
+        if (!failedPending) {
+          throw new Error("El registro pendiente desapareció durante la acreditación");
+        }
+        await markPaymentNotApplied({
+          paymentID: paymentSnapshot.paymentID,
+          reason: "registration_username_conflict",
+          ...pendingAssociation,
+        });
+        return;
+      }
+
+      const preparedEntitlement = await preparePaymentEntitlement({
+        paymentID: paymentSnapshot.paymentID,
+        subscriptionExpiresAtBefore:
+          alreadyExists.subscriptionExpiresAt || null,
+        subscriptionExpiresAtAfter: subscriptionExpiresAt,
+        planId: mappedPlan,
+        months: paidMonths,
+        userID: alreadyExists._id,
+        ...pendingAssociation,
+      });
+      const durableEntitlement = preparedEntitlement
+        || (paymentTransaction.subscriptionExpiresAtAfter !== undefined
+          ? paymentTransaction
+          : null);
+      const recoveredExpiry = toNullableDate(
+        durableEntitlement?.subscriptionExpiresAtAfter
+      );
+      if (!recoveredExpiry) {
+        throw new Error("No se pudo recuperar el vencimiento durable del alta");
+      }
+      const recoveredPlan = durableEntitlement?.appliedPlanId || mappedPlan;
+      const storedRecoveredMonths = Number(
+        durableEntitlement?.appliedMonths
+      );
+      const recoveredMonths = [1, 3, 6, 12].includes(storedRecoveredMonths)
+        ? storedRecoveredMonths
+        : paidMonths;
+      const reconciledEntitlement = reconcileRegistrationEntitlement({
+        currentPlan: alreadyExists.subscription,
+        currentExpiresAt: alreadyExists.subscriptionExpiresAt,
+        purchasedPlan: recoveredPlan,
+        purchasedExpiresAt: recoveredExpiry,
+      });
+      const reconciledUser = await User.findByIdAndUpdate(
+        alreadyExists._id,
+        { $set: reconciledEntitlement },
+        { new: true, runValidators: true }
+      );
+      if (!reconciledUser) {
+        throw new Error("El usuario desapareció durante la acreditación del alta");
+      }
+
+      const completedPending = await PendingRegistration.findByIdAndUpdate(
+        pending._id,
+        {
+          $set: {
+            status: "completed",
+            userID: alreadyExists._id,
+            completedAt: new Date(),
+            expiresAt: PendingRegistration.getTerminalExpiration(),
+            ...paymentSnapshot,
+          },
+          $unset: {
+            password: 1,
+            passwordCiphertext: 1,
+            passwordIV: 1,
+            passwordAuthTag: 1,
+          },
+        },
+        { new: true }
+      );
+      if (!completedPending) {
+        throw new Error("El registro pendiente desapareció durante la acreditación");
+      }
+
+      const newlyApplied = await markPaymentApplied({
+        paymentID: paymentSnapshot.paymentID,
+        userID: alreadyExists._id,
+        ...pendingAssociation,
+      });
+      if (newlyApplied) {
+        await logCrmEvent(
+          alreadyExists._id,
+          `Alta por pago MP — plan ${mappedPlan} × ${recoveredMonths} mes(es), vigente hasta ${recoveredExpiry.toISOString()}`
+        );
+      }
+      return;
+    }
+
+    const preparedEntitlement = await preparePaymentEntitlement({
+      paymentID: paymentSnapshot.paymentID,
+      subscriptionExpiresAtBefore: null,
+      subscriptionExpiresAtAfter: subscriptionExpiresAt,
+      planId: mappedPlan,
+      months: paidMonths,
+      ...pendingAssociation,
+    });
+    const entitlementExpiresAt = toNullableDate(
+      preparedEntitlement?.subscriptionExpiresAtAfter
+        || paymentTransaction?.subscriptionExpiresAtAfter
+    ) || subscriptionExpiresAt;
+    const storedMonths = Number(
+      preparedEntitlement?.appliedMonths
+        || paymentTransaction?.appliedMonths
+    );
+    const entitlementMonths = [1, 3, 6, 12].includes(storedMonths)
+      ? storedMonths
+      : paidMonths;
+
+    const user = await createUserWithUniqueSlug({
+      username: pending.username,
+      password: pendingPassword, // pre-save de User la hashea
+      contactInfo: pending.contactInfo,
+      acceptedTerms: true,
+      acceptedTermsAt: new Date(),
+      acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
+      subscription: mappedPlan,
+      subscriptionExpiresAt: entitlementExpiresAt,
+    });
+
+    const completedPending = await PendingRegistration.findByIdAndUpdate(
+      pending._id,
+      {
+        $set: {
+          status: "completed",
+          userID: user._id,
+          planId: mappedPlan,
+          months: entitlementMonths,
+          completedAt: new Date(),
+          expiresAt: PendingRegistration.getTerminalExpiration(),
+          ...paymentSnapshot,
+        },
+        $unset: {
+          password: 1,
+          passwordCiphertext: 1,
+          passwordIV: 1,
+          passwordAuthTag: 1,
+        },
+      },
+      { new: true }
+    );
+    if (!completedPending) {
+      throw new Error("El registro pendiente desapareció durante la acreditación");
+    }
+    const newlyApplied = await markPaymentApplied({
+      paymentID: paymentSnapshot.paymentID,
+      userID: user._id,
+      ...pendingAssociation,
+    });
+    if (newlyApplied) {
+      await logCrmEvent(
+        user._id,
+        `Alta por pago MP — plan ${mappedPlan} × ${entitlementMonths} mes(es), vigente hasta ${entitlementExpiresAt.toISOString()}`
+      );
+    }
+
+    return;
+  }
+
+  // ── Flujo UPGRADE (usuario ya existente) ──
+  const rawUpgradeMonths = paymentData.metadata?.months;
+  const metadataMonths = rawUpgradeMonths === undefined
+    ? 1 // Preferencias de upgrade creadas antes de incorporar el selector.
+    : Number(rawUpgradeMonths);
+  if (![1, 3, 6, 12].includes(metadataMonths)) {
+    console.error("Webhook MP: duración de upgrade inválida", {
+      externalRef,
+      planId,
+      months: paymentData.metadata?.months,
+    });
+    await markPaymentNotApplied({
+      paymentID: paymentSnapshot.paymentID,
+      reason: "invalid_months",
+      userID: associatedID || undefined,
+    });
+    return;
+  }
+
+  const entitlementResult = await applyExistingUserEntitlement({
+    paymentID: paymentSnapshot.paymentID,
+    associatedID,
+    mappedPlan,
+    months: metadataMonths,
+    approvedAt,
+    checkoutID: checkout?._id || checkoutID || undefined,
+  });
+  if (entitlementResult.appliedNow) {
+    await logCrmEvent(
+      associatedID,
+      `Pago MP aprobado — ${entitlementResult.isRenewal ? `renovación ${mappedPlan}` : `plan ${entitlementResult.previousPlan} → ${mappedPlan}`} × ${metadataMonths} mes(es), vigente hasta ${entitlementResult.subscriptionExpiresAt.toISOString()}`
+    );
+  }
+};
+
 // @desc    Recibe la notificación de MercadoPago y confirma el pago
 // @route   POST /api/payments/webhook
 // @access  Public (lo llama MercadoPago, no el frontend)
@@ -484,558 +1075,7 @@ const mpWebhook = async (req, res) => {
       return res.sendStatus(200);
     }
 
-    const payment = new Payment(client);
-    const paymentData = await payment.get({ id: paymentId });
-
-    const externalRef = paymentData.external_reference;
-    const planId = paymentData.metadata?.plan_id;
-    const rawCheckoutID = toNullableString(paymentData.metadata?.checkout_id);
-    const checkoutID = rawCheckoutID && mongoose.isValidObjectId(rawCheckoutID)
-      ? rawCheckoutID
-      : null;
-    const mappedPlan = PLAN_MAP[planId];
-    const isRegistration = paymentData.metadata?.type === "registration";
-    const operation = getPaymentOperation(paymentData);
-    const normalizedExternalRef = toNullableString(externalRef);
-    const associatedID = mongoose.isValidObjectId(normalizedExternalRef)
-      ? normalizedExternalRef
-      : null;
-    const transactionAssociation = associatedID
-      ? operation === "registration"
-        ? { pendingRegistrationID: associatedID }
-        : operation === "upgrade" || operation === "renewal"
-          ? { userID: associatedID }
-          : {}
-      : {};
-    const paymentUpdatedAtCandidate = new Date(
-      paymentData.date_last_updated || Date.now()
-    );
-    const paymentSnapshot = {
-      paymentID: String(paymentData.id || paymentId),
-      paymentStatus: paymentData.status,
-      paymentStatusDetail: paymentData.status_detail || null,
-      paymentUpdatedAt: Number.isNaN(paymentUpdatedAtCandidate.getTime())
-        ? new Date()
-        : paymentUpdatedAtCandidate,
-    };
-
-    // Se registra antes de cualquier validación o efecto sobre el plan. Así
-    // también quedan auditados pagos pendientes, rechazados o con metadata
-    // inválida. El upsert hace que cada reintento actualice el mismo pago.
-    const paymentTransaction = await PaymentTransaction.findOneAndUpdate(
-      { paymentID: paymentSnapshot.paymentID },
-      {
-        $set: {
-          merchantOrderID: toNullableString(paymentData.order?.id),
-          externalReference: normalizedExternalRef,
-          operation,
-          planId: toNullableString(planId),
-          months: toNullableNumber(paymentData.metadata?.months),
-          amount: toNullableNumber(paymentData.transaction_amount),
-          refundedAmount: toNullableNumber(paymentData.transaction_amount_refunded),
-          currency: toNullableString(paymentData.currency_id),
-          status: toNullableString(paymentData.status),
-          statusDetail: toNullableString(paymentData.status_detail),
-          liveMode: typeof paymentData.live_mode === "boolean"
-            ? paymentData.live_mode
-            : null,
-          paymentCreatedAt: toNullableDate(paymentData.date_created),
-          paymentApprovedAt: toNullableDate(paymentData.date_approved),
-          paymentUpdatedAt: toNullableDate(paymentData.date_last_updated),
-          lastWebhookAt: new Date(),
-          ...compactTransactionFields({ checkoutID: checkoutID || undefined }),
-        },
-        $setOnInsert: transactionAssociation,
-      },
-      {
-        new: true,
-        upsert: true,
-        runValidators: true,
-        setDefaultsOnInsert: true,
-      }
-    );
-    if (!paymentTransaction) {
-      throw new Error("No se pudo persistir la transacción de pago");
-    }
-
-    const expectedLiveMode = getExpectedPaymentLiveMode();
-    if (paymentData.live_mode !== expectedLiveMode) {
-      console.error("Webhook MP: el pago no pertenece al ambiente configurado", {
-        paymentID: paymentSnapshot.paymentID,
-        expectedLiveMode,
-        receivedLiveMode: paymentData.live_mode,
-      });
-      await markPaymentNotApplied({
-        paymentID: paymentSnapshot.paymentID,
-        reason: "payment_environment_mismatch",
-        ...transactionAssociation,
-        checkoutID: checkoutID || undefined,
-      });
-      return res.sendStatus(200);
-    }
-
-    // Una entrega repetida siempre refresca el estado financiero, pero un
-    // beneficio ya aplicado no vuelve a tocar User ni duplica el evento CRM.
-    if (paymentTransaction?.entitlementStatus === "applied") {
-      return res.sendStatus(200);
-    }
-
-    if (paymentData.status !== "approved") {
-      if (!normalizedExternalRef || !associatedID) {
-        await markPaymentNotApplied({
-          paymentID: paymentSnapshot.paymentID,
-          reason: normalizedExternalRef
-            ? "invalid_external_reference"
-            : "missing_external_reference",
-        });
-        return res.sendStatus(200);
-      }
-
-      let pendingRegistration = null;
-      if (isRegistration) {
-        // Solo actualizamos altas todavía pendientes: una notificación
-        // rechazada que llegue tarde nunca debe pisar un pago ya completado.
-        pendingRegistration = await PendingRegistration.findOneAndUpdate(
-          { _id: associatedID, status: "pending" },
-          { $set: paymentSnapshot },
-          { new: true }
-        );
-        await linkPendingRegistration(paymentSnapshot.paymentID, pendingRegistration);
-      }
-      await markPaymentNotApplied({
-        paymentID: paymentSnapshot.paymentID,
-        reason: "payment_not_approved",
-        userID: operation === "upgrade" || operation === "renewal"
-          ? associatedID || undefined
-          : undefined,
-        pendingRegistrationID: pendingRegistration?._id
-          || (isRegistration ? associatedID || undefined : undefined),
-        preferenceId: toNullableString(pendingRegistration?.preferenceId) || undefined,
-      });
-      return res.sendStatus(200);
-    }
-
-    if (!normalizedExternalRef || !associatedID || !mappedPlan) {
-      console.error("Webhook MP: falta external_reference o plan_id inválido", {
-        externalRef,
-        planId,
-      });
-      await markPaymentNotApplied({
-        paymentID: paymentSnapshot.paymentID,
-        reason: !normalizedExternalRef
-          ? "missing_external_reference"
-          : !associatedID
-            ? "invalid_external_reference"
-            : "invalid_plan",
-        userID: operation === "upgrade" || operation === "renewal"
-          ? associatedID || undefined
-          : undefined,
-        pendingRegistrationID: isRegistration
-          ? associatedID || undefined
-          : undefined,
-      });
-      return res.sendStatus(200);
-    }
-
-    if (operation === "unknown") {
-      await markPaymentNotApplied({
-        paymentID: paymentSnapshot.paymentID,
-        reason: "invalid_operation",
-        userID: associatedID || undefined,
-        checkoutID: checkoutID || undefined,
-      });
-      return res.sendStatus(200);
-    }
-
-    let checkout = null;
-    let checkoutValidation = "legacy";
-    let checkoutValidationReason = "checkout_id_missing_legacy";
-    if (rawCheckoutID) {
-      if (!checkoutID) {
-        checkoutValidation = "failed";
-        checkoutValidationReason = "invalid_checkout_id";
-      } else {
-        checkout = await PaymentCheckout.findById(checkoutID);
-        checkoutValidationReason = validateCheckoutSnapshot({
-          checkout,
-          operation,
-          associatedID,
-          planId,
-          months: paymentData.metadata?.months,
-          amount: paymentData.transaction_amount,
-          currency: paymentData.currency_id,
-        });
-        checkoutValidation = checkoutValidationReason ? "failed" : "strict";
-      }
-    }
-
-    await PaymentTransaction.findOneAndUpdate(
-      { paymentID: paymentSnapshot.paymentID },
-      {
-        $set: {
-          checkoutValidation,
-          checkoutValidationReason,
-          ...compactTransactionFields({
-            checkoutID: checkout?._id || checkoutID || undefined,
-            preferenceId: toNullableString(checkout?.preferenceId) || undefined,
-          }),
-        },
-      },
-      { new: true, runValidators: true }
-    );
-
-    if (checkoutValidation === "failed") {
-      await markPaymentNotApplied({
-        paymentID: paymentSnapshot.paymentID,
-        reason: checkoutValidationReason,
-        userID: operation === "upgrade" || operation === "renewal"
-          ? associatedID
-          : undefined,
-        pendingRegistrationID: operation === "registration"
-          ? associatedID
-          : undefined,
-        checkoutID: checkout?._id || checkoutID || undefined,
-        preferenceId: toNullableString(checkout?.preferenceId) || undefined,
-      });
-      return res.sendStatus(200);
-    }
-
-    if (checkout?._id) {
-      await PaymentCheckout.findByIdAndUpdate(checkout._id, {
-        $set: { status: "payment_received", failureReason: null },
-      });
-    }
-
-    const approvedAt = toNullableDate(paymentData.date_approved) || new Date();
-
-    // ── Flujo REGISTRO ──
-    if (isRegistration) {
-      const pending = await PendingRegistration.findById(associatedID)
-        .select("+password +passwordCiphertext +passwordIV +passwordAuthTag");
-      if (!pending) {
-        await markPaymentNotApplied({
-          paymentID: paymentSnapshot.paymentID,
-          reason: "pending_registration_not_found",
-          pendingRegistrationID: associatedID || undefined,
-        });
-        return res.sendStatus(200);
-      }
-
-      const pendingAssociation = {
-        pendingRegistrationID: pending._id,
-        preferenceId: toNullableString(checkout?.preferenceId)
-          || toNullableString(pending.preferenceId)
-          || undefined,
-        checkoutID: checkout?._id || checkoutID || undefined,
-      };
-
-      if (pending.status === "failed") {
-        await markPaymentNotApplied({
-          paymentID: paymentSnapshot.paymentID,
-          reason: "registration_failed",
-          ...pendingAssociation,
-        });
-        return res.sendStatus(200);
-      }
-
-      if (pending.status === "completed") {
-        if (
-          pending.paymentID
-          && String(pending.paymentID) !== paymentSnapshot.paymentID
-        ) {
-          await markPaymentNotApplied({
-            paymentID: paymentSnapshot.paymentID,
-            reason: "registration_completed_by_other_payment",
-            ...pendingAssociation,
-          });
-          return res.sendStatus(200);
-        }
-
-        if (!pending.userID) {
-          await markPaymentNotApplied({
-            paymentID: paymentSnapshot.paymentID,
-            reason: "completed_registration_without_user",
-            ...pendingAssociation,
-          });
-          return res.sendStatus(200);
-        }
-
-        const completedUser = await User.findById(pending.userID)
-          .select("subscription subscriptionExpiresAt");
-        if (!completedUser) {
-          await markPaymentNotApplied({
-            paymentID: paymentSnapshot.paymentID,
-            reason: "completed_registration_user_not_found",
-            ...pendingAssociation,
-          });
-          return res.sendStatus(200);
-        }
-
-        const capturedCompletedMonths = Number(paymentTransaction?.appliedMonths);
-        const completedMonths = [1, 3, 6, 12].includes(capturedCompletedMonths)
-          ? capturedCompletedMonths
-          : [1, 3, 6, 12].includes(Number(pending.months))
-            ? Number(pending.months)
-            : 1;
-        const calculatedCompletedExpiry = addCalendarMonths(
-          approvedAt,
-          completedMonths
-        );
-        const completedExpiry = toNullableDate(
-          paymentTransaction?.subscriptionExpiresAtAfter
-        ) || calculatedCompletedExpiry;
-        await preparePaymentEntitlement({
-          paymentID: paymentSnapshot.paymentID,
-          subscriptionExpiresAtBefore: null,
-          subscriptionExpiresAtAfter: completedExpiry,
-          planId: mappedPlan,
-          months: completedMonths,
-          userID: completedUser._id || pending.userID,
-          ...pendingAssociation,
-        });
-        const newlyApplied = await markPaymentApplied({
-          paymentID: paymentSnapshot.paymentID,
-          userID: completedUser._id || pending.userID,
-          ...pendingAssociation,
-        });
-        if (newlyApplied) {
-          await logCrmEvent(
-            completedUser._id || pending.userID,
-            `Alta por pago MP — plan ${mappedPlan} × ${completedMonths} mes(es), vigente hasta ${completedExpiry.toISOString()}`
-          );
-        }
-        return res.sendStatus(200);
-      }
-
-      const metadataMonths = Number(paymentData.metadata?.months);
-      const paidMonths = [1, 3, 6, 12].includes(metadataMonths)
-        ? metadataMonths
-        : pending.months;
-      const subscriptionExpiresAt = addCalendarMonths(approvedAt, paidMonths);
-
-      const pendingPassword = decryptPendingPassword(pending);
-
-      // Evitar duplicados si MP reintenta el webhook
-      const alreadyExists = await User.findOne({ username: pending.username })
-        .select("+password");
-      if (alreadyExists) {
-        const belongsToThisRegistration = await alreadyExists.matchPassword(
-          pendingPassword
-        );
-        if (!belongsToThisRegistration) {
-          const failedPending = await PendingRegistration.findByIdAndUpdate(
-            pending._id,
-            {
-              $set: {
-                status: "failed",
-                userID: null,
-                completedAt: null,
-                expiresAt: PendingRegistration.getTerminalExpiration(),
-                ...paymentSnapshot,
-              },
-              $unset: {
-                password: 1,
-                passwordCiphertext: 1,
-                passwordIV: 1,
-                passwordAuthTag: 1,
-              },
-            },
-            { new: true }
-          );
-          if (!failedPending) {
-            throw new Error("El registro pendiente desapareció durante la acreditación");
-          }
-          await markPaymentNotApplied({
-            paymentID: paymentSnapshot.paymentID,
-            reason: "registration_username_conflict",
-            ...pendingAssociation,
-          });
-          return res.sendStatus(200);
-        }
-
-        const preparedEntitlement = await preparePaymentEntitlement({
-          paymentID: paymentSnapshot.paymentID,
-          subscriptionExpiresAtBefore:
-            alreadyExists.subscriptionExpiresAt || null,
-          subscriptionExpiresAtAfter: subscriptionExpiresAt,
-          planId: mappedPlan,
-          months: paidMonths,
-          userID: alreadyExists._id,
-          ...pendingAssociation,
-        });
-        const durableEntitlement = preparedEntitlement
-          || (paymentTransaction.subscriptionExpiresAtAfter !== undefined
-            ? paymentTransaction
-            : null);
-        const recoveredExpiry = toNullableDate(
-          durableEntitlement?.subscriptionExpiresAtAfter
-        );
-        if (!recoveredExpiry) {
-          throw new Error("No se pudo recuperar el vencimiento durable del alta");
-        }
-        const recoveredPlan = durableEntitlement?.appliedPlanId || mappedPlan;
-        const storedRecoveredMonths = Number(
-          durableEntitlement?.appliedMonths
-        );
-        const recoveredMonths = [1, 3, 6, 12].includes(storedRecoveredMonths)
-          ? storedRecoveredMonths
-          : paidMonths;
-        const reconciledEntitlement = reconcileRegistrationEntitlement({
-          currentPlan: alreadyExists.subscription,
-          currentExpiresAt: alreadyExists.subscriptionExpiresAt,
-          purchasedPlan: recoveredPlan,
-          purchasedExpiresAt: recoveredExpiry,
-        });
-        const reconciledUser = await User.findByIdAndUpdate(
-          alreadyExists._id,
-          { $set: reconciledEntitlement },
-          { new: true, runValidators: true }
-        );
-        if (!reconciledUser) {
-          throw new Error("El usuario desapareció durante la acreditación del alta");
-        }
-
-        const completedPending = await PendingRegistration.findByIdAndUpdate(
-          pending._id,
-          {
-            $set: {
-              status: "completed",
-              userID: alreadyExists._id,
-              completedAt: new Date(),
-              expiresAt: PendingRegistration.getTerminalExpiration(),
-              ...paymentSnapshot,
-            },
-            $unset: {
-              password: 1,
-              passwordCiphertext: 1,
-              passwordIV: 1,
-              passwordAuthTag: 1,
-            },
-          },
-          { new: true }
-        );
-        if (!completedPending) {
-          throw new Error("El registro pendiente desapareció durante la acreditación");
-        }
-
-        const newlyApplied = await markPaymentApplied({
-          paymentID: paymentSnapshot.paymentID,
-          userID: alreadyExists._id,
-          ...pendingAssociation,
-        });
-        if (newlyApplied) {
-          await logCrmEvent(
-            alreadyExists._id,
-            `Alta por pago MP — plan ${mappedPlan} × ${recoveredMonths} mes(es), vigente hasta ${recoveredExpiry.toISOString()}`
-          );
-        }
-        return res.sendStatus(200);
-      }
-
-      const preparedEntitlement = await preparePaymentEntitlement({
-        paymentID: paymentSnapshot.paymentID,
-        subscriptionExpiresAtBefore: null,
-        subscriptionExpiresAtAfter: subscriptionExpiresAt,
-        planId: mappedPlan,
-        months: paidMonths,
-        ...pendingAssociation,
-      });
-      const entitlementExpiresAt = toNullableDate(
-        preparedEntitlement?.subscriptionExpiresAtAfter
-          || paymentTransaction?.subscriptionExpiresAtAfter
-      ) || subscriptionExpiresAt;
-      const storedMonths = Number(
-        preparedEntitlement?.appliedMonths
-          || paymentTransaction?.appliedMonths
-      );
-      const entitlementMonths = [1, 3, 6, 12].includes(storedMonths)
-        ? storedMonths
-        : paidMonths;
-
-      const user = await createUserWithUniqueSlug({
-        username: pending.username,
-        password: pendingPassword, // pre-save de User la hashea
-        contactInfo: pending.contactInfo,
-        acceptedTerms: true,
-        acceptedTermsAt: new Date(),
-        acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
-        subscription: mappedPlan,
-        subscriptionExpiresAt: entitlementExpiresAt,
-      });
-
-      const completedPending = await PendingRegistration.findByIdAndUpdate(
-        pending._id,
-        {
-          $set: {
-            status: "completed",
-            userID: user._id,
-            planId: mappedPlan,
-            months: entitlementMonths,
-            completedAt: new Date(),
-            expiresAt: PendingRegistration.getTerminalExpiration(),
-            ...paymentSnapshot,
-          },
-          $unset: {
-            password: 1,
-            passwordCiphertext: 1,
-            passwordIV: 1,
-            passwordAuthTag: 1,
-          },
-        },
-        { new: true }
-      );
-      if (!completedPending) {
-        throw new Error("El registro pendiente desapareció durante la acreditación");
-      }
-      const newlyApplied = await markPaymentApplied({
-        paymentID: paymentSnapshot.paymentID,
-        userID: user._id,
-        ...pendingAssociation,
-      });
-      if (newlyApplied) {
-        await logCrmEvent(
-          user._id,
-          `Alta por pago MP — plan ${mappedPlan} × ${entitlementMonths} mes(es), vigente hasta ${entitlementExpiresAt.toISOString()}`
-        );
-      }
-
-      return res.sendStatus(200);
-    }
-
-    // ── Flujo UPGRADE (usuario ya existente) ──
-    const rawUpgradeMonths = paymentData.metadata?.months;
-    const metadataMonths = rawUpgradeMonths === undefined
-      ? 1 // Preferencias de upgrade creadas antes de incorporar el selector.
-      : Number(rawUpgradeMonths);
-    if (![1, 3, 6, 12].includes(metadataMonths)) {
-      console.error("Webhook MP: duración de upgrade inválida", {
-        externalRef,
-        planId,
-        months: paymentData.metadata?.months,
-      });
-      await markPaymentNotApplied({
-        paymentID: paymentSnapshot.paymentID,
-        reason: "invalid_months",
-        userID: associatedID || undefined,
-      });
-      return res.sendStatus(200);
-    }
-
-    const entitlementResult = await applyExistingUserEntitlement({
-      paymentID: paymentSnapshot.paymentID,
-      associatedID,
-      mappedPlan,
-      months: metadataMonths,
-      approvedAt,
-      checkoutID: checkout?._id || checkoutID || undefined,
-    });
-    if (entitlementResult.appliedNow) {
-      await logCrmEvent(
-        associatedID,
-        `Pago MP aprobado — ${entitlementResult.isRenewal ? `renovación ${mappedPlan}` : `plan ${entitlementResult.previousPlan} → ${mappedPlan}`} × ${metadataMonths} mes(es), vigente hasta ${entitlementResult.subscriptionExpiresAt.toISOString()}`
-      );
-    }
-
+    await processPaymentEvent(paymentId);
     res.sendStatus(200);
   } catch (error) {
     // Un 2xx confirma a MercadoPago que la notificación se procesó. Si la
@@ -1046,4 +1086,4 @@ const mpWebhook = async (req, res) => {
   }
 };
 
-module.exports = { getRegistrationStatus, mpWebhook };
+module.exports = { getRegistrationStatus, mpWebhook, processPaymentEvent };
