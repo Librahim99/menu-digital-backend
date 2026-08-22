@@ -7,6 +7,10 @@ const { getRegistrationStatus, mpWebhook } = require("../controllers/paymentCont
 const PendingRegistration = require("../models/PendingRegistration");
 const User = require("../models/User");
 const { PLAN_ORDER } = require("../config/plans");
+const {
+  decryptPendingPassword,
+  encryptPendingPassword,
+} = require("../utils/pendingCredentials");
 
 // ── Inicializar cliente MP con el Access Token del .env
 const client = new MercadoPagoConfig({
@@ -252,7 +256,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
         activationTokenHash: hashRegistrationToken(activationToken),
         status: "pending",
         expiresAt: { $gt: now },
-      });
+      }).select("+password +passwordCiphertext +passwordIV +passwordAuthTag");
     }
 
     // Si cerró la pestaña, sessionStorage desaparece. Recuperamos el intento
@@ -265,13 +269,16 @@ router.post("/crear-preferencia-registro", async (req, res) => {
           { username: cleanUsername },
           { "contactInfo.mail": cleanMail },
         ],
-      }).sort({ createdAt: -1 });
+      })
+        .select("+password +passwordCiphertext +passwordIV +passwordAuthTag")
+        .sort({ createdAt: -1 });
 
       if (candidate) {
+        const candidatePassword = decryptPendingPassword(candidate);
         const sameIdentity =
           candidate.username === cleanUsername &&
           candidate.contactInfo.mail === cleanMail &&
-          sameSecret(candidate.password, password);
+          sameSecret(candidatePassword, password);
 
         if (!sameIdentity) {
           return res.status(409).json({
@@ -286,21 +293,23 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     }
 
     if (pending) {
+      const pendingPassword = decryptPendingPassword(pending);
       const sameIdentity =
         pending.username === cleanUsername &&
         pending.contactInfo.mail === cleanMail &&
-        sameSecret(pending.password, password);
+        sameSecret(pendingPassword, password);
 
       if (!sameIdentity) {
         return res.status(409).json({ error: "Los datos no coinciden con el registro pendiente" });
       }
     } else {
-      // Primer intento: todavía no existe un User. La contraseña queda solo en
-      // este documento temporal y el pre-save de User la hashea al aprobarse.
+      // Primer intento: todavía no existe un User. La contraseña se conserva
+      // cifrada para poder crear la cuenta cuando MercadoPago apruebe.
       activationToken = crypto.randomBytes(32).toString("hex");
+      const encryptedPassword = encryptPendingPassword(password);
       pending = new PendingRegistration({
         username: cleanUsername,
-        password,
+        ...encryptedPassword,
         contactInfo: {
           mail: cleanMail,
           businessName: cleanBusinessName,

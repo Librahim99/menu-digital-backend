@@ -17,7 +17,11 @@ const { buenosAiresDateStr } = require("../utils/dates");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { buildMenuHTML } = require("../utils/menuPdfTemplate");
 const { getBrowser } = require("../utils/pdfBrowser");
-const { generateSlug } = require("../utils/slug");
+const {
+  createUserWithUniqueSlug,
+  generateSlug,
+  updateUserWithUniqueSlug,
+} = require("../utils/slug");
 const { isScheduleAvailableAt } = require("../utils/itemAvailability");
 const { isOfferActive } = require("../utils/offers");
 
@@ -137,17 +141,13 @@ if (acceptedTerms !== true) {
 }
 
     // Crea el user; el hook pre-save hashea la password automáticamente
-    const user = await User.create({
+    const user = await createUserWithUniqueSlug({
       username,
       password,
       contactInfo,
       acceptedTerms: true,
       acceptedTermsAt: new Date(),
       acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
-      // Si ya viene businessName en el registro, generamos el slug desde el inicio.
-      // Si el nombre no deja ningún carácter válido (ej. solo símbolos/emojis),
-      // dejamos slug sin definir en vez de guardar un string vacío.
-      slug: (contactInfo?.businessName && generateSlug(contactInfo.businessName)) || undefined,
     });
 
     res.status(201).json({
@@ -679,19 +679,16 @@ const editUser = async (req, res) => {
       }
     }
 
-    // Si actualizaron el businessName, regeneramos el slug automáticamente.
-    // Si el nuevo nombre no deja ningún carácter válido, no tocamos el slug
-    // existente (mejor conservar el link viejo que dejarlo vacío).
-    if (updates.contactInfo?.businessName) {
-      const newSlug = generateSlug(updates.contactInfo.businessName);
-      if (newSlug) updates.slug = newSlug;
-    }
-
-    const user = await User.findByIdAndUpdate(
-      req.user._id,
-      { $set: updates },
-      { new: true, runValidators: true }
-    );
+    // Si hay nombre de negocio, la actualización también reintenta ante una
+    // colisión simultánea. Si el nombre no genera un slug válido, conserva el
+    // actual. Las ediciones que no incluyen contactInfo evitan ese trabajo.
+    const user = updates.contactInfo?.businessName
+      ? await updateUserWithUniqueSlug(req.user._id, updates)
+      : await User.findByIdAndUpdate(
+          req.user._id,
+          { $set: updates },
+          { new: true, runValidators: true }
+        );
 
     res.json(user);
   } catch (error) {

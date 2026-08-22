@@ -7,7 +7,8 @@ const { logCrmEvent } = require("../utils/crmEvents");
 const { addCalendarMonths } = require("../utils/dates");
 const { handleError } = require("../utils/handleError");
 const { generateAuthToken } = require("../utils/authToken");
-const { generateSlug } = require("../utils/slug");
+const { decryptPendingPassword } = require("../utils/pendingCredentials");
+const { createUserWithUniqueSlug } = require("../utils/slug");
 
 
 const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
@@ -170,7 +171,8 @@ const mpWebhook = async (req, res) => {
 
     // ── Flujo REGISTRO ──
     if (isRegistration) {
-      const pending = await PendingRegistration.findById(externalRef);
+      const pending = await PendingRegistration.findById(externalRef)
+        .select("+password +passwordCiphertext +passwordIV +passwordAuthTag");
       if (!pending) {
         // Ya se procesó o expiró
         return res.sendStatus(200);
@@ -180,12 +182,15 @@ const mpWebhook = async (req, res) => {
         return res.sendStatus(200);
       }
 
+      const pendingPassword = decryptPendingPassword(pending);
+
       // Evitar duplicados si MP reintenta el webhook
       const alreadyExists = await User.findOne({ username: pending.username })
         .select("+password");
       if (alreadyExists) {
-        const belongsToThisRegistration = pending.password &&
-          await alreadyExists.matchPassword(pending.password);
+        const belongsToThisRegistration = await alreadyExists.matchPassword(
+          pendingPassword
+        );
         await PendingRegistration.findByIdAndUpdate(pending._id, {
           $set: {
             status: belongsToThisRegistration ? "completed" : "failed",
@@ -194,7 +199,12 @@ const mpWebhook = async (req, res) => {
             expiresAt: PendingRegistration.getTerminalExpiration(),
             ...paymentSnapshot,
           },
-          $unset: { password: 1 },
+          $unset: {
+            password: 1,
+            passwordCiphertext: 1,
+            passwordIV: 1,
+            passwordAuthTag: 1,
+          },
         });
         return res.sendStatus(200);
       }
@@ -209,11 +219,10 @@ const mpWebhook = async (req, res) => {
         : pending.months;
       const subscriptionExpiresAt = addCalendarMonths(approvedAt, paidMonths);
 
-      const user = await User.create({
+      const user = await createUserWithUniqueSlug({
         username: pending.username,
-        password: pending.password, // pre-save de User la hashea
+        password: pendingPassword, // pre-save de User la hashea
         contactInfo: pending.contactInfo,
-        slug: generateSlug(pending.contactInfo.businessName) || undefined,
         acceptedTerms: true,
         acceptedTermsAt: new Date(),
         acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
@@ -231,7 +240,12 @@ const mpWebhook = async (req, res) => {
           expiresAt: PendingRegistration.getTerminalExpiration(),
           ...paymentSnapshot,
         },
-        $unset: { password: 1 },
+        $unset: {
+          password: 1,
+          passwordCiphertext: 1,
+          passwordIV: 1,
+          passwordAuthTag: 1,
+        },
       });
       await logCrmEvent(
         user._id,

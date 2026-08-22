@@ -17,7 +17,13 @@ const getTerminalExpiration = (now = Date.now()) =>
 const pendingRegistrationSchema = new mongoose.Schema(
   {
     username: { type: String, required: true, trim: true },
-    password: { type: String, required: true }, // en texto; el pre-save de User la hashea al crear
+    // `password` queda solo para procesar altas legacy creadas antes del
+    // cifrado. Los registros nuevos usan AES-256-GCM y estos campos no se
+    // seleccionan por defecto.
+    password: { type: String, default: null, select: false },
+    passwordCiphertext: { type: String, default: null, select: false },
+    passwordIV: { type: String, default: null, select: false },
+    passwordAuthTag: { type: String, default: null, select: false },
     contactInfo: {
       mail: { type: String, required: true },
       businessName: { type: String, required: true },

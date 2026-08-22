@@ -6,6 +6,7 @@ const User = require("../src/models/User");
 const PendingRegistration = require("../src/models/PendingRegistration");
 const CrmProfile = require("../src/models/CrmProfile");
 const { getRegistrationStatus, mpWebhook } = require("../src/controllers/paymentController");
+const { encryptPendingPassword } = require("../src/utils/pendingCredentials");
 
 function request() {
   return {
@@ -358,6 +359,12 @@ test("un upgrade aprobado para un usuario inexistente no crea cuentas", async (t
 });
 
 test("un alta paga crea el usuario con plan y vencimiento correctos", async (t) => {
+  const previousSecret = process.env.PENDING_REGISTRATION_SECRET;
+  process.env.PENDING_REGISTRATION_SECRET = "secret-de-prueba-con-mas-de-32-caracteres";
+  t.after(() => {
+    if (previousSecret === undefined) delete process.env.PENDING_REGISTRATION_SECRET;
+    else process.env.PENDING_REGISTRATION_SECRET = previousSecret;
+  });
   mockCommon(t, approvedPayment({
     external_reference: "pending-123",
     metadata: { plan_id: "pro", months: 12, type: "registration" },
@@ -366,13 +373,20 @@ test("un alta paga crea el usuario con plan y vencimiento correctos", async (t) 
     _id: "pending-123",
     status: "pending",
     username: "restaurante-test",
-    password: "password-seguro",
+    ...encryptPendingPassword("password-seguro"),
     contactInfo: { mail: "test@example.com", businessName: "Restaurante Test" },
     months: 12,
   };
-  t.mock.method(PendingRegistration, "findById", async () => pending);
-  t.mock.method(PendingRegistration, "findByIdAndUpdate", async () => ({}));
+  t.mock.method(PendingRegistration, "findById", () => ({
+    select: async () => pending,
+  }));
+  let pendingUpdate;
+  t.mock.method(PendingRegistration, "findByIdAndUpdate", async (id, update) => {
+    pendingUpdate = { id, update };
+    return {};
+  });
   t.mock.method(User, "findOne", () => ({ select: async () => null }));
+  t.mock.method(User, "exists", async () => null);
   let created;
   t.mock.method(User, "create", async (data) => {
     created = data;
@@ -383,6 +397,13 @@ test("un alta paga crea el usuario con plan y vencimiento correctos", async (t) 
   await mpWebhook(request(), res);
 
   assert.equal(res.statusCode, 200);
+  assert.equal(created.password, "password-seguro");
   assert.equal(created.subscription, "pro");
   assert.equal(created.subscriptionExpiresAt.toISOString(), "2027-08-21T15:00:00.000Z");
+  assert.deepEqual(pendingUpdate.update.$unset, {
+    password: 1,
+    passwordCiphertext: 1,
+    passwordIV: 1,
+    passwordAuthTag: 1,
+  });
 });
