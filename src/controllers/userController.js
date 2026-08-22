@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const { handleError } = require("../utils/handleError");
-const jwt = require("jsonwebtoken");
+const { generateAuthToken } = require("../utils/authToken");
 const User = require("../models/User");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
@@ -82,15 +82,6 @@ const getPublicItemForPlan = (item, plan) => {
 };
 
 // ──────────────────────────────────────────────
-// Helper: genera un JWT firmado con el ID del user
-// ──────────────────────────────────────────────
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
-  });
-};
-
-// ──────────────────────────────────────────────
 // Helper: valida la contraseña en el registro.
 // Solo longitud + una lista chica de las más triviales — no pedimos
 // mayúscula/número/símbolo obligatorio: esa regla de "complejidad" está
@@ -162,7 +153,7 @@ if (acceptedTerms !== true) {
     res.status(201).json({
       _id: user._id,
       username: user.username,
-      token: generateToken(user._id),
+      token: generateAuthToken(user._id),
     });
   } catch (error) {
     handleError(res, error);
@@ -202,7 +193,7 @@ const loginUser = async (req, res) => {
       admin: user.admin,
       subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
       subscriptionExpiresAt: user.subscriptionExpiresAt,
-      token: generateToken(user._id),
+      token: generateAuthToken(user._id),
     });
   } catch (error) {
     handleError(res, error);

@@ -48,7 +48,15 @@ const sameSecret = (left, right) => {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
 
-const buildRegistrationPreference = ({ pendingID, plan, planId, months, unitPrice }) => ({
+const buildRegistrationPreference = ({
+  pendingID,
+  plan,
+  planId,
+  months,
+  unitPrice,
+  checkoutStartsAt,
+  checkoutExpiresAt,
+}) => ({
   items: [
     {
       id: planId,
@@ -63,9 +71,16 @@ const buildRegistrationPreference = ({ pendingID, plan, planId, months, unitPric
   back_urls: {
     success: `${process.env.FRONTEND_URL}/register/success`,
     failure: `${process.env.FRONTEND_URL}/register/plans?payment=failure`,
-    pending: `${process.env.FRONTEND_URL}/register/plans?payment=pending`,
+    pending: `${process.env.FRONTEND_URL}/register/success?payment=pending`,
   },
   auto_return: "approved",
+  // La preferencia y los medios offline dejan de aceptar pagos al mismo
+  // tiempo. PendingRegistration conserva un margen adicional para recibir
+  // la acreditación y el webhook de pagos iniciados cerca del vencimiento.
+  expires: true,
+  expiration_date_from: checkoutStartsAt.toISOString(),
+  expiration_date_to: checkoutExpiresAt.toISOString(),
+  date_of_expiration: checkoutExpiresAt.toISOString(),
   external_reference: pendingID.toString(),
   metadata: {
     plan_id: planId,
@@ -304,12 +319,21 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     }
 
     const unitPrice = Math.round(plan.unit_price * MONTH_MULTIPLIERS[monthsNum]);
+    const checkoutStartsAt = new Date();
+    const checkoutExpiresAt = PendingRegistration.getCheckoutExpiration(
+      checkoutStartsAt.getTime()
+    );
+    const pendingExpiresAt = PendingRegistration.getPendingExpiration(
+      checkoutStartsAt.getTime()
+    );
     const preferenceBody = buildRegistrationPreference({
       pendingID: pending._id,
       plan,
       planId,
       months: monthsNum,
       unitPrice,
+      checkoutStartsAt,
+      checkoutExpiresAt,
     });
     const preference = new Preference(client);
     const wasReused = Boolean(pending.preferenceId);
@@ -335,7 +359,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     pending.months = monthsNum;
     pending.preferenceId = result.id || pending.preferenceId;
     pending.initPoint = initPoint;
-    pending.expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    pending.expiresAt = pendingExpiresAt;
     await pending.save();
 
     res.json({

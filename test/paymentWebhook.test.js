@@ -1,10 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const jwt = require("jsonwebtoken");
 const { Payment } = require("mercadopago");
 const User = require("../src/models/User");
 const PendingRegistration = require("../src/models/PendingRegistration");
 const CrmProfile = require("../src/models/CrmProfile");
-const { mpWebhook } = require("../src/controllers/paymentController");
+const { getRegistrationStatus, mpWebhook } = require("../src/controllers/paymentController");
 
 function request() {
   return {
@@ -17,8 +18,17 @@ function request() {
 function response() {
   return {
     statusCode: null,
+    body: null,
     sendStatus(code) {
       this.statusCode = code;
+      return this;
+    },
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(body) {
+      this.body = body;
       return this;
     },
   };
@@ -61,6 +71,86 @@ function mockExistingUser(t, previousUser, updates) {
     return {};
   });
 }
+
+test("el checkout de registro vence después de 7 días", () => {
+  const now = Date.parse("2026-08-21T15:00:00.000Z");
+
+  assert.equal(
+    PendingRegistration.getCheckoutExpiration(now).toISOString(),
+    "2026-08-28T15:00:00.000Z"
+  );
+});
+
+test("un registro pendiente conserva 3 días de margen tras vencer el checkout", () => {
+  const now = Date.parse("2026-08-21T15:00:00.000Z");
+
+  assert.equal(
+    PendingRegistration.getPendingExpiration(now).toISOString(),
+    "2026-08-31T15:00:00.000Z"
+  );
+});
+
+test("un registro terminado se limpia después de 24 horas", () => {
+  const now = Date.parse("2026-08-21T15:00:00.000Z");
+
+  assert.equal(
+    PendingRegistration.getTerminalExpiration(now).toISOString(),
+    "2026-08-22T15:00:00.000Z"
+  );
+});
+
+test("el estado completado entrega una sesión para el usuario creado", async (t) => {
+  const previousSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = "jwt-secret-de-prueba";
+  t.after(() => {
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+  });
+
+  t.mock.method(PendingRegistration, "findOne", () => ({
+    select: async () => ({ status: "completed", userID: "user-123" }),
+  }));
+  t.mock.method(User, "findById", () => ({
+    select: async () => ({
+      _id: "user-123",
+      username: "restaurante-test",
+      admin: false,
+      active: true,
+      slug: "restaurante-test",
+      subscription: "basic",
+      subscriptionExpiresAt: new Date("2026-09-21T15:00:00.000Z"),
+    }),
+  }));
+
+  const req = { body: { registrationToken: "a".repeat(64) } };
+  const res = response();
+  await getRegistrationStatus(req, res);
+
+  assert.equal(res.statusCode, null);
+  assert.equal(res.body.status, "completed");
+  assert.equal(res.body.auth.username, "restaurante-test");
+  assert.equal(jwt.verify(res.body.auth.token, process.env.JWT_SECRET).id, "user-123");
+});
+
+test("la consulta del alta expone el último estado guardado de MercadoPago", async (t) => {
+  t.mock.method(PendingRegistration, "findOne", () => ({
+    select: async () => ({
+      status: "pending",
+      paymentStatus: "in_process",
+      paymentStatusDetail: "pending_review_manual",
+    }),
+  }));
+
+  const req = { body: { registrationToken: "b".repeat(64) } };
+  const res = response();
+  await getRegistrationStatus(req, res);
+
+  assert.deepEqual(res.body, {
+    status: "pending",
+    paymentStatus: "in_process",
+    paymentStatusDetail: "pending_review_manual",
+  });
+});
 
 test("upgrade aprobado actualiza plan y vencimiento según los meses pagados", async (t) => {
   mockCommon(t, approvedPayment());
@@ -155,6 +245,57 @@ test("un pago pendiente no modifica la suscripción", async (t) => {
 
   assert.equal(res.statusCode, 200);
   assert.equal(updates, 0);
+});
+
+test("un pago rechazado guarda el estado de MercadoPago sin cerrar el alta", async (t) => {
+  mockCommon(t, approvedPayment({
+    id: 987654,
+    status: "rejected",
+    status_detail: "cc_rejected_other_reason",
+    date_last_updated: "2026-08-21T15:05:00.000Z",
+    external_reference: "pending-123",
+    metadata: { plan_id: "basic", months: 1, type: "registration" },
+  }));
+  let persisted;
+  t.mock.method(PendingRegistration, "findOneAndUpdate", async (filter, update) => {
+    persisted = { filter, update };
+    return {};
+  });
+
+  const res = response();
+  await mpWebhook(request(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(persisted.filter, { _id: "pending-123", status: "pending" });
+  assert.equal(persisted.update.$set.paymentID, "987654");
+  assert.equal(persisted.update.$set.paymentStatus, "rejected");
+  assert.equal(persisted.update.$set.paymentStatusDetail, "cc_rejected_other_reason");
+  assert.equal(
+    persisted.update.$set.paymentUpdatedAt.toISOString(),
+    "2026-08-21T15:05:00.000Z"
+  );
+});
+
+test("un error interno devuelve 500 para que MercadoPago reintente", async (t) => {
+  const previousSecret = process.env.MP_WEBHOOK_SECRET;
+  delete process.env.MP_WEBHOOK_SECRET;
+  t.after(() => {
+    if (previousSecret === undefined) delete process.env.MP_WEBHOOK_SECRET;
+    else process.env.MP_WEBHOOK_SECRET = previousSecret;
+  });
+  t.mock.method(console, "warn", () => {});
+  t.mock.method(console, "error", () => {});
+  t.mock.method(Payment.prototype, "get", async () => {
+    throw new Error("Falla transitoria de MercadoPago");
+  });
+
+  const res = response();
+  await mpWebhook(request(), res);
+
+  assert.equal(res.statusCode, 500);
+  assert.deepEqual(res.body, {
+    message: "Ocurrió un error interno. Intentá de nuevo.",
+  });
 });
 
 test("metadata con una duración inválida no modifica la suscripción", async (t) => {

@@ -2,10 +2,11 @@ const crypto = require("crypto");
 const { MercadoPagoConfig, Payment } = require("mercadopago");
 const User = require("../models/User");
 const PendingRegistration = require("../models/PendingRegistration"); 
-const { PLAN_MAP } = require("../config/plans");
+const { PLAN_MAP, getEffectivePlan } = require("../config/plans");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { addCalendarMonths } = require("../utils/dates");
 const { handleError } = require("../utils/handleError");
+const { generateAuthToken } = require("../utils/authToken");
 const { generateSlug } = require("../utils/slug");
 
 
@@ -71,13 +72,41 @@ const getRegistrationStatus = async (req, res) => {
       .update(registrationToken)
       .digest("hex");
     const pending = await PendingRegistration.findOne({ activationTokenHash })
-      .select("status");
+      .select("status userID paymentStatus paymentStatusDetail");
 
     if (!pending) {
       return res.status(404).json({ message: "Registro no encontrado o vencido" });
     }
 
-    res.json({ status: pending.status });
+    if (pending.status !== "completed") {
+      return res.json({
+        status: pending.status,
+        paymentStatus: pending.paymentStatus,
+        paymentStatusDetail: pending.paymentStatusDetail,
+      });
+    }
+
+    const user = await User.findById(pending.userID)
+      .select("username admin slug subscription subscriptionExpiresAt active");
+    if (!user) {
+      throw new Error("El registro figura completo pero no tiene un usuario asociado");
+    }
+    if (!user.active) {
+      return res.status(403).json({ message: "Cuenta desactivada" });
+    }
+
+    res.json({
+      status: "completed",
+      auth: {
+        _id: user._id,
+        username: user.username,
+        admin: user.admin,
+        slug: user.slug,
+        subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
+        subscriptionExpiresAt: user.subscriptionExpiresAt,
+        token: generateAuthToken(user._id),
+      },
+    });
   } catch (error) {
     handleError(res, error);
   }
@@ -103,14 +132,33 @@ const mpWebhook = async (req, res) => {
     const payment = new Payment(client);
     const paymentData = await payment.get({ id: paymentId });
 
-    if (paymentData.status !== "approved") {
-      return res.sendStatus(200);
-    }
-
     const externalRef = paymentData.external_reference;
     const planId = paymentData.metadata?.plan_id;
     const mappedPlan = PLAN_MAP[planId];
     const isRegistration = paymentData.metadata?.type === "registration";
+    const paymentUpdatedAtCandidate = new Date(
+      paymentData.date_last_updated || Date.now()
+    );
+    const paymentSnapshot = {
+      paymentID: String(paymentData.id || paymentId),
+      paymentStatus: paymentData.status,
+      paymentStatusDetail: paymentData.status_detail || null,
+      paymentUpdatedAt: Number.isNaN(paymentUpdatedAtCandidate.getTime())
+        ? new Date()
+        : paymentUpdatedAtCandidate,
+    };
+
+    if (paymentData.status !== "approved") {
+      if (isRegistration && externalRef) {
+        // Solo actualizamos altas todavía pendientes: una notificación
+        // rechazada que llegue tarde nunca debe pisar un pago ya completado.
+        await PendingRegistration.findOneAndUpdate(
+          { _id: externalRef, status: "pending" },
+          { $set: paymentSnapshot }
+        );
+      }
+      return res.sendStatus(200);
+    }
 
     if (!externalRef || !mappedPlan) {
       console.error("Webhook MP: falta external_reference o plan_id inválido", {
@@ -143,7 +191,8 @@ const mpWebhook = async (req, res) => {
             status: belongsToThisRegistration ? "completed" : "failed",
             userID: belongsToThisRegistration ? alreadyExists._id : null,
             completedAt: belongsToThisRegistration ? new Date() : null,
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+            expiresAt: PendingRegistration.getTerminalExpiration(),
+            ...paymentSnapshot,
           },
           $unset: { password: 1 },
         });
@@ -179,7 +228,8 @@ const mpWebhook = async (req, res) => {
           planId: mappedPlan,
           months: paidMonths,
           completedAt: new Date(),
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          expiresAt: PendingRegistration.getTerminalExpiration(),
+          ...paymentSnapshot,
         },
         $unset: { password: 1 },
       });
@@ -234,8 +284,11 @@ const mpWebhook = async (req, res) => {
 
     res.sendStatus(200);
   } catch (error) {
-    console.error("Error en webhook de MP:", error);
-    res.sendStatus(200);
+    // Un 2xx confirma a MercadoPago que la notificación se procesó. Si la
+    // API de MP o MongoDB fallan transitoriamente, debemos responder 500 para
+    // que MercadoPago reintente el webhook y no quede un pago aprobado sin
+    // crear/actualizar su usuario.
+    handleError(res, error);
   }
 };
 
