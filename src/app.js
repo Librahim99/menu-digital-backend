@@ -6,12 +6,16 @@ const mongoSanitize = require("express-mongo-sanitize");
 require("dotenv").config();
 
 const connectDB = require("./config/db");
+const { validateEnvironment } = require("./config/environment");
 const { handleError } = require("./utils/handleError");
 const { apiLimiter } = require("./middleware/rateLimiters");
 
 // ──────────────────────────────────────────────
-// Conexión a la base de datos
+// Validación de configuración y conexión a la base de datos
 // ──────────────────────────────────────────────
+// Fallar antes de abrir el puerto evita aceptar registros o pagos con una
+// configuración parcial, credenciales de prueba en producción o sin firma.
+validateEnvironment();
 connectDB();
 
 const app = express();

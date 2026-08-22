@@ -21,12 +21,24 @@ const PENDING_REGISTRATION_ID = "64f000000000000000000456";
 const NEW_USER_ID = "64f000000000000000000789";
 const PREFERENCE_ID = "preference-123";
 const CHECKOUT_ID = "64f000000000000000000999";
+const TEST_MP_WEBHOOK_SECRET = "webhook-secret-de-prueba";
 
 function request(paymentID = "payment-123") {
+  const xRequestId = `request-${paymentID}`;
+  const ts = "1704908010";
+  const manifest = `id:${String(paymentID).toLowerCase()};request-id:${xRequestId};ts:${ts};`;
+  const hash = crypto
+    .createHmac("sha256", TEST_MP_WEBHOOK_SECRET)
+    .update(manifest)
+    .digest("hex");
+
   return {
     query: { "data.id": paymentID, type: "payment" },
     body: {},
-    headers: {},
+    headers: {
+      "x-request-id": xRequestId,
+      "x-signature": `ts=${ts},v1=${hash}`,
+    },
   };
 }
 
@@ -130,12 +142,15 @@ function mockCommon(
   }
   let appliedFailureUsed = false;
   const previousSecret = process.env.MP_WEBHOOK_SECRET;
-  delete process.env.MP_WEBHOOK_SECRET;
+  const previousMpEnvironment = process.env.MP_ENV;
+  process.env.MP_WEBHOOK_SECRET = TEST_MP_WEBHOOK_SECRET;
+  process.env.MP_ENV = "test";
   t.after(() => {
     if (previousSecret === undefined) delete process.env.MP_WEBHOOK_SECRET;
     else process.env.MP_WEBHOOK_SECRET = previousSecret;
+    if (previousMpEnvironment === undefined) delete process.env.MP_ENV;
+    else process.env.MP_ENV = previousMpEnvironment;
   });
-  t.mock.method(console, "warn", () => {});
   t.mock.method(console, "error", () => {});
   t.mock.method(mongoose.connection, "transaction", async (work) => work(null));
   t.mock.method(Payment.prototype, "get", async ({ id }) => (
@@ -322,6 +337,32 @@ test("un registro pendiente conserva 3 días de margen tras vencer el checkout",
   );
 });
 
+test("un PendingRegistration nuevo genera un expiresAt válido por defecto", () => {
+  const beforeCreation = Date.now();
+  const pending = new PendingRegistration({
+    username: "registro-default-expiration",
+    contactInfo: {
+      mail: "registro-default@example.com",
+      businessName: "Registro Default",
+    },
+    acceptedTerms: true,
+    planId: "basic",
+    months: 1,
+    activationTokenHash: "d".repeat(64),
+  });
+  const afterCreation = Date.now();
+
+  assert.equal(pending.validateSync(), undefined);
+  assert.ok(pending.expiresAt instanceof Date);
+  assert.equal(Number.isNaN(pending.expiresAt.getTime()), false);
+  assert.ok(
+    pending.expiresAt >= PendingRegistration.getPendingExpiration(beforeCreation)
+  );
+  assert.ok(
+    pending.expiresAt <= PendingRegistration.getPendingExpiration(afterCreation)
+  );
+});
+
 test("un registro terminado se limpia después de 24 horas", () => {
   const now = Date.parse("2026-08-21T15:00:00.000Z");
 
@@ -469,6 +510,22 @@ test("upgrade aprobado actualiza plan y vencimiento según los meses pagados", a
     "2026-11-21T15:00:00.000Z"
   );
   assert.equal(paymentContext.crmUpdates.length, 1);
+});
+
+test("un pago live acredita beneficios en el ambiente productivo", async (t) => {
+  const paymentContext = mockCommon(t, approvedPayment({ live_mode: true }));
+  process.env.MP_ENV = "production";
+  const updates = [];
+  mockExistingUser(t, { subscription: "free", subscriptionExpiresAt: null }, updates);
+
+  const res = response();
+  await mpWebhook(request(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].update.subscription, "basic");
+  assert.equal(paymentContext.getTransaction().liveMode, true);
+  assert.equal(paymentContext.getTransaction().entitlementStatus, "applied");
 });
 
 test("un checkout nuevo valida asociación, plan, período, importe y moneda", async (t) => {
@@ -905,12 +962,15 @@ test("un pago rechazado guarda el estado de MercadoPago sin cerrar el alta", asy
 
 test("un error interno devuelve 500 para que MercadoPago reintente", async (t) => {
   const previousSecret = process.env.MP_WEBHOOK_SECRET;
-  delete process.env.MP_WEBHOOK_SECRET;
+  const previousMpEnvironment = process.env.MP_ENV;
+  process.env.MP_WEBHOOK_SECRET = TEST_MP_WEBHOOK_SECRET;
+  process.env.MP_ENV = "test";
   t.after(() => {
     if (previousSecret === undefined) delete process.env.MP_WEBHOOK_SECRET;
     else process.env.MP_WEBHOOK_SECRET = previousSecret;
+    if (previousMpEnvironment === undefined) delete process.env.MP_ENV;
+    else process.env.MP_ENV = previousMpEnvironment;
   });
-  t.mock.method(console, "warn", () => {});
   t.mock.method(console, "error", () => {});
   t.mock.method(Payment.prototype, "get", async () => {
     throw new Error("Falla transitoria de MercadoPago");
@@ -1007,7 +1067,30 @@ test("preferencias antiguas sin months acreditan un mes con vencimiento", async 
 
 test("una firma inválida devuelve 401 antes de consultar el pago", async (t) => {
   const previousSecret = process.env.MP_WEBHOOK_SECRET;
-  process.env.MP_WEBHOOK_SECRET = "webhook-secret";
+  process.env.MP_WEBHOOK_SECRET = TEST_MP_WEBHOOK_SECRET;
+  t.after(() => {
+    if (previousSecret === undefined) delete process.env.MP_WEBHOOK_SECRET;
+    else process.env.MP_WEBHOOK_SECRET = previousSecret;
+  });
+  t.mock.method(console, "error", () => {});
+  let paymentReads = 0;
+  t.mock.method(Payment.prototype, "get", async () => {
+    paymentReads += 1;
+    return approvedPayment();
+  });
+
+  const res = response();
+  const invalidRequest = request();
+  invalidRequest.headers["x-signature"] = "ts=1704908010,v1=firma-invalida";
+  await mpWebhook(invalidRequest, res);
+
+  assert.equal(res.statusCode, 401);
+  assert.equal(paymentReads, 0);
+});
+
+test("sin MP_WEBHOOK_SECRET el webhook falla cerrado antes de consultar el pago", async (t) => {
+  const previousSecret = process.env.MP_WEBHOOK_SECRET;
+  delete process.env.MP_WEBHOOK_SECRET;
   t.after(() => {
     if (previousSecret === undefined) delete process.env.MP_WEBHOOK_SECRET;
     else process.env.MP_WEBHOOK_SECRET = previousSecret;
@@ -1024,6 +1107,32 @@ test("una firma inválida devuelve 401 antes de consultar el pago", async (t) =>
 
   assert.equal(res.statusCode, 401);
   assert.equal(paymentReads, 0);
+});
+
+test("un pago de prueba no acredita beneficios en el ambiente productivo", async (t) => {
+  const paymentContext = mockCommon(t, approvedPayment({ live_mode: false }));
+  process.env.MP_ENV = "production";
+  let userReads = 0;
+  let userUpdates = 0;
+  t.mock.method(User, "findById", () => {
+    userReads += 1;
+    return { select: async () => null };
+  });
+  t.mock.method(User, "findByIdAndUpdate", async () => {
+    userUpdates += 1;
+  });
+
+  const res = response();
+  await mpWebhook(request(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(userReads, 0);
+  assert.equal(userUpdates, 0);
+  assert.equal(paymentContext.getTransaction().liveMode, false);
+  assert.equal(
+    paymentContext.getTransaction().entitlementReason,
+    "payment_environment_mismatch"
+  );
 });
 
 test("un upgrade aprobado para un usuario inexistente no crea cuentas", async (t) => {

@@ -6,6 +6,7 @@ const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
 const PaymentTransaction = require("../models/PaymentTransaction");
 const { PLAN_MAP, PLAN_ORDER, getEffectivePlan } = require("../config/plans");
+const { getExpectedPaymentLiveMode } = require("../config/environment");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { addCalendarMonths } = require("../utils/dates");
 const { handleError } = require("../utils/handleError");
@@ -374,16 +375,12 @@ const applyExistingUserEntitlement = async ({
 // el secret es la "Clave secreta" que configurás en tu panel de MP
 // (Tus integraciones → la app → Webhooks). Algoritmo documentado acá:
 // https://www.mercadopago.com.ar/developers/es/docs/your-integrations/notifications/webhooks#editor_2
-//
-// Si todavía no configuraste MP_WEBHOOK_SECRET en el .env, esto NO bloquea
-// el webhook (para no cortar pagos reales de un día para el otro) — pero
-// avisa por consola en cada request hasta que lo configures.
 // ──────────────────────────────────────────────
 const verifyMpSignature = (req) => {
   const secret = process.env.MP_WEBHOOK_SECRET;
   if (!secret) {
-    console.warn("⚠️  MP_WEBHOOK_SECRET no configurado — el webhook de MP no está validando firma.");
-    return true;
+    console.error("Webhook MP: MP_WEBHOOK_SECRET no configurado");
+    return false;
   }
 
   const xSignature = req.headers["x-signature"];
@@ -559,6 +556,22 @@ const mpWebhook = async (req, res) => {
     );
     if (!paymentTransaction) {
       throw new Error("No se pudo persistir la transacción de pago");
+    }
+
+    const expectedLiveMode = getExpectedPaymentLiveMode();
+    if (paymentData.live_mode !== expectedLiveMode) {
+      console.error("Webhook MP: el pago no pertenece al ambiente configurado", {
+        paymentID: paymentSnapshot.paymentID,
+        expectedLiveMode,
+        receivedLiveMode: paymentData.live_mode,
+      });
+      await markPaymentNotApplied({
+        paymentID: paymentSnapshot.paymentID,
+        reason: "payment_environment_mismatch",
+        ...transactionAssociation,
+        checkoutID: checkoutID || undefined,
+      });
+      return res.sendStatus(200);
     }
 
     // Una entrega repetida siempre refresca el estado financiero, pero un

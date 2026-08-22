@@ -60,11 +60,7 @@ const pendingRegistrationSchema = new mongoose.Schema(
     completedAt: { type: Date, default: null },
     expiresAt: {
       type: Date,
-      // El checkout vence a los 7 días. Conservamos el alta 3 días más
-      // para que un pago iniciado cerca del vencimiento tenga margen de
-      // acreditación; al completarse o fallar, el webhook acorta este plazo
-      // a 24 horas.
-      default: getPendingExpiration,
+      default: () => getPendingExpiration(),
       index: { expires: 0 }, // TTL de Mongo: borra el doc cuando llega la fecha
     },
   },
