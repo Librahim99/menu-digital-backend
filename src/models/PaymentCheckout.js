@@ -49,9 +49,22 @@ const paymentCheckoutSchema = new mongoose.Schema(
     },
     sourcePlan: {
       type: String,
-      enum: ["free", "basic", "pro"],
+      // null incluido a propósito: en altas nuevas (operation "registration")
+      // todavía no hay un plan anterior. Solo upgrade/renewal completan este
+      // campo con el plan vigente del usuario. El validador de abajo hace
+      // que esa relación sea obligatoria, no solo una convención.
+      enum: ["free", "basic", "pro", null],
       default: null,
       immutable: true,
+      validate: {
+        validator: function (value) {
+          return this.operation === "registration"
+            ? value === null
+            : value !== null;
+        },
+        message:
+          "sourcePlan debe ser null en altas nuevas (registration) y un plan real en upgrade/renewal",
+      },
     },
     sourceExpiresAt: { type: Date, default: null, immutable: true },
     status: {

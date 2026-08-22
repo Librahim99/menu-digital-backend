@@ -258,8 +258,19 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     return res.status(400).json({ error: "Token de registro inválido" });
   }
 
+  const paymentDebugID = crypto.randomUUID();
+  let paymentDebugStage = "request_validated";
+  console.log("[MP registro] solicitud validada", {
+    paymentDebugID,
+    planId,
+    months: monthsNum,
+    acceptedTermsIsTrue: acceptedTerms === true,
+    hasRegistrationToken: Boolean(registrationToken),
+  });
+
   try {
     // Username o email ya usados
+    paymentDebugStage = "checking_existing_user";
     const existing = await User.findOne({
       $or: [
         { username: cleanUsername },
@@ -276,6 +287,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
 
     // Retry de la misma pestaña: el token identifica exactamente el intento.
     if (activationToken) {
+      paymentDebugStage = "finding_pending_by_token";
       pending = await PendingRegistration.findOne({
         activationTokenHash: hashRegistrationToken(activationToken),
         status: "pending",
@@ -286,6 +298,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     // Si cerró la pestaña, sessionStorage desaparece. Recuperamos el intento
     // por identidad, pero solo si también conoce la misma contraseña.
     if (!pending) {
+      paymentDebugStage = "finding_pending_by_identity";
       const candidate = await PendingRegistration.findOne({
         status: "pending",
         expiresAt: { $gt: now },
@@ -344,6 +357,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
         activationTokenHash: hashRegistrationToken(activationToken),
       });
 
+      paymentDebugStage = "saving_new_pending";
       await pending.save();
     }
 
@@ -351,6 +365,16 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       throw new Error("PendingRegistration se guardó sin generar un _id");
     }
 
+    console.log("[MP registro] registro pendiente listo", {
+      paymentDebugID,
+      pendingRegistrationID: String(pending._id),
+      status: pending.status,
+      hasCheckoutID: Boolean(pending.checkoutID),
+      hasPreferenceID: Boolean(pending.preferenceId),
+      hasInitPoint: Boolean(pending.initPoint),
+    });
+
+    paymentDebugStage = "preparing_checkout";
     const unitPrice = getCheckoutAmount(planId, monthsNum);
     const checkoutStartsAt = new Date();
     const checkoutExpiresAt = PendingRegistration.getCheckoutExpiration(
@@ -359,6 +383,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     const pendingExpiresAt = PendingRegistration.getPendingExpiration(
       checkoutStartsAt.getTime()
     );
+    paymentDebugStage = "loading_previous_checkout";
     const previousCheckout = pending.checkoutID
       ? await PaymentCheckout.findById(pending.checkoutID)
       : null;
@@ -372,6 +397,21 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       && pending.preferenceId
       && pending.initPoint
     );
+    paymentDebugStage = "persisting_checkout";
+    console.log("[MP registro] checkout antes de persistir", {
+      paymentDebugID,
+      pendingRegistrationID: String(pending._id),
+      hasPreviousCheckout: Boolean(previousCheckout),
+      canReuseCheckout,
+      operation: "registration",
+      planId,
+      months: monthsNum,
+      expectedAmount: unitPrice,
+      currency: PAYMENT_CURRENCY,
+      sourcePlanProvided: false,
+      sourcePlanSchemaDefault:
+        PaymentCheckout.schema.path("sourcePlan")?.defaultValue,
+    });
     const checkout = canReuseCheckout
       ? previousCheckout
       : await PaymentCheckout.create({
@@ -382,7 +422,15 @@ router.post("/crear-preferencia-registro", async (req, res) => {
           expectedAmount: unitPrice,
           currency: PAYMENT_CURRENCY,
         });
+    console.log("[MP registro] checkout listo", {
+      paymentDebugID,
+      checkoutID: String(checkout._id),
+      status: checkout.status,
+      reused: canReuseCheckout,
+      sourcePlan: checkout.sourcePlan,
+    });
     if (!canReuseCheckout && previousCheckout?._id) {
+      paymentDebugStage = "superseding_previous_checkout";
       await PaymentCheckout.findByIdAndUpdate(previousCheckout._id, {
         $set: { status: "superseded" },
       });
@@ -402,6 +450,16 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     const wasReused = canReuseCheckout;
     let result;
     try {
+      paymentDebugStage = wasReused
+        ? "updating_mercadopago_preference"
+        : "creating_mercadopago_preference";
+      console.log("[MP registro] llamada a MercadoPago", {
+        paymentDebugID,
+        checkoutID: String(checkout._id),
+        action: wasReused ? "update" : "create",
+        hasWebhookUrl: Boolean(process.env.MP_WEBHOOK_URL),
+        hasFrontendUrl: Boolean(process.env.FRONTEND_URL),
+      });
       result = wasReused
         ? await preference.update({
             id: pending.preferenceId,
@@ -414,8 +472,25 @@ router.post("/crear-preferencia-registro", async (req, res) => {
             body: preferenceBody,
             requestOptions: { idempotencyKey: `registration-${checkout._id}` },
           });
+      console.log("[MP registro] respuesta de MercadoPago", {
+        paymentDebugID,
+        checkoutID: String(checkout._id),
+        hasResponsePreferenceID: Boolean(result?.id),
+        hasResponseInitPoint: Boolean(result?.init_point),
+        hasStoredPreferenceID: Boolean(pending.preferenceId),
+        hasStoredInitPoint: Boolean(pending.initPoint),
+        responsePreferenceMatchesStored: Boolean(
+          result?.id && pending.preferenceId && result.id === pending.preferenceId
+        ),
+        responseInitPointMatchesStored: Boolean(
+          result?.init_point
+          && pending.initPoint
+          && result.init_point === pending.initPoint
+        ),
+      });
     } catch (error) {
       if (!wasReused) {
+        paymentDebugStage = "marking_checkout_failed";
         await PaymentCheckout.findByIdAndUpdate(checkout._id, {
           $set: { status: "failed", failureReason: error.message },
         });
@@ -434,8 +509,17 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     pending.initPoint = initPoint;
     pending.checkoutID = checkout._id;
     pending.expiresAt = pendingExpiresAt;
+    paymentDebugStage = "saving_pending_checkout";
     await pending.save();
+    console.log("[MP registro] registro pendiente actualizado", {
+      paymentDebugID,
+      pendingRegistrationID: String(pending._id),
+      checkoutID: String(checkout._id),
+      hasPreferenceID: Boolean(pending.preferenceId),
+      hasInitPoint: Boolean(pending.initPoint),
+    });
 
+    paymentDebugStage = "marking_checkout_ready";
     const readyCheckout = await PaymentCheckout.findByIdAndUpdate(
       checkout._id,
       {
@@ -452,12 +536,36 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       throw new Error("El checkout desapareció después de crear la preferencia");
     }
 
+    console.log("[MP registro] preferencia preparada", {
+      paymentDebugID,
+      pendingRegistrationID: String(pending._id),
+      checkoutID: String(readyCheckout._id),
+      checkoutStatus: readyCheckout.status,
+    });
+
+    paymentDebugStage = "completed";
     res.json({
       init_point: initPoint,
       registrationToken: activationToken,
       reused: wasReused,
     });
   } catch (error) {
+    console.error("[MP registro] diagnóstico estructurado", {
+      paymentDebugID,
+      stage: paymentDebugStage,
+      name: error?.name,
+      message: error?.message,
+      planId,
+      months: monthsNum,
+      hasRegistrationToken: Boolean(registrationToken),
+      validationErrors: Object.entries(error?.errors || {}).map(
+        ([path, detail]) => ({
+          path,
+          kind: detail?.kind,
+          isNull: detail?.value === null,
+        })
+      ),
+    });
     console.error("Error creando preferencia de registro:", error);
     res.status(500).json({ error: "No se pudo crear la preferencia de pago" });
   }
