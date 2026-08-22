@@ -1064,13 +1064,17 @@ const processPaymentEvent = async (paymentId) => {
 const mpWebhook = async (req, res) => {
   try {
     const topic = req.query.type || req.query.topic;
-if (topic !== "payment") {
-  return res.sendStatus(200);
-}
-if (!verifyMpSignature(req)) {
-  console.error("Webhook MP: firma inválida");
-  return res.sendStatus(401);
-}
+
+    // merchant_order no trae "data.id" y MP no lo firma con ese esquema,
+    // así que ni intentamos validar firma para ese topic.
+    if (topic !== "payment") {
+      return res.sendStatus(200);
+    }
+
+    if (!verifyMpSignature(req)) {
+      console.error("Webhook MP: firma inválida");
+      return res.sendStatus(401);
+    }
 
     const paymentId = req.query["data.id"] || req.query.id || req.body?.data?.id;
     if (!paymentId) {
