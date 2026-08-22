@@ -389,7 +389,7 @@ const verifyMpSignature = (req) => {
 
   const xSignature = req.headers["x-signature"];
   const xRequestId = req.headers["x-request-id"];
-  const dataId = req.query["data.id"];
+  const dataId = req.query["data.id"] || req.query.id;
   if (!xSignature || !xRequestId || !dataId) {
     console.error("Webhook MP: faltan datos para validar firma", {
       hasSignature: Boolean(xSignature),
@@ -1064,17 +1064,13 @@ const processPaymentEvent = async (paymentId) => {
 const mpWebhook = async (req, res) => {
   try {
     const topic = req.query.type || req.query.topic;
-
-    // merchant_order no trae "data.id" y MP no lo firma con ese esquema,
-    // así que ni intentamos validar firma para ese topic.
-    if (topic !== "payment") {
-      return res.sendStatus(200);
-    }
-
-    if (!verifyMpSignature(req)) {
-      console.error("Webhook MP: firma inválida");
-      return res.sendStatus(401);
-    }
+if (topic !== "payment") {
+  return res.sendStatus(200);
+}
+if (!verifyMpSignature(req)) {
+  console.error("Webhook MP: firma inválida");
+  return res.sendStatus(401);
+}
 
     const paymentId = req.query["data.id"] || req.query.id || req.body?.data?.id;
     if (!paymentId) {
