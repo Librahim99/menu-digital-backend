@@ -5,8 +5,15 @@ const { MercadoPagoConfig, Preference } = require("mercadopago");
 const { protect } = require("../middleware/auth");
 const { getRegistrationStatus, mpWebhook } = require("../controllers/paymentController");
 const PendingRegistration = require("../models/PendingRegistration");
+const PaymentCheckout = require("../models/PaymentCheckout");
 const User = require("../models/User");
 const { PLAN_ORDER } = require("../config/plans");
+const {
+  PAYMENT_CURRENCY,
+  PAYMENT_PLANS,
+  VALID_PAYMENT_MONTHS,
+  getCheckoutAmount,
+} = require("../config/paymentPlans");
 const {
   decryptPendingPassword,
   encryptPendingPassword,
@@ -16,31 +23,6 @@ const {
 const client = new MercadoPagoConfig({
   accessToken: process.env.MP_ACCESS_TOKEN,
 });
-
-// ── Mapeo de planes pagos: id → datos de cobro para MercadoPago.
-// El id (basic/pro) es el mismo que después viaja en
-// metadata.plan_id y que el webhook mapea a User.subscription (ver
-// PLAN_MAP en config/plans.js). "free" no está acá: no se paga.
-const PLANES = {
-  basic: {
-    title: "Menú Digital — Plan Basic",
-    unit_price: 2000,
-    description: "Hasta 50 productos, sin publicidad, Excel, programación, PDF y 5 diseños",
-  },
-  pro: {
-    title: "Menú Digital — Plan Pro",
-    unit_price: 5000,
-    description: "Productos ilimitados, métricas, reseñas integradas, dominio propio y 15 diseños",
-  },
-};
-
-// Multiplicadores por duración (descuento por pagar más meses)
-const MONTH_MULTIPLIERS = {
-  1: 1,
-  3: 2.7,  // ~10% off
-  6: 5,    // ~17% off
-  12: 9,   // 25% off
-};
 
 const hashRegistrationToken = (token) =>
   crypto.createHash("sha256").update(token).digest("hex");
@@ -54,6 +36,7 @@ const sameSecret = (left, right) => {
 
 const buildRegistrationPreference = ({
   pendingID,
+  checkoutID,
   plan,
   planId,
   months,
@@ -68,7 +51,7 @@ const buildRegistrationPreference = ({
       description: plan.description,
       quantity: 1,
       unit_price: unitPrice,
-      currency_id: "ARS",
+      currency_id: PAYMENT_CURRENCY,
     },
   ],
   notification_url: process.env.MP_WEBHOOK_URL,
@@ -90,6 +73,7 @@ const buildRegistrationPreference = ({
     plan_id: planId,
     months,
     type: "registration",
+    checkout_id: checkoutID.toString(),
   },
 });
 
@@ -108,25 +92,36 @@ router.post("/crear-preferencia", protect, async (req, res) => {
   const months = Number(req.body.months);
 
   // Validar que el plan exista
-  const plan = PLANES[planId];
+  const plan = PAYMENT_PLANS[planId];
   if (!plan) {
     return res.status(400).json({ error: `Plan inválido: ${planId}` });
   }
-  if (![1, 3, 6, 12].includes(months)) {
+  if (!VALID_PAYMENT_MONTHS.includes(months)) {
     return res.status(400).json({ error: "Duración inválida. Opciones: 1, 3, 6 o 12 meses" });
   }
   if (PLAN_ORDER.indexOf(planId) < PLAN_ORDER.indexOf(req.user.subscription)) {
     return res.status(400).json({ error: "El plan elegido no puede ser inferior al plan actual" });
   }
 
+  let checkout = null;
   try {
     const preference = new Preference(client);
-    const totalPrice = Math.round(plan.unit_price * MONTH_MULTIPLIERS[months]);
+    const totalPrice = getCheckoutAmount(planId, months);
     const isRenewal = planId === req.user.subscription;
     const currentExpiry = new Date(req.user.subscriptionExpiresAt || 0);
     const renewalBase = isRenewal && !Number.isNaN(currentExpiry.getTime()) && currentExpiry > new Date()
       ? currentExpiry
       : new Date();
+    checkout = await PaymentCheckout.create({
+      operation: isRenewal ? "renewal" : "upgrade",
+      userID: req.user._id,
+      planId,
+      months,
+      expectedAmount: totalPrice,
+      currency: PAYMENT_CURRENCY,
+      sourcePlan: req.user.subscription,
+      sourceExpiresAt: req.user.subscriptionExpiresAt || null,
+    });
 
     const result = await preference.create({
       body: {
@@ -137,7 +132,7 @@ router.post("/crear-preferencia", protect, async (req, res) => {
             description: plan.description,
             quantity: 1,
             unit_price: totalPrice,
-            currency_id: "ARS",
+            currency_id: PAYMENT_CURRENCY,
           },
         ],
         // Vuelve al panel (no a /register: el usuario ya tiene cuenta).
@@ -146,7 +141,7 @@ router.post("/crear-preferencia", protect, async (req, res) => {
         // el webhook, no este redirect.
 
         notification_url: process.env.MP_WEBHOOK_URL,
-        
+
         back_urls: {
           success: `${process.env.FRONTEND_URL}/dashboard?payment=success`,
           failure: `${process.env.FRONTEND_URL}/dashboard?payment=failure`,
@@ -156,19 +151,48 @@ router.post("/crear-preferencia", protect, async (req, res) => {
         // Identifica quién paga — lo lee mpWebhook para saber a qué
         // cuenta actualizarle la suscripción cuando MP confirme el pago.
         external_reference: req.user._id.toString(),
-          metadata: {
+        metadata: {
           plan_id: planId,
           months,
           type: "upgrade",
           payment_mode: isRenewal ? "renewal" : "upgrade",
+          checkout_id: checkout._id.toString(),
           ...(isRenewal && { renewal_base: renewalBase.toISOString() }),
         },
       },
     });
+    if (!result.init_point) {
+      throw new Error("MercadoPago no devolvió una URL de checkout");
+    }
+
+    const readyCheckout = await PaymentCheckout.findByIdAndUpdate(
+      checkout._id,
+      {
+        $set: {
+          preferenceId: result.id,
+          initPoint: result.init_point,
+          status: "ready",
+          failureReason: null,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+    if (!readyCheckout) {
+      throw new Error("El checkout desapareció después de crear la preferencia");
+    }
 
     // Devolver la URL de pago al frontend
     res.json({ init_point: result.init_point });
   } catch (error) {
+    if (checkout?._id) {
+      try {
+        await PaymentCheckout.findByIdAndUpdate(checkout._id, {
+          $set: { status: "failed", failureReason: error.message },
+        });
+      } catch (checkoutError) {
+        console.error("Error marcando checkout fallido:", checkoutError);
+      }
+    }
     console.error("Error creando preferencia MP:", error);
     res.status(500).json({ error: "No se pudo crear la preferencia de pago" });
   }
@@ -213,13 +237,13 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     return res.status(400).json({ error: "La contraseña debe tener al menos 8 caracteres" });
   }
 
-  const plan = PLANES[planId];
+  const plan = PAYMENT_PLANS[planId];
   if (!plan) {
     return res.status(400).json({ error: `Plan inválido: ${planId}` });
   }
 
   const monthsNum = Number(months);
-  if (![1, 3, 6, 12].includes(monthsNum)) {
+  if (!VALID_PAYMENT_MONTHS.includes(monthsNum)) {
     return res.status(400).json({ error: "Duración inválida. Opciones: 1, 3, 6 o 12 meses" });
   }
 
@@ -327,7 +351,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       throw new Error("PendingRegistration se guardó sin generar un _id");
     }
 
-    const unitPrice = Math.round(plan.unit_price * MONTH_MULTIPLIERS[monthsNum]);
+    const unitPrice = getCheckoutAmount(planId, monthsNum);
     const checkoutStartsAt = new Date();
     const checkoutExpiresAt = PendingRegistration.getCheckoutExpiration(
       checkoutStartsAt.getTime()
@@ -335,8 +359,38 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     const pendingExpiresAt = PendingRegistration.getPendingExpiration(
       checkoutStartsAt.getTime()
     );
+    const previousCheckout = pending.checkoutID
+      ? await PaymentCheckout.findById(pending.checkoutID)
+      : null;
+    const canReuseCheckout = Boolean(
+      previousCheckout
+      && previousCheckout.status === "ready"
+      && previousCheckout.planId === planId
+      && previousCheckout.months === monthsNum
+      && previousCheckout.expectedAmount === unitPrice
+      && previousCheckout.currency === PAYMENT_CURRENCY
+      && pending.preferenceId
+      && pending.initPoint
+    );
+    const checkout = canReuseCheckout
+      ? previousCheckout
+      : await PaymentCheckout.create({
+          operation: "registration",
+          pendingRegistrationID: pending._id,
+          planId,
+          months: monthsNum,
+          expectedAmount: unitPrice,
+          currency: PAYMENT_CURRENCY,
+        });
+    if (!canReuseCheckout && previousCheckout?._id) {
+      await PaymentCheckout.findByIdAndUpdate(previousCheckout._id, {
+        $set: { status: "superseded" },
+      });
+    }
+
     const preferenceBody = buildRegistrationPreference({
       pendingID: pending._id,
+      checkoutID: checkout._id,
       plan,
       planId,
       months: monthsNum,
@@ -345,19 +399,29 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       checkoutExpiresAt,
     });
     const preference = new Preference(client);
-    const wasReused = Boolean(pending.preferenceId);
-    const result = wasReused
-      ? await preference.update({
-          id: pending.preferenceId,
-          updatePreferenceRequest: preferenceBody,
-          requestOptions: {
-            idempotencyKey: `registration-${pending._id}-${planId}-${monthsNum}`,
-          },
-        })
-      : await preference.create({
-          body: preferenceBody,
-          requestOptions: { idempotencyKey: `registration-${pending._id}` },
+    const wasReused = canReuseCheckout;
+    let result;
+    try {
+      result = wasReused
+        ? await preference.update({
+            id: pending.preferenceId,
+            updatePreferenceRequest: preferenceBody,
+            requestOptions: {
+              idempotencyKey: `registration-${pending._id}-${planId}-${monthsNum}`,
+            },
+          })
+        : await preference.create({
+            body: preferenceBody,
+            requestOptions: { idempotencyKey: `registration-${checkout._id}` },
+          });
+    } catch (error) {
+      if (!wasReused) {
+        await PaymentCheckout.findByIdAndUpdate(checkout._id, {
+          $set: { status: "failed", failureReason: error.message },
         });
+      }
+      throw error;
+    }
 
     const initPoint = result.init_point || pending.initPoint;
     if (!initPoint) {
@@ -368,8 +432,25 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     pending.months = monthsNum;
     pending.preferenceId = result.id || pending.preferenceId;
     pending.initPoint = initPoint;
+    pending.checkoutID = checkout._id;
     pending.expiresAt = pendingExpiresAt;
     await pending.save();
+
+    const readyCheckout = await PaymentCheckout.findByIdAndUpdate(
+      checkout._id,
+      {
+        $set: {
+          preferenceId: pending.preferenceId,
+          initPoint,
+          status: "ready",
+          failureReason: null,
+        },
+      },
+      { new: true, runValidators: true }
+    );
+    if (!readyCheckout) {
+      throw new Error("El checkout desapareció después de crear la preferencia");
+    }
 
     res.json({
       init_point: initPoint,

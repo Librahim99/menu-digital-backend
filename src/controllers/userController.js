@@ -191,6 +191,7 @@ const loginUser = async (req, res) => {
       _id: user._id,
       username: user.username,
       admin: user.admin,
+      slug: user.slug,
       subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
       subscriptionExpiresAt: user.subscriptionExpiresAt,
       token: generateAuthToken(user._id),
