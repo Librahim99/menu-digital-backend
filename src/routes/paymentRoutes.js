@@ -19,10 +19,13 @@ const {
   encryptPendingPassword,
 } = require("../utils/pendingCredentials");
 
-// ── Inicializar cliente MP con el Access Token del .env
-const client = new MercadoPagoConfig({
-  accessToken: process.env.MP_ACCESS_TOKEN,
-});
+// Cada operación recibe su propia configuración: el SDK muta `options`
+// al aplicar requestOptions y una instancia global puede heredar la clave
+// de idempotencia usada por otro checkout.
+const createPreferenceClient = () =>
+  new Preference(
+    new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN })
+  );
 
 const hashRegistrationToken = (token) =>
   crypto.createHash("sha256").update(token).digest("hex");
@@ -105,7 +108,7 @@ router.post("/crear-preferencia", protect, async (req, res) => {
 
   let checkout = null;
   try {
-    const preference = new Preference(client);
+    const preference = createPreferenceClient();
     const totalPrice = getCheckoutAmount(planId, months);
     const isRenewal = planId === req.user.subscription;
     const currentExpiry = new Date(req.user.subscriptionExpiresAt || 0);
@@ -160,9 +163,10 @@ router.post("/crear-preferencia", protect, async (req, res) => {
           ...(isRenewal && { renewal_base: renewalBase.toISOString() }),
         },
       },
+      requestOptions: { idempotencyKey: `subscription-${checkout._id}` },
     });
-    if (!result.init_point) {
-      throw new Error("MercadoPago no devolvió una URL de checkout");
+    if (!result?.id || !result?.init_point) {
+      throw new Error("MercadoPago no devolvió una preferencia de checkout completa");
     }
 
     const readyCheckout = await PaymentCheckout.findByIdAndUpdate(
@@ -446,9 +450,11 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       checkoutStartsAt,
       checkoutExpiresAt,
     });
-    const preference = new Preference(client);
+    const preference = createPreferenceClient();
     const wasReused = canReuseCheckout;
     let result;
+    let preferenceId;
+    let initPoint;
     try {
       paymentDebugStage = wasReused
         ? "updating_mercadopago_preference"
@@ -465,13 +471,19 @@ router.post("/crear-preferencia-registro", async (req, res) => {
             id: pending.preferenceId,
             updatePreferenceRequest: preferenceBody,
             requestOptions: {
-              idempotencyKey: `registration-${pending._id}-${planId}-${monthsNum}`,
+              idempotencyKey: `registration-update-${paymentDebugID}`,
             },
           })
         : await preference.create({
             body: preferenceBody,
             requestOptions: { idempotencyKey: `registration-${checkout._id}` },
           });
+      preferenceId = wasReused
+        ? result?.id || pending.preferenceId
+        : result?.id;
+      initPoint = wasReused
+        ? result?.init_point || pending.initPoint
+        : result?.init_point;
       console.log("[MP registro] respuesta de MercadoPago", {
         paymentDebugID,
         checkoutID: String(checkout._id),
@@ -488,6 +500,9 @@ router.post("/crear-preferencia-registro", async (req, res) => {
           && result.init_point === pending.initPoint
         ),
       });
+      if (!preferenceId || !initPoint) {
+        throw new Error("MercadoPago no devolvió una preferencia de checkout completa");
+      }
     } catch (error) {
       if (!wasReused) {
         paymentDebugStage = "marking_checkout_failed";
@@ -498,14 +513,9 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       throw error;
     }
 
-    const initPoint = result.init_point || pending.initPoint;
-    if (!initPoint) {
-      throw new Error("MercadoPago no devolvió una URL de checkout");
-    }
-
     pending.planId = planId;
     pending.months = monthsNum;
-    pending.preferenceId = result.id || pending.preferenceId;
+    pending.preferenceId = preferenceId;
     pending.initPoint = initPoint;
     pending.checkoutID = checkout._id;
     pending.expiresAt = pendingExpiresAt;
