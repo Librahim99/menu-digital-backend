@@ -23,10 +23,19 @@ const PREFERENCE_ID = "preference-123";
 const CHECKOUT_ID = "64f000000000000000000999";
 const TEST_MP_WEBHOOK_SECRET = "webhook-secret-de-prueba";
 
-function request(paymentID = "payment-123") {
-  const xRequestId = `request-${paymentID}`;
+function request(
+  paymentID = "payment-123",
+  {
+    signedRequestId = `request-${paymentID}`,
+    receivedRequestId = signedRequestId,
+  } = {}
+) {
   const ts = "1704908010";
-  const manifest = `id:${String(paymentID).toLowerCase()};request-id:${xRequestId};ts:${ts};`;
+  const manifest =
+    `id:${String(paymentID).toLowerCase()};` +
+    `request-id:${signedRequestId};` +
+    `ts:${ts};`;
+
   const hash = crypto
     .createHmac("sha256", TEST_MP_WEBHOOK_SECRET)
     .update(manifest)
@@ -36,7 +45,7 @@ function request(paymentID = "payment-123") {
     query: { "data.id": paymentID, type: "payment" },
     body: {},
     headers: {
-      "x-request-id": xRequestId,
+      "x-request-id": receivedRequestId,
       "x-signature": `ts=${ts},v1=${hash}`,
     },
   };
@@ -1065,6 +1074,40 @@ test("preferencias antiguas sin months acreditan un mes con vencimiento", async 
   assert.equal(updates[0].update.subscriptionExpiresAt.toISOString(), "2026-09-21T15:00:00.000Z");
 });
 
+for (const envoyNibble of ["9", "a", "b"]) {
+  test(
+    `acepta la firma cuando Envoy cambia el UUID v4 de 4 a ${envoyNibble}`,
+    async (t) => {
+      const paymentContext = mockCommon(
+        t,
+        approvedPayment({ live_mode: false })
+      );
+      process.env.MP_ENV = "production";
+
+      const signedRequestId =
+        "48270012-3bee-4a70-b11f-62efd7533e50";
+      const receivedRequestId =
+        `48270012-3bee-${envoyNibble}a70-b11f-62efd7533e50`;
+
+      const res = response();
+
+      await mpWebhook(
+        request("payment-123", {
+          signedRequestId,
+          receivedRequestId,
+        }),
+        res
+      );
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(
+        paymentContext.getTransaction().entitlementReason,
+        "payment_environment_mismatch"
+      );
+    }
+  );
+}
+
 test("una firma inválida devuelve 401 antes de consultar el pago", async (t) => {
   const previousSecret = process.env.MP_WEBHOOK_SECRET;
   process.env.MP_WEBHOOK_SECRET = TEST_MP_WEBHOOK_SECRET;
@@ -1080,8 +1123,13 @@ test("una firma inválida devuelve 401 antes de consultar el pago", async (t) =>
   });
 
   const res = response();
-  const invalidRequest = request();
-  invalidRequest.headers["x-signature"] = "ts=1704908010,v1=firma-invalida";
+  const invalidRequest = request("payment-123", {
+  signedRequestId: "48270012-3bee-4a70-b11f-62efd7533e50",
+  receivedRequestId: "48270012-3bee-9a70-b11f-62efd7533e50",
+});
+
+invalidRequest.headers["x-signature"] =
+  `ts=1704908010,v1=${"0".repeat(64)}`;
   await mpWebhook(invalidRequest, res);
 
   assert.equal(res.statusCode, 401);

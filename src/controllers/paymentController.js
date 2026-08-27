@@ -408,21 +408,60 @@ const verifyMpSignature = (req) => {
   });
   if (!ts || !hash) return false;
 
-  const manifest = `id:${dataId.toLowerCase()};request-id:${xRequestId};ts:${ts};`;
-  const expectedHash = crypto.createHmac("sha256", secret).update(manifest).digest("hex");
+    const requestIdCandidates = [xRequestId];
 
-  // timingSafeEqual evita que un atacante pueda ir adivinando el hash
-  // byte a byte midiendo cuánto tarda en responder cada intento.
-  const a = Buffer.from(hash);
-  const b = Buffer.from(expectedHash);
-  const matches = a.length === b.length && crypto.timingSafeEqual(a, b);
+  // Envoy puede reemplazar el nibble de versión 4 por 9, a o b
+  // para guardar el estado del tracing.
+  if (typeof xRequestId === "string") {
+    const envoyRequestIdMatch = xRequestId.match(
+      /^([0-9a-f]{8}-[0-9a-f]{4}-)[9ab]([0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i
+    );
+
+    if (envoyRequestIdMatch) {
+      requestIdCandidates.push(
+        `${envoyRequestIdMatch[1]}4${envoyRequestIdMatch[2]}`
+      );
+    }
+  }
+
+  const receivedHash = Buffer.from(hash);
+
+  const verificationAttempts = requestIdCandidates.map(
+    (requestIdCandidate) => {
+      const manifest =
+        `id:${dataId.toLowerCase()};` +
+        `request-id:${requestIdCandidate};` +
+        `ts:${ts};`;
+
+      const expectedHash = crypto
+        .createHmac("sha256", secret)
+        .update(manifest)
+        .digest("hex");
+
+      const expectedHashBuffer = Buffer.from(expectedHash);
+
+      return {
+        manifest,
+        expectedHash,
+        matches:
+          receivedHash.length === expectedHashBuffer.length &&
+          crypto.timingSafeEqual(receivedHash, expectedHashBuffer),
+      };
+    }
+  );
+
+  const matches = verificationAttempts.some(
+    (attempt) => attempt.matches
+  );
+  const primaryAttempt = verificationAttempts[0];
 
   if (!matches) {
     console.error("Webhook MP: firma no coincide", {
-      manifest,
+      manifest: primaryAttempt.manifest,
       hashRecibido: hash,
-      hashEsperado: expectedHash,
-      secretLength: secret.length, // comparar contra el largo real de la clave del panel — nunca loguear el secret
+      hashEsperado: primaryAttempt.expectedHash,
+      envoyFallbackAttempted: requestIdCandidates.length > 1,
+      secretLength: secret.length,
     });
   }
 
