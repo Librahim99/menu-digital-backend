@@ -41,7 +41,7 @@ app.use(helmet({
 }));
 app.use(cors({
   origin: [
-    'https://menu-digital-app-v1-gamma.vercel.app',
+    'https://www.menudigitalapp.com.ar/',
     'http://localhost:5173',
     'http://localhost:3000',
   ],
