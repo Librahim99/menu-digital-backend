@@ -16,6 +16,7 @@ const STAGE_LABEL = {
 };
 
 const PLAN_LABEL = { free: "Gratis", basic: "Básico", pro: "Pro" };
+const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 // Todas las rutas de este controller ya pasan por protect + isAdmin (ver
 // crmRoutes), así que acá no re-chequeamos permisos.
@@ -79,22 +80,65 @@ const getClient = async (req, res) => {
     const { userID } = req.params;
     if (!isValidId(userID)) return res.status(400).json({ message: "ID inválido" });
 
-    const user = await User.findById(userID).select("-password");
+    // El detalle CRM expone un DTO acotado: no entrega el documento User
+    // completo ni campos sensibles que el panel no necesita.
+    const user = await User.findOne({ _id: userID, admin: false }).select(
+      "username slug subscription subscriptionExpiresAt active hasDelivery createdAt " +
+      "contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
+      "media.pictures media.backgroundPicture schedule"
+    );
     if (!user) return res.status(404).json({ message: "Cliente no encontrado" });
 
-    const profile = await CrmProfile.findOne({ userID }).populate("notes.author", "username");
-
-    // Resumen de actividad (cuántas categorías/secciones/productos cargó).
-    const menus = await Menu.find({ userID }).select("_id section");
+    const [profile, menus] = await Promise.all([
+      CrmProfile.findOne({ userID }).populate("notes.author", "username"),
+      Menu.find({ userID }).select("_id section"),
+    ]);
     const menuIds = menus.map((m) => m._id);
     const itemCount = await Item.countDocuments({ menuID: { $in: menuIds } });
     const categoryCount = menus.filter((m) => !m.section).length;
     const sectionCount = menus.filter((m) => m.section).length;
+    const businessName = user.contactInfo?.businessName || "";
+    const address = user.contactInfo?.address || "";
+
+    // Este resumen se calcula en el servidor para que el frontend solo refleje
+    // el estado real del cliente y no duplique criterios operativos.
+    const onboardingChecks = {
+      businessInfo: Boolean(businessName.trim() && address.trim()),
+      contactChannel: Boolean(user.contactInfo?.mail?.trim() || user.contactInfo?.number),
+      schedule: DAY_KEYS.some((day) => Boolean(user.schedule?.[day]?.enabled)),
+      branding: Boolean(user.media?.backgroundPicture || user.media?.pictures?.length),
+      menuStructure: categoryCount > 0,
+      products: itemCount > 0,
+      publicMenu: Boolean(user.active && user.slug && itemCount > 0),
+    };
+    const completedCount = Object.values(onboardingChecks).filter(Boolean).length;
+    const total = Object.keys(onboardingChecks).length;
 
     res.json({
-      user,
+      user: {
+        _id: user._id,
+        username: user.username,
+        slug: user.slug || "",
+        subscription: user.subscription,
+        subscriptionExpiresAt: user.subscriptionExpiresAt || null,
+        active: user.active,
+        hasDelivery: user.hasDelivery,
+        createdAt: user.createdAt,
+        contactInfo: {
+          businessName,
+          mail: user.contactInfo?.mail || "",
+          number: user.contactInfo?.number ?? null,
+          address,
+        },
+      },
       crm: profile || defaultProfile(),
       activity: { categoryCount, sectionCount, itemCount },
+      onboarding: {
+        ...onboardingChecks,
+        completedCount,
+        total,
+        completed: completedCount === total,
+      },
     });
   } catch (err) {
     handleError(res, err);

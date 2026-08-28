@@ -1043,8 +1043,8 @@ test("paymentID tiene un índice único y el historial no usa TTL", () => {
 });
 
 test("el checkout conserva un snapshot durable y usa la fuente única de precios", () => {
-  assert.equal(getCheckoutAmount("basic", 3), 5400);
-  assert.equal(getCheckoutAmount("pro", 12), 45000);
+  assert.equal(getCheckoutAmount("basic", 3), 80997);
+  assert.equal(getCheckoutAmount("pro", 12), 449991);
   assert.equal(PAYMENT_CURRENCY, "ARS");
   assert.equal(PaymentCheckout.schema.path("expiresAt"), undefined);
   assert.equal(

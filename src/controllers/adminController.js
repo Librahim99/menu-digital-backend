@@ -82,7 +82,7 @@ const setActiveUser = async (req, res) => {
         username: user.username,
         slug: user.slug,
         active: user.active,
-        "contactInfo.bussinessName": user.contactInfo?.bussinessName,
+        businessName: user.contactInfo?.businessName || "",
       },
     });
   } catch (err) {
