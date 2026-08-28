@@ -69,9 +69,10 @@ app.use("/api", apiLimiter);
 // ──────────────────────────────────────────────
 // Rutas de la API
 // ──────────────────────────────────────────────
-// El CRM va ANTES de /api/admin para que su prefijo (más específico) matchee
-// primero y no lo intercepte el GET /:userID de adminRoutes.
+// Las rutas admin específicas van ANTES de /api/admin para que no las
+// intercepte el GET /:userID de adminRoutes.
 app.use("/api/admin/crm", require("./routes/crmRoutes"));
+app.use("/api/admin/payments", require("./routes/adminPaymentRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"))
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/menus", require("./routes/menuRoutes"));

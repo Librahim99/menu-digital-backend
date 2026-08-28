@@ -4,7 +4,7 @@ const User = require("../src/models/User");
 const Menu = require("../src/models/Menu");
 const Item = require("../src/models/Item");
 const CrmProfile = require("../src/models/CrmProfile");
-const { getClient } = require("../src/controllers/crmController");
+const { getClient, updateProfile } = require("../src/controllers/crmController");
 
 function response() {
   return {
@@ -123,4 +123,44 @@ test("getClient responde 404 cuando el ID no pertenece a un cliente", async (t) 
 
   assert.equal(res.statusCode, 404);
   assert.deepEqual(res.body, { message: "Cliente no encontrado" });
+});
+
+test("updateProfile rechaza fechas inválidas y limita la búsqueda a clientes", async (t) => {
+  const userID = "64f000000000000000000123";
+  let existsFilter;
+  t.mock.method(User, "exists", async (filter) => {
+    existsFilter = filter;
+    return { _id: userID };
+  });
+  t.mock.method(CrmProfile, "findOneAndUpdate", () => {
+    throw new Error("No debe guardar una fecha inválida");
+  });
+
+  const res = response();
+  await updateProfile({ params: { userID }, body: { nextFollowUp: "fecha-imposible" } }, res);
+
+  assert.deepEqual(existsFilter, { _id: userID, admin: false });
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.body, { message: "Fecha de seguimiento inválida" });
+});
+
+test("updateProfile normaliza tags de texto y elimina duplicados", async (t) => {
+  const userID = "64f000000000000000000123";
+  let savedUpdate;
+  const updatedProfile = { stage: "lead", tags: ["prioridad"], nextFollowUp: null, notes: [] };
+  t.mock.method(User, "exists", async () => ({ _id: userID }));
+  t.mock.method(CrmProfile, "findOneAndUpdate", (_filter, update) => {
+    savedUpdate = update;
+    return { populate: async () => updatedProfile };
+  });
+
+  const res = response();
+  await updateProfile(
+    { params: { userID }, body: { tags: [" prioridad ", "prioridad", ""] } },
+    res
+  );
+
+  assert.deepEqual(savedUpdate.$set.tags, ["prioridad"]);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, updatedProfile);
 });

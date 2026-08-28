@@ -157,7 +157,7 @@ const updateProfile = async (req, res) => {
     if (!isValidId(userID)) return res.status(400).json({ message: "ID inválido" });
 
     // No creamos un CRM para un userID que no existe (evita perfiles huérfanos).
-    const exists = await User.exists({ _id: userID });
+    const exists = await User.exists({ _id: userID, admin: false });
     if (!exists) return res.status(404).json({ message: "Cliente no encontrado" });
 
     const { stage, tags, nextFollowUp } = req.body;
@@ -169,10 +169,21 @@ const updateProfile = async (req, res) => {
     }
     if (tags !== undefined) {
       if (!Array.isArray(tags)) return res.status(400).json({ message: "tags debe ser un array" });
-      updates.tags = tags.map((t) => String(t).trim()).filter(Boolean);
+      if (tags.some((tag) => typeof tag !== "string")) {
+        return res.status(400).json({ message: "Cada tag debe ser texto" });
+      }
+      updates.tags = [...new Set(tags.map((tag) => tag.trim()).filter(Boolean))];
     }
     if (nextFollowUp !== undefined) {
-      updates.nextFollowUp = nextFollowUp ? new Date(nextFollowUp) : null;
+      if (!nextFollowUp) {
+        updates.nextFollowUp = null;
+      } else {
+        const parsedDate = new Date(nextFollowUp);
+        if (Number.isNaN(parsedDate.getTime())) {
+          return res.status(400).json({ message: "Fecha de seguimiento inválida" });
+        }
+        updates.nextFollowUp = parsedDate;
+      }
     }
 
     const profile = await CrmProfile.findOneAndUpdate(
@@ -202,7 +213,7 @@ const addNote = async (req, res) => {
       return res.status(400).json({ message: "La nota no puede estar vacía" });
     }
 
-    const exists = await User.exists({ _id: userID });
+    const exists = await User.exists({ _id: userID, admin: false });
     if (!exists) return res.status(404).json({ message: "Cliente no encontrado" });
 
     const profile = await CrmProfile.findOneAndUpdate(
