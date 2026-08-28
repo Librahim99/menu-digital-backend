@@ -5,6 +5,8 @@ const User = require("../models/User");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const CrmProfile = require("../models/CrmProfile");
+const PaymentTransaction = require("../models/PaymentTransaction");
+const { buenosAiresDateStr } = require("../utils/dates");
 const { STAGES } = CrmProfile;
 
 const STAGE_LABEL = {
@@ -28,42 +30,195 @@ const defaultProfile = () => ({ stage: "lead", tags: [], nextFollowUp: null, not
 
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+const buildOnboardingStatus = ({ user, categoryCount, itemCount }) => {
+  const businessName = user.contactInfo?.businessName || "";
+  const address = user.contactInfo?.address || "";
+  const checks = {
+    businessInfo: Boolean(businessName.trim() && address.trim()),
+    contactChannel: Boolean(user.contactInfo?.mail?.trim() || user.contactInfo?.number),
+    schedule: DAY_KEYS.some((day) => Boolean(user.schedule?.[day]?.enabled)),
+    branding: Boolean(user.media?.backgroundPicture || user.media?.pictures?.length),
+    menuStructure: categoryCount > 0,
+    products: itemCount > 0,
+    publicMenu: Boolean(user.active && user.slug && itemCount > 0),
+  };
+  const completedCount = Object.values(checks).filter(Boolean).length;
+  const total = Object.keys(checks).length;
+
+  return {
+    ...checks,
+    completedCount,
+    total,
+    completed: completedCount === total,
+  };
+};
+
 // ──────────────────────────────────────────────
-// @desc    Lista de clientes (locales) enriquecida con su etapa de CRM,
-//          para el tablero del CRM. Dos queries (users + profiles) que se
-//          cruzan en memoria — evita un N+1.
+// @desc    Lista 360 de clientes enriquecida con CRM, onboarding, último pago
+//          y señales operativas. Las colecciones relacionadas se consultan en
+//          lote y se cruzan en memoria para evitar N+1.
 // @route   GET /api/admin/crm/clients
 // @access  Admin
 // ──────────────────────────────────────────────
 const listClients = async (req, res) => {
   try {
     const users = await User.find({ admin: false })
-      .select("username slug subscription active createdAt contactInfo.businessName")
+      .select(
+        "username slug subscription subscriptionExpiresAt active createdAt " +
+        "contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
+        "media.pictures media.backgroundPicture schedule"
+      )
       .sort({ createdAt: -1 });
 
-    const profiles = await CrmProfile.find({ userID: { $in: users.map((u) => u._id) } })
-      .select("userID stage tags nextFollowUp");
+    const userIDs = users.map((user) => user._id);
+    const [profiles, menus, paymentRows] = await Promise.all([
+      CrmProfile.find({ userID: { $in: userIDs } })
+        .select("userID stage tags nextFollowUp"),
+      Menu.find({ userID: { $in: userIDs } })
+        .select("_id userID section"),
+      PaymentTransaction.aggregate([
+        { $match: { userID: { $in: userIDs } } },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: "$userID",
+            latestPayment: {
+              $first: {
+                status: "$status",
+                entitlementStatus: "$entitlementStatus",
+                amount: "$amount",
+                currency: "$currency",
+                createdAt: { $ifNull: ["$paymentCreatedAt", "$createdAt"] },
+              },
+            },
+            attentionCount: {
+              $sum: {
+                $cond: [
+                  {
+                    $or: [
+                      {
+                        $and: [
+                          { $eq: ["$status", "approved"] },
+                          { $ne: ["$entitlementStatus", "applied"] },
+                        ],
+                      },
+                      { $eq: ["$checkoutValidation", "failed"] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]),
+    ]);
 
-    const byUser = {};
-    profiles.forEach((p) => { byUser[p.userID.toString()] = p; });
+    const menuIDs = menus.map((menu) => menu._id);
+    const itemRows = menuIDs.length
+      ? await Item.aggregate([
+          { $match: { menuID: { $in: menuIDs } } },
+          { $group: { _id: "$menuID", count: { $sum: 1 } } },
+        ])
+      : [];
+
+    const profilesByUser = new Map(
+      profiles.map((profile) => [profile.userID.toString(), profile])
+    );
+    const menuStatsByUser = new Map();
+    const menuToUser = new Map();
+    menus.forEach((menu) => {
+      const userKey = menu.userID.toString();
+      const current = menuStatsByUser.get(userKey) || {
+        categoryCount: 0,
+        sectionCount: 0,
+        itemCount: 0,
+      };
+      if (menu.section) current.sectionCount += 1;
+      else current.categoryCount += 1;
+      menuStatsByUser.set(userKey, current);
+      menuToUser.set(menu._id.toString(), userKey);
+    });
+    itemRows.forEach((row) => {
+      const userKey = menuToUser.get(row._id.toString());
+      if (!userKey) return;
+      const current = menuStatsByUser.get(userKey);
+      current.itemCount += row.count;
+    });
+    const paymentsByUser = new Map(
+      paymentRows.map((row) => [row._id.toString(), row])
+    );
+
+    const now = new Date();
+    const expiringLimit = new Date(now.getTime() + (30 * 24 * 60 * 60 * 1000));
+    const todayCalendarCutoff = new Date(`${buenosAiresDateStr(now)}T00:00:00.000Z`);
 
     const clients = users.map((u) => {
-      const p = byUser[u._id.toString()];
+      const userKey = u._id.toString();
+      const p = profilesByUser.get(userKey);
+      const menuStats = menuStatsByUser.get(userKey) || {
+        categoryCount: 0,
+        sectionCount: 0,
+        itemCount: 0,
+      };
+      const payment = paymentsByUser.get(userKey);
+      const onboarding = buildOnboardingStatus({
+        user: u,
+        categoryCount: menuStats.categoryCount,
+        itemCount: menuStats.itemCount,
+      });
+      const subscriptionExpiresAt = u.subscriptionExpiresAt || null;
+      const attention = [];
+      const isOperationalClient = u.active && p?.stage !== "baja";
+
+      if (payment?.attentionCount > 0) attention.push("payment_issue");
+      if (isOperationalClient && u.subscription !== "free") {
+        if (!subscriptionExpiresAt) attention.push("subscription_missing_expiry");
+        else if (subscriptionExpiresAt < now) attention.push("subscription_expired");
+        else if (subscriptionExpiresAt <= expiringLimit) attention.push("subscription_expiring");
+      }
+      if (p?.nextFollowUp && p.nextFollowUp < todayCalendarCutoff) {
+        attention.push("follow_up_overdue");
+      }
+      if (isOperationalClient && !onboarding.completed) attention.push("onboarding_incomplete");
+
       return {
         _id: u._id,
         username: u.username,
         businessName: u.contactInfo?.businessName || "",
         slug: u.slug,
         subscription: u.subscription,
+        subscriptionExpiresAt,
         active: u.active,
         createdAt: u.createdAt,
+        contactInfo: {
+          mail: u.contactInfo?.mail || "",
+          number: u.contactInfo?.number ?? null,
+        },
         stage: p?.stage || "lead",
         tags: p?.tags || [],
         nextFollowUp: p?.nextFollowUp || null,
+        onboarding,
+        lastPayment: payment?.latestPayment || null,
+        paymentAttentionCount: payment?.attentionCount || 0,
+        attention,
       };
     });
 
-    res.json({ clients, stages: STAGES });
+    res.json({
+      clients,
+      stages: STAGES,
+      attentionSummary: {
+        clients: clients.filter((client) => client.attention.length > 0).length,
+        paymentIssues: clients.filter((client) => client.attention.includes("payment_issue")).length,
+        expiredSubscriptions: clients.filter((client) => client.attention.includes("subscription_expired")).length,
+        expiringSubscriptions: clients.filter((client) => client.attention.includes("subscription_expiring")).length,
+        missingExpirySubscriptions: clients.filter((client) => client.attention.includes("subscription_missing_expiry")).length,
+        overdueFollowUps: clients.filter((client) => client.attention.includes("follow_up_overdue")).length,
+        incompleteOnboarding: clients.filter((client) => client.attention.includes("onboarding_incomplete")).length,
+      },
+    });
   } catch (err) {
     handleError(res, err);
   }
@@ -97,22 +252,11 @@ const getClient = async (req, res) => {
     const itemCount = await Item.countDocuments({ menuID: { $in: menuIds } });
     const categoryCount = menus.filter((m) => !m.section).length;
     const sectionCount = menus.filter((m) => m.section).length;
-    const businessName = user.contactInfo?.businessName || "";
-    const address = user.contactInfo?.address || "";
-
     // Este resumen se calcula en el servidor para que el frontend solo refleje
     // el estado real del cliente y no duplique criterios operativos.
-    const onboardingChecks = {
-      businessInfo: Boolean(businessName.trim() && address.trim()),
-      contactChannel: Boolean(user.contactInfo?.mail?.trim() || user.contactInfo?.number),
-      schedule: DAY_KEYS.some((day) => Boolean(user.schedule?.[day]?.enabled)),
-      branding: Boolean(user.media?.backgroundPicture || user.media?.pictures?.length),
-      menuStructure: categoryCount > 0,
-      products: itemCount > 0,
-      publicMenu: Boolean(user.active && user.slug && itemCount > 0),
-    };
-    const completedCount = Object.values(onboardingChecks).filter(Boolean).length;
-    const total = Object.keys(onboardingChecks).length;
+    const onboarding = buildOnboardingStatus({ user, categoryCount, itemCount });
+    const businessName = user.contactInfo?.businessName || "";
+    const address = user.contactInfo?.address || "";
 
     res.json({
       user: {
@@ -133,12 +277,7 @@ const getClient = async (req, res) => {
       },
       crm: profile || defaultProfile(),
       activity: { categoryCount, sectionCount, itemCount },
-      onboarding: {
-        ...onboardingChecks,
-        completedCount,
-        total,
-        completed: completedCount === total,
-      },
+      onboarding,
     });
   } catch (err) {
     handleError(res, err);
@@ -261,7 +400,10 @@ const deleteNote = async (req, res) => {
 // ──────────────────────────────────────────────
 const getOverdueCount = async (req, res) => {
   try {
-    const count = await CrmProfile.countDocuments({ nextFollowUp: { $ne: null, $lt: new Date() } });
+    const todayCalendarCutoff = new Date(`${buenosAiresDateStr()}T00:00:00.000Z`);
+    const count = await CrmProfile.countDocuments({
+      nextFollowUp: { $ne: null, $lt: todayCalendarCutoff },
+    });
     res.json({ count });
   } catch (err) {
     handleError(res, err);

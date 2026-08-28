@@ -4,7 +4,13 @@ const User = require("../src/models/User");
 const Menu = require("../src/models/Menu");
 const Item = require("../src/models/Item");
 const CrmProfile = require("../src/models/CrmProfile");
-const { getClient, updateProfile } = require("../src/controllers/crmController");
+const PaymentTransaction = require("../src/models/PaymentTransaction");
+const {
+  listClients,
+  getClient,
+  updateProfile,
+  getOverdueCount,
+} = require("../src/controllers/crmController");
 
 function response() {
   return {
@@ -20,6 +26,99 @@ function response() {
     },
   };
 }
+
+test("listClients arma la vista 360 y resume las alertas sin consultas por cliente", async (t) => {
+  const userID = "64f000000000000000000123";
+  const menuID = "64f000000000000000000201";
+  const user = {
+    _id: userID,
+    username: "cliente-prueba",
+    slug: "cliente-prueba",
+    subscription: "basic",
+    subscriptionExpiresAt: new Date("2020-01-01T00:00:00.000Z"),
+    active: true,
+    createdAt: new Date("2019-01-01T00:00:00.000Z"),
+    contactInfo: {
+      businessName: "Bar de prueba",
+      mail: "contacto@example.com",
+      number: 1112345678,
+      address: "Calle 123",
+    },
+    media: { pictures: [], backgroundPicture: "" },
+    schedule: {},
+  };
+  const profile = {
+    userID,
+    stage: "en_riesgo",
+    tags: ["prioridad"],
+    nextFollowUp: new Date("2020-01-02T00:00:00.000Z"),
+  };
+  const paymentDate = new Date("2026-08-20T12:00:00.000Z");
+
+  t.mock.method(User, "find", () => ({
+    select() { return this; },
+    async sort() { return [user]; },
+  }));
+  t.mock.method(CrmProfile, "find", () => ({ select: async () => [profile] }));
+  t.mock.method(Menu, "find", () => ({
+    select: async () => [{ _id: menuID, userID, section: false }],
+  }));
+  t.mock.method(Item, "aggregate", async () => [{ _id: menuID, count: 2 }]);
+  t.mock.method(PaymentTransaction, "aggregate", async () => [{
+    _id: userID,
+    latestPayment: {
+      status: "approved",
+      entitlementStatus: "not_applied",
+      amount: 39999,
+      currency: "ARS",
+      createdAt: paymentDate,
+    },
+    attentionCount: 1,
+  }]);
+
+  const res = response();
+  await listClients({}, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.clients.length, 1);
+  assert.deepEqual(res.body.clients[0].contactInfo, {
+    mail: "contacto@example.com",
+    number: 1112345678,
+  });
+  assert.deepEqual(res.body.clients[0].attention, [
+    "payment_issue",
+    "subscription_expired",
+    "follow_up_overdue",
+    "onboarding_incomplete",
+  ]);
+  assert.equal(res.body.clients[0].onboarding.completedCount, 5);
+  assert.equal(res.body.clients[0].lastPayment.amount, 39999);
+  assert.deepEqual(res.body.attentionSummary, {
+    clients: 1,
+    paymentIssues: 1,
+    expiredSubscriptions: 1,
+    expiringSubscriptions: 0,
+    missingExpirySubscriptions: 0,
+    overdueFollowUps: 1,
+    incompleteOnboarding: 1,
+  });
+});
+
+test("getOverdueCount no considera vencido un seguimiento del día actual", async (t) => {
+  let filter;
+  t.mock.method(CrmProfile, "countDocuments", async (receivedFilter) => {
+    filter = receivedFilter;
+    return 2;
+  });
+
+  const res = response();
+  await getOverdueCount({}, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { count: 2 });
+  assert.equal(filter.nextFollowUp.$ne, null);
+  assert.match(filter.nextFollowUp.$lt.toISOString(), /T00:00:00\.000Z$/);
+});
 
 test("getClient rechaza un ID inválido antes de consultar la base", async (t) => {
   t.mock.method(User, "findOne", () => {
