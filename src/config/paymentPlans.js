@@ -6,12 +6,12 @@ const PAYMENT_CURRENCY = "ARS";
 const PAYMENT_PLANS = {
   basic: {
     title: "Menú Digital — Plan Basic",
-    unitPrice: 29999,
+    unitPrice: 2000,
     description: "Hasta 50 productos, sin publicidad, Excel, programación, PDF y 5 diseños",
   },
   pro: {
     title: "Menú Digital — Plan Pro",
-    unitPrice: 49999,
+    unitPrice: 5000,
     description: "Productos ilimitados, métricas, reseñas integradas, dominio propio y 15 diseños",
   },
 };
