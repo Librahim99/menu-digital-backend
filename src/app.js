@@ -74,6 +74,7 @@ app.use("/api", apiLimiter);
 app.use("/api/admin/crm", require("./routes/crmRoutes"));
 app.use("/api/admin/payments", require("./routes/adminPaymentRoutes"));
 app.use("/api/admin/plans", require("./routes/adminPlanRoutes"));
+app.use("/api/admin/sellers", require("./routes/sellerRoutes"));
 app.use("/api/plans", require("./routes/planRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"))
 app.use("/api/users", require("./routes/userRoutes"));

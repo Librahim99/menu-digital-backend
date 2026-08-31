@@ -33,7 +33,12 @@ const pendingRegistrationSchema = new mongoose.Schema(
     months: { type: Number, enum: [1, 3, 6, 12], required: true },
     // sparse permite desplegar el índice aunque todavía existan registros
     // pendientes creados antes de incorporar este token.
-    activationTokenHash: { type: String, required: true, unique: true, sparse: true },
+    activationTokenHash: {
+      type: String,
+      required: true,
+      unique: true,
+      sparse: true,
+    },
     // Se conserva la preferencia para que volver atrás o reintentar la misma
     // selección no cree otro checkout. Si cambia plan/período se genera un
     // snapshot y una preferencia nuevos sin mutar las condiciones anteriores.
@@ -56,19 +61,31 @@ const pendingRegistrationSchema = new mongoose.Schema(
     paymentStatus: { type: String, default: null },
     paymentStatusDetail: { type: String, default: null },
     paymentUpdatedAt: { type: Date, default: null },
-    userID: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    userID: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
     completedAt: { type: Date, default: null },
     expiresAt: {
       type: Date,
       default: () => getPendingExpiration(),
       index: { expires: 0 }, // TTL de Mongo: borra el doc cuando llega la fecha
     },
+    sellerID: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Seller",
+      default: null,
+    },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 pendingRegistrationSchema.statics.getCheckoutExpiration = getCheckoutExpiration;
 pendingRegistrationSchema.statics.getPendingExpiration = getPendingExpiration;
 pendingRegistrationSchema.statics.getTerminalExpiration = getTerminalExpiration;
 
-module.exports = mongoose.model("PendingRegistration", pendingRegistrationSchema);
+module.exports = mongoose.model(
+  "PendingRegistration",
+  pendingRegistrationSchema,
+);

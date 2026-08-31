@@ -302,7 +302,12 @@ const applyExistingUserEntitlement = async ({
   const futureCurrentExpiry = currentExpiry && currentExpiry > new Date()
     ? currentExpiry
     : null;
-  let subscriptionExpiresAt;
+  let subscriptionExpiresAt = addCalendarMonths(approvedAt, paidMonths);
+if (pending.sellerID) {
+  subscriptionExpiresAt = new Date(
+    subscriptionExpiresAt.getTime() + 7 * 24 * 60 * 60 * 1000
+  );
+}
   if (capturedExpiry) {
     // Recuperación de una aplicación inconclusa de una versión anterior.
     // Nunca suma otra vez los meses del mismo paymentID.
@@ -1021,6 +1026,7 @@ const processPaymentEvent = async (paymentId) => {
       acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
       subscription: mappedPlan,
       subscriptionExpiresAt: entitlementExpiresAt,
+      sellerID: pending.sellerID || null,
     });
 
     const completedPending = await PendingRegistration.findByIdAndUpdate(
@@ -1055,7 +1061,7 @@ const processPaymentEvent = async (paymentId) => {
     if (newlyApplied) {
       await logCrmEvent(
         user._id,
-        `Alta por pago MP — plan ${mappedPlan} × ${entitlementMonths} mes(es), vigente hasta ${entitlementExpiresAt.toISOString()}`
+        `Alta por pago MP — plan ${mappedPlan} × ${entitlementMonths} mes(es)${pending.sellerID ? " · ref. vendedor" : ""}, vigente hasta ${entitlementExpiresAt.toISOString()}`
       );
     }
 

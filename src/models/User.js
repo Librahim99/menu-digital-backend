@@ -57,6 +57,11 @@ const UserSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    sellerID: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Seller",
+      default: null,
+    },
 
     hasDelivery: {
       type: Boolean,
@@ -69,18 +74,18 @@ const UserSchema = new mongoose.Schema(
     },
 
     acceptedTerms: {
-  type: Boolean,
-  default: false,
-},
+      type: Boolean,
+      default: false,
+    },
 
-acceptedTermsAt: {
-  type: Date,
-},
+    acceptedTermsAt: {
+      type: Date,
+    },
 
-acceptedTermsVersion: {
-  type: String,
-  default: null,
-},
+    acceptedTermsVersion: {
+      type: String,
+      default: null,
+    },
 
     // Info de contacto del local (mail, teléfono, ubicación, redes, etc.)
     contactInfo: {
@@ -106,20 +111,47 @@ acceptedTermsVersion: {
     // son strings "HH:mm"; no se valida el formato acá, se valida en
     // editUser (userController.js), mismo criterio que contactInfo.
     schedule: {
-      mon: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
-      tue: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
-      wed: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
-      thu: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
-      fri: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
-      sat: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
-      sun: { enabled: { type: Boolean }, open: { type: String }, close: { type: String } },
+      mon: {
+        enabled: { type: Boolean },
+        open: { type: String },
+        close: { type: String },
+      },
+      tue: {
+        enabled: { type: Boolean },
+        open: { type: String },
+        close: { type: String },
+      },
+      wed: {
+        enabled: { type: Boolean },
+        open: { type: String },
+        close: { type: String },
+      },
+      thu: {
+        enabled: { type: Boolean },
+        open: { type: String },
+        close: { type: String },
+      },
+      fri: {
+        enabled: { type: Boolean },
+        open: { type: String },
+        close: { type: String },
+      },
+      sat: {
+        enabled: { type: Boolean },
+        open: { type: String },
+        close: { type: String },
+      },
+      sun: {
+        enabled: { type: Boolean },
+        open: { type: String },
+        close: { type: String },
+      },
     },
   },
   {
     timestamps: true, // Agrega createdAt y updatedAt automáticamente
-  }
+  },
 );
-
 
 // ──────────────────────────────────────────────
 // HOOKS (Middleware de Mongoose)

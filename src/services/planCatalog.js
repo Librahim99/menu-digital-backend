@@ -110,14 +110,23 @@ const getRequestPlan = async (req) => {
   return req.plan;
 };
 
-const getCheckoutQuote = async (planId, months) => {
+const getCheckoutQuote = async (planId, months, { withSellerDiscount = false } = {}) => {
   if (!["basic", "pro"].includes(planId) || ![1, 3, 6, 12].includes(months)) return null;
   const plan = await getPlan(planId);
-  const total = plan.billingOptions.find(option => option.months === months).total;
+  const monthly = withSellerDiscount
+    ? (plan.discountPrice ?? plan.price)
+    : plan.price;
+  const multiplier = plan.periodMultipliers[months];
+  const total = Math.round(monthly * multiplier);
   if (!Number.isSafeInteger(total) || total <= 0) throw new Error("Importe de plan inválido");
   return {
-    plan, title: `Menú Digital — Plan ${plan.label}`, description: plan.description,
-    total, currency: plan.currency, version: plan.version,
+    plan,
+    title: `Menú Digital — Plan ${plan.label}`,
+    description: plan.description,
+    total,
+    currency: plan.currency,
+    version: plan.version,
+    withSellerDiscount: Boolean(withSellerDiscount),
   };
 };
 

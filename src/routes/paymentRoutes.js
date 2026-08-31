@@ -3,7 +3,10 @@ const crypto = require("crypto");
 const router = express.Router();
 const { MercadoPagoConfig, Preference } = require("mercadopago");
 const { protect } = require("../middleware/auth");
-const { getRegistrationStatus, mpWebhook } = require("../controllers/paymentController");
+const {
+  getRegistrationStatus,
+  mpWebhook,
+} = require("../controllers/paymentController");
 const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
 const User = require("../models/User");
@@ -18,13 +21,14 @@ const {
   decryptPendingPassword,
   encryptPendingPassword,
 } = require("../utils/pendingCredentials");
+const Seller = require("../models/Seller");
 
 // Cada operación recibe su propia configuración: el SDK muta `options`
 // al aplicar requestOptions y una instancia global puede heredar la clave
 // de idempotencia usada por otro checkout.
 const createPreferenceClient = () =>
   new Preference(
-    new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN })
+    new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN }),
   );
 
 const hashRegistrationToken = (token) =>
@@ -99,25 +103,41 @@ router.post("/crear-preferencia", protect, async (req, res) => {
     return res.status(400).json({ error: `Plan inválido: ${planId}` });
   }
   if (!VALID_PAYMENT_MONTHS.includes(months)) {
-    return res.status(400).json({ error: "Duración inválida. Opciones: 1, 3, 6 o 12 meses" });
+    return res
+      .status(400)
+      .json({ error: "Duración inválida. Opciones: 1, 3, 6 o 12 meses" });
   }
   if (PLAN_ORDER.indexOf(planId) < PLAN_ORDER.indexOf(req.user.subscription)) {
-    return res.status(400).json({ error: "El plan elegido no puede ser inferior al plan actual" });
+    return res
+      .status(400)
+      .json({ error: "El plan elegido no puede ser inferior al plan actual" });
   }
 
   let checkout = null;
   try {
     const plan = await catalog.getCheckoutQuote(planId, months);
-    if (!Number.isSafeInteger(req.body.planVersion) || req.body.planVersion !== plan.version) {
-      return res.status(409).json({ code: "PLAN_PRICE_CHANGED", error: "El plan cambió. Revisá los precios y beneficios actualizados antes de confirmar." });
+    if (
+      !Number.isSafeInteger(req.body.planVersion) ||
+      req.body.planVersion !== plan.version
+    ) {
+      return res
+        .status(409)
+        .json({
+          code: "PLAN_PRICE_CHANGED",
+          error:
+            "El plan cambió. Revisá los precios y beneficios actualizados antes de confirmar.",
+        });
     }
     const preference = createPreferenceClient();
     const totalPrice = plan.total;
     const isRenewal = planId === req.user.subscription;
     const currentExpiry = new Date(req.user.subscriptionExpiresAt || 0);
-    const renewalBase = isRenewal && !Number.isNaN(currentExpiry.getTime()) && currentExpiry > new Date()
-      ? currentExpiry
-      : new Date();
+    const renewalBase =
+      isRenewal &&
+      !Number.isNaN(currentExpiry.getTime()) &&
+      currentExpiry > new Date()
+        ? currentExpiry
+        : new Date();
     checkout = await PaymentCheckout.create({
       operation: isRenewal ? "renewal" : "upgrade",
       userID: req.user._id,
@@ -170,7 +190,9 @@ router.post("/crear-preferencia", protect, async (req, res) => {
       requestOptions: { idempotencyKey: `subscription-${checkout._id}` },
     });
     if (!result?.id || !result?.init_point) {
-      throw new Error("MercadoPago no devolvió una preferencia de checkout completa");
+      throw new Error(
+        "MercadoPago no devolvió una preferencia de checkout completa",
+      );
     }
 
     const readyCheckout = await PaymentCheckout.findByIdAndUpdate(
@@ -183,16 +205,19 @@ router.post("/crear-preferencia", protect, async (req, res) => {
           failureReason: null,
         },
       },
-      { new: true, runValidators: true }
+      { new: true, runValidators: true },
     );
     if (!readyCheckout) {
-      throw new Error("El checkout desapareció después de crear la preferencia");
+      throw new Error(
+        "El checkout desapareció después de crear la preferencia",
+      );
     }
 
     // Devolver la URL de pago al frontend
     res.json({ init_point: result.init_point });
   } catch (error) {
-    if (error.code === "PLAN_CATALOG_UNAVAILABLE") return handleError(res, error);
+    if (error.code === "PLAN_CATALOG_UNAVAILABLE")
+      return handleError(res, error);
     if (checkout?._id) {
       try {
         await PaymentCheckout.findByIdAndUpdate(checkout._id, {
@@ -229,6 +254,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     planId,
     months,
     registrationToken,
+    sellerCode,
   } = req.body;
 
   // --- Validaciones ---
@@ -243,7 +269,9 @@ router.post("/crear-preferencia-registro", async (req, res) => {
   }
 
   if (typeof password !== "string" || password.length < 8) {
-    return res.status(400).json({ error: "La contraseña debe tener al menos 8 caracteres" });
+    return res
+      .status(400)
+      .json({ error: "La contraseña debe tener al menos 8 caracteres" });
   }
 
   if (!["basic", "pro"].includes(planId)) {
@@ -252,7 +280,9 @@ router.post("/crear-preferencia-registro", async (req, res) => {
 
   const monthsNum = Number(months);
   if (!VALID_PAYMENT_MONTHS.includes(monthsNum)) {
-    return res.status(400).json({ error: "Duración inválida. Opciones: 1, 3, 6 o 12 meses" });
+    return res
+      .status(400)
+      .json({ error: "Duración inválida. Opciones: 1, 3, 6 o 12 meses" });
   }
 
   const cleanUsername = String(username).trim();
@@ -261,7 +291,8 @@ router.post("/crear-preferencia-registro", async (req, res) => {
 
   if (
     registrationToken !== undefined &&
-    (typeof registrationToken !== "string" || !/^[a-f0-9]{64}$/.test(registrationToken))
+    (typeof registrationToken !== "string" ||
+      !/^[a-f0-9]{64}$/.test(registrationToken))
   ) {
     return res.status(400).json({ error: "Token de registro inválido" });
   }
@@ -276,19 +307,78 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     hasRegistrationToken: Boolean(registrationToken),
   });
 
+  let seller = null;
+
   try {
-    paymentDebugStage = "checking_plan_catalog";
-    const plan = await catalog.getCheckoutQuote(planId, monthsNum);
-    if (!Number.isSafeInteger(req.body.planVersion) || req.body.planVersion !== plan.version) {
-      return res.status(409).json({ code: "PLAN_PRICE_CHANGED", error: "El plan cambió. Revisá los precios y beneficios actualizados antes de confirmar." });
+    if (
+      sellerCode !== undefined &&
+      sellerCode !== null &&
+      String(sellerCode).trim() !== ""
+    ) {
+      const code = String(sellerCode).trim().toUpperCase();
+      if (!/^[A-Z]{3}-\d{3}$/.test(code)) {
+        return res.status(400).json({ error: "Código de vendedor inválido" });
+      }
+      seller = await Seller.findOne({ code });
+      if (!seller) {
+        return res
+          .status(400)
+          .json({ error: "Código de vendedor no encontrado" });
+      }
     }
+    paymentDebugStage = "checking_plan_catalog";
+
+    // Código de vendedor (opcional). Inválido → 400, no se crea preferencia.
+    if (
+      sellerCode !== undefined &&
+      sellerCode !== null &&
+      String(sellerCode).trim() !== ""
+    ) {
+      const code = String(sellerCode).trim().toUpperCase();
+      if (!/^[A-Z]{3}-\d{3}$/.test(code)) {
+        return res.status(400).json({ error: "Código de vendedor inválido" });
+      }
+      seller = await Seller.findOne({ code });
+      if (!seller) {
+        return res
+          .status(400)
+          .json({ error: "Código de vendedor no encontrado" });
+      }
+    }
+
+    const catalogPlan = await catalog.getPlan(planId);
+    if (
+      !Number.isSafeInteger(req.body.planVersion) ||
+      req.body.planVersion !== catalogPlan.version
+    ) {
+      return res.status(409).json({
+        code: "PLAN_PRICE_CHANGED",
+        error:
+          "El plan cambió. Revisá los precios y beneficios actualizados antes de confirmar.",
+      });
+    }
+
+    // Con vendedor: precio promocional (discountPrice ?? price). Sin vendedor: lista.
+    const monthly = seller
+      ? (catalogPlan.discountPrice ?? catalogPlan.price)
+      : catalogPlan.price;
+    const unitPrice = Math.round(
+      monthly * catalogPlan.periodMultipliers[monthsNum],
+    );
+    if (!Number.isSafeInteger(unitPrice) || unitPrice <= 0) {
+      return res.status(400).json({ error: "Importe de plan inválido" });
+    }
+
+    const plan = {
+      title: `Menú Digital — Plan ${catalogPlan.label}`,
+      description: catalogPlan.description,
+      total: unitPrice,
+      version: catalogPlan.version,
+    };
     // Username o email ya usados
     paymentDebugStage = "checking_existing_user";
     const existing = await User.findOne({
-      $or: [
-        { username: cleanUsername },
-        { "contactInfo.mail": cleanMail },
-      ],
+      $or: [{ username: cleanUsername }, { "contactInfo.mail": cleanMail }],
     });
     if (existing) {
       return res.status(409).json({ error: "Usuario o email ya registrado" });
@@ -315,10 +405,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       const candidate = await PendingRegistration.findOne({
         status: "pending",
         expiresAt: { $gt: now },
-        $or: [
-          { username: cleanUsername },
-          { "contactInfo.mail": cleanMail },
-        ],
+        $or: [{ username: cleanUsername }, { "contactInfo.mail": cleanMail }],
       })
         .select("+password +passwordCiphertext +passwordIV +passwordAuthTag")
         .sort({ createdAt: -1 });
@@ -332,7 +419,8 @@ router.post("/crear-preferencia-registro", async (req, res) => {
 
         if (!sameIdentity) {
           return res.status(409).json({
-            error: "Ya existe un intento de registro pendiente para ese usuario o email",
+            error:
+              "Ya existe un intento de registro pendiente para ese usuario o email",
           });
         }
 
@@ -350,7 +438,9 @@ router.post("/crear-preferencia-registro", async (req, res) => {
         sameSecret(pendingPassword, password);
 
       if (!sameIdentity) {
-        return res.status(409).json({ error: "Los datos no coinciden con el registro pendiente" });
+        return res
+          .status(409)
+          .json({ error: "Los datos no coinciden con el registro pendiente" });
       }
     } else {
       // Primer intento: todavía no existe un User. La contraseña se conserva
@@ -368,6 +458,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
         planId,
         months: monthsNum,
         activationTokenHash: hashRegistrationToken(activationToken),
+        sellerID: seller ? seller._id : null,
       });
 
       paymentDebugStage = "saving_new_pending";
@@ -386,30 +477,34 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       hasPreferenceID: Boolean(pending.preferenceId),
       hasInitPoint: Boolean(pending.initPoint),
     });
-
+    pending.sellerID = seller ? seller._id : null;
     paymentDebugStage = "preparing_checkout";
-    const unitPrice = plan.total;
+
     const checkoutStartsAt = new Date();
     const checkoutExpiresAt = PendingRegistration.getCheckoutExpiration(
-      checkoutStartsAt.getTime()
+      checkoutStartsAt.getTime(),
     );
     const pendingExpiresAt = PendingRegistration.getPendingExpiration(
-      checkoutStartsAt.getTime()
+      checkoutStartsAt.getTime(),
     );
     paymentDebugStage = "loading_previous_checkout";
     const previousCheckout = pending.checkoutID
       ? await PaymentCheckout.findById(pending.checkoutID)
       : null;
+    const sameSeller =
+      String(pending.sellerID || "") === String(seller?._id || "");
+
     const canReuseCheckout = Boolean(
-      previousCheckout
-      && previousCheckout.status === "ready"
-      && previousCheckout.planId === planId
-      && previousCheckout.months === monthsNum
-      && previousCheckout.planVersion === plan.version
-      && previousCheckout.expectedAmount === unitPrice
-      && previousCheckout.currency === PAYMENT_CURRENCY
-      && pending.preferenceId
-      && pending.initPoint
+      previousCheckout &&
+      previousCheckout.status === "ready" &&
+      previousCheckout.planId === planId &&
+      previousCheckout.months === monthsNum &&
+      previousCheckout.planVersion === plan.version &&
+      previousCheckout.expectedAmount === unitPrice &&
+      previousCheckout.currency === PAYMENT_CURRENCY &&
+      sameSeller &&
+      pending.preferenceId &&
+      pending.initPoint,
     );
     paymentDebugStage = "persisting_checkout";
     console.log("[MP registro] checkout antes de persistir", {
@@ -503,16 +598,20 @@ router.post("/crear-preferencia-registro", async (req, res) => {
         hasStoredPreferenceID: Boolean(pending.preferenceId),
         hasStoredInitPoint: Boolean(pending.initPoint),
         responsePreferenceMatchesStored: Boolean(
-          result?.id && pending.preferenceId && result.id === pending.preferenceId
+          result?.id &&
+          pending.preferenceId &&
+          result.id === pending.preferenceId,
         ),
         responseInitPointMatchesStored: Boolean(
-          result?.init_point
-          && pending.initPoint
-          && result.init_point === pending.initPoint
+          result?.init_point &&
+          pending.initPoint &&
+          result.init_point === pending.initPoint,
         ),
       });
       if (!preferenceId || !initPoint) {
-        throw new Error("MercadoPago no devolvió una preferencia de checkout completa");
+        throw new Error(
+          "MercadoPago no devolvió una preferencia de checkout completa",
+        );
       }
     } catch (error) {
       if (!wasReused) {
@@ -551,10 +650,12 @@ router.post("/crear-preferencia-registro", async (req, res) => {
           failureReason: null,
         },
       },
-      { new: true, runValidators: true }
+      { new: true, runValidators: true },
     );
     if (!readyCheckout) {
-      throw new Error("El checkout desapareció después de crear la preferencia");
+      throw new Error(
+        "El checkout desapareció después de crear la preferencia",
+      );
     }
 
     console.log("[MP registro] preferencia preparada", {
@@ -571,7 +672,8 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       reused: wasReused,
     });
   } catch (error) {
-    if (error.code === "PLAN_CATALOG_UNAVAILABLE") return handleError(res, error);
+    if (error.code === "PLAN_CATALOG_UNAVAILABLE")
+      return handleError(res, error);
     console.error("[MP registro] diagnóstico estructurado", {
       paymentDebugID,
       stage: paymentDebugStage,
@@ -585,13 +687,34 @@ router.post("/crear-preferencia-registro", async (req, res) => {
           path,
           kind: detail?.kind,
           isNull: detail?.value === null,
-        })
+        }),
       ),
     });
     console.error("Error creando preferencia de registro:", error);
     res.status(500).json({ error: "No se pudo crear la preferencia de pago" });
   }
 });
+
+
+// POST /api/payments/validate-seller-code
+router.post("/validate-seller-code", async (req, res) => {
+  try {
+    const code = String(req.body.code || "").trim().toUpperCase();
+    if (!/^[A-Z]{3}-\d{3}$/.test(code)) {
+      return res.status(400).json({ valid: false, message: "Código inválido" });
+    }
+    const seller = await Seller.findOne({ code }).select("code");
+    if (!seller) {
+      return res.status(404).json({ valid: false, message: "Código no encontrado" });
+    }
+    res.json({ valid: true, code: seller.code });
+  } catch (error) {
+    handleError(res, error);
+  }
+});
+
+
+
 
 // El frontend consulta este endpoint al volver de MercadoPago. El token es
 // aleatorio y solo permite conocer si este registro puntual ya fue activado.
