@@ -1,6 +1,8 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
-const { getEffectivePlan, hasMinPlan } = require("../config/plans");
+const { getEffectivePlan } = require("../config/plans");
+const { getRequestPlan } = require("../services/planCatalog");
+const { handleError } = require("../utils/handleError");
 
 /**
  * Middleware que protege rutas privadas.
@@ -72,17 +74,21 @@ const isAdmin = (req, res, next) => {
 };
 
 /**
- * Middleware factory que restringe una ruta a usuarios con determinado
- * plan (o superior, según PLAN_ORDER en config/plans.js). Siempre se usa
- * después de protect, ya que necesita req.user.subscription.
+ * Restringe una operación por la configuración vigente guardada en MongoDB.
+ * Siempre se usa después de protect. No confía en permisos enviados por el cliente.
  *
- * Uso: router.post("/ruta-paga", protect, requirePlan("basic"), controller)
+ * Uso: router.post("/ruta-paga", protect, requireFeature("menu_pdf"), controller)
  */
-const requirePlan = (minPlan) => (req, res, next) => {
-  if (!hasMinPlan(req.user?.subscription, minPlan)) {
-    return res.status(403).json({ message: "Esta función requiere un plan pago." });
+const requireFeature = (feature) => async (req, res, next) => {
+  try {
+    const plan = await getRequestPlan(req);
+    if (plan.features[feature] !== true) {
+      return res.status(403).json({ code: "FEATURE_NOT_INCLUDED", feature, message: "Tu plan no incluye esta función." });
+    }
+    next();
+  } catch (error) {
+    return handleError(res, error);
   }
-  next();
 };
 
-module.exports = { protect, isAdmin, requirePlan };
+module.exports = { protect, isAdmin, requireFeature };

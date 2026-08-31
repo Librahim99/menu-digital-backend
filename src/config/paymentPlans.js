@@ -1,18 +1,18 @@
 const PAYMENT_CURRENCY = "ARS";
 
-// Fuente única de precios para crear el checkout. El webhook no vuelve a
-// calcular pagos nuevos con estos valores: valida contra el snapshot durable
-// que se guardó cuando se creó cada preferencia.
+// Valores históricos para inicializar documentos que todavía no existen.
+// El checkout consulta services/planCatalog; estos importes NO son un fallback.
+// El webhook valida el snapshot guardado, nunca recalcula el precio vigente.
 const PAYMENT_PLANS = {
   basic: {
     title: "Menú Digital — Plan Basic",
-    unitPrice: 2000,
+    unitPrice: 29999,
     description: "Hasta 50 productos, sin publicidad, Excel, programación, PDF y 5 diseños",
   },
   pro: {
     title: "Menú Digital — Plan Pro",
-    unitPrice: 5000,
-    description: "Productos ilimitados, métricas, reseñas integradas, dominio propio y 15 diseños",
+    unitPrice: 49999,
+    description: "Productos ilimitados, métricas y 15 diseños",
   },
 };
 

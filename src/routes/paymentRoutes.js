@@ -10,10 +10,10 @@ const User = require("../models/User");
 const { PLAN_ORDER } = require("../config/plans");
 const {
   PAYMENT_CURRENCY,
-  PAYMENT_PLANS,
   VALID_PAYMENT_MONTHS,
-  getCheckoutAmount,
 } = require("../config/paymentPlans");
+const catalog = require("../services/planCatalog");
+const { handleError } = require("../utils/handleError");
 const {
   decryptPendingPassword,
   encryptPendingPassword,
@@ -87,7 +87,7 @@ const buildRegistrationPreference = ({
  *          requiere estar logueado: así podemos guardar quién es el
  *          que paga (external_reference) y el webhook puede después
  *          actualizarle la suscripción a esa misma cuenta.
- * Body: { planId: "basic" | "pro", months: 1 | 3 | 6 | 12 }
+ * Body: { planId: "basic" | "pro", months: 1 | 3 | 6 | 12, planVersion: number }
  * Devuelve: { init_point: "https://..." }
  */
 router.post("/crear-preferencia", protect, async (req, res) => {
@@ -95,8 +95,7 @@ router.post("/crear-preferencia", protect, async (req, res) => {
   const months = Number(req.body.months);
 
   // Validar que el plan exista
-  const plan = PAYMENT_PLANS[planId];
-  if (!plan) {
+  if (!["basic", "pro"].includes(planId)) {
     return res.status(400).json({ error: `Plan inválido: ${planId}` });
   }
   if (!VALID_PAYMENT_MONTHS.includes(months)) {
@@ -108,8 +107,12 @@ router.post("/crear-preferencia", protect, async (req, res) => {
 
   let checkout = null;
   try {
+    const plan = await catalog.getCheckoutQuote(planId, months);
+    if (!Number.isSafeInteger(req.body.planVersion) || req.body.planVersion !== plan.version) {
+      return res.status(409).json({ code: "PLAN_PRICE_CHANGED", error: "El plan cambió. Revisá los precios y beneficios actualizados antes de confirmar." });
+    }
     const preference = createPreferenceClient();
-    const totalPrice = getCheckoutAmount(planId, months);
+    const totalPrice = plan.total;
     const isRenewal = planId === req.user.subscription;
     const currentExpiry = new Date(req.user.subscriptionExpiresAt || 0);
     const renewalBase = isRenewal && !Number.isNaN(currentExpiry.getTime()) && currentExpiry > new Date()
@@ -121,6 +124,7 @@ router.post("/crear-preferencia", protect, async (req, res) => {
       planId,
       months,
       expectedAmount: totalPrice,
+      planVersion: plan.version,
       currency: PAYMENT_CURRENCY,
       sourcePlan: req.user.subscription,
       sourceExpiresAt: req.user.subscriptionExpiresAt || null,
@@ -188,6 +192,7 @@ router.post("/crear-preferencia", protect, async (req, res) => {
     // Devolver la URL de pago al frontend
     res.json({ init_point: result.init_point });
   } catch (error) {
+    if (error.code === "PLAN_CATALOG_UNAVAILABLE") return handleError(res, error);
     if (checkout?._id) {
       try {
         await PaymentCheckout.findByIdAndUpdate(checkout._id, {
@@ -211,7 +216,7 @@ router.post("/crear-preferencia", protect, async (req, res) => {
  *   username, password, acceptedTerms,
  *   contactInfo: { mail, businessName },
  *   planId: "basic" | "pro",
- *   months: 1 | 3 | 6 | 12
+ *   months: 1 | 3 | 6 | 12, planVersion: number
  * }
  * Devuelve: { init_point: "https://..." }
  */
@@ -241,8 +246,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     return res.status(400).json({ error: "La contraseña debe tener al menos 8 caracteres" });
   }
 
-  const plan = PAYMENT_PLANS[planId];
-  if (!plan) {
+  if (!["basic", "pro"].includes(planId)) {
     return res.status(400).json({ error: `Plan inválido: ${planId}` });
   }
 
@@ -273,6 +277,11 @@ router.post("/crear-preferencia-registro", async (req, res) => {
   });
 
   try {
+    paymentDebugStage = "checking_plan_catalog";
+    const plan = await catalog.getCheckoutQuote(planId, monthsNum);
+    if (!Number.isSafeInteger(req.body.planVersion) || req.body.planVersion !== plan.version) {
+      return res.status(409).json({ code: "PLAN_PRICE_CHANGED", error: "El plan cambió. Revisá los precios y beneficios actualizados antes de confirmar." });
+    }
     // Username o email ya usados
     paymentDebugStage = "checking_existing_user";
     const existing = await User.findOne({
@@ -379,7 +388,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     });
 
     paymentDebugStage = "preparing_checkout";
-    const unitPrice = getCheckoutAmount(planId, monthsNum);
+    const unitPrice = plan.total;
     const checkoutStartsAt = new Date();
     const checkoutExpiresAt = PendingRegistration.getCheckoutExpiration(
       checkoutStartsAt.getTime()
@@ -396,6 +405,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       && previousCheckout.status === "ready"
       && previousCheckout.planId === planId
       && previousCheckout.months === monthsNum
+      && previousCheckout.planVersion === plan.version
       && previousCheckout.expectedAmount === unitPrice
       && previousCheckout.currency === PAYMENT_CURRENCY
       && pending.preferenceId
@@ -424,6 +434,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
           planId,
           months: monthsNum,
           expectedAmount: unitPrice,
+          planVersion: plan.version,
           currency: PAYMENT_CURRENCY,
         });
     console.log("[MP registro] checkout listo", {
@@ -560,6 +571,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       reused: wasReused,
     });
   } catch (error) {
+    if (error.code === "PLAN_CATALOG_UNAVAILABLE") return handleError(res, error);
     console.error("[MP registro] diagnóstico estructurado", {
       paymentDebugID,
       stage: paymentDebugStage,

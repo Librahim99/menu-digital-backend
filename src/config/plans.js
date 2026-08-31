@@ -7,63 +7,36 @@ const PLAN_MAP = {
   pro:   "pro",
 };
 
-// Orden de menor a mayor. hasMinPlan() compara por índice, así que el orden
-// de este array ES la jerarquía de planes. "free" es el piso (sin pagar).
+// Orden comercial para upgrades; no concede funcionalidades por jerarquía.
 const PLAN_ORDER = ["free", "basic", "pro"];
 
-// Features que DESBLOQUEA cada nivel (acumulativo vía getFeaturesForPlan:
-// un plan tiene lo suyo + todo lo de los planes inferiores).
-const PLAN_FEATURES = {
-  free:    ["menu_editor", "qr", "pedido_whatsapp", "landing_page"],
-  basic:   ["sin_publicidad", "carga_masiva_excel", "programacion_productos", "menu_pdf"],
-  pro:     ["estadisticas", "dominio_personalizado", "productos_ilimitados", "resenas_integradas"]
-};
+// Contrato técnico de funcionalidades implementadas; no asigna permisos a planes.
+// Las asignaciones, límites y selección de templates viven en la colección plans.
+const BOOLEAN_FEATURES = [
+  "menu_editor", "qr", "pedido_whatsapp", "landing_page", "sin_publicidad",
+  "carga_masiva_excel", "programacion_productos", "menu_pdf", "estadisticas",
+];
+const TEMPLATE_IDS = Array.from({ length: 15 }, (_, index) => index + 1);
 
-// Topes de productos. `null` significa ilimitado.
-const FREE_ITEM_LIMIT = 15;
-const BASIC_ITEM_LIMIT = 50;
-const ITEM_LIMITS = {
-  free: FREE_ITEM_LIMIT,
-  basic: BASIC_ITEM_LIMIT,
-  pro: null,
-};
+const isValidFeatures = (features) => features && typeof features === "object"
+  && !Array.isArray(features)
+  && Object.keys(features).length === BOOLEAN_FEATURES.length + 2
+  && BOOLEAN_FEATURES.every(key => typeof features[key] === "boolean")
+  && (features.item_limit === null || (Number.isSafeInteger(features.item_limit) && features.item_limit > 0))
+  && Array.isArray(features.templateIds) && features.templateIds.length > 0
+  && new Set(features.templateIds).size === features.templateIds.length
+  && features.templateIds.every(id => TEMPLATE_IDS.includes(id));
 
-// Plan mínimo requerido para usar cada template visual de la carta pública.
-// Es la fuente de verdad del gating escalonado de templates: el front espeja
-// este mapa (src/lib/plans.ts) para mostrar candados, y useTemplate lo valida
-// del lado del servidor. Cualquier id que no esté acá se considera inválido.
-//   free:    1 diseño base
-//   basic:   5 diseños totales (1–5)
-//   pro:     15 diseños totales (1–15)
-const TEMPLATE_MIN_PLAN = {
-  1: "free",
-  2: "basic", 3: "basic", 4: "basic", 5: "basic",
-  6: "pro", 7: "pro", 8: "pro", 9: "pro", 10: "pro",
-  11: "pro", 12: "pro", 13: "pro", 14: "pro", 15: "pro",
-};
+const isValidPeriodMultipliers = (multipliers) => multipliers && typeof multipliers === "object"
+  && !Array.isArray(multipliers)
+  && [Object.prototype, null].includes(Object.getPrototypeOf(multipliers))
+  && Object.keys(multipliers).length === 4
+  && multipliers[1] === 1
+  && [1, 3, 6, 12].every(months => Object.prototype.hasOwnProperty.call(multipliers, months)
+    && Number.isFinite(multipliers[months]) && multipliers[months] > 0 && multipliers[months] <= months);
 
-function getFeaturesForPlan(plan) {
-  const idx = PLAN_ORDER.indexOf(plan);
-  if (idx === -1) return [];
-  return PLAN_ORDER.slice(0, idx + 1).flatMap((p) => PLAN_FEATURES[p]);
-}
-
-function hasMinPlan(userPlan, requiredPlan) {
-  const userIndex = PLAN_ORDER.indexOf(userPlan);
-  const requiredIndex = PLAN_ORDER.indexOf(requiredPlan);
-  return userIndex !== -1 && requiredIndex !== -1 && userIndex >= requiredIndex;
-}
-
-function getItemLimit(plan) {
-  return Object.prototype.hasOwnProperty.call(ITEM_LIMITS, plan)
-    ? ITEM_LIMITS[plan]
-    : FREE_ITEM_LIMIT;
-}
-
-function getTemplateForPlan(template, plan) {
-  const requiredPlan = TEMPLATE_MIN_PLAN[template];
-  return requiredPlan && hasMinPlan(plan, requiredPlan) ? template : 1;
-}
+const getTemplateForFeatures = (template, features) =>
+  features.templateIds.includes(template) ? template : features.templateIds[0];
 
 // Compatibilidad: los usuarios pagos creados antes de incorporar vencimientos
 // no tienen subscriptionExpiresAt y conservan su plan actual.
@@ -73,16 +46,6 @@ function getEffectivePlan(userPlan, subscriptionExpiresAt, now = new Date()) {
 }
 
 module.exports = {
-  PLAN_MAP,
-  PLAN_ORDER,
-  PLAN_FEATURES,
-  FREE_ITEM_LIMIT,
-  BASIC_ITEM_LIMIT,
-  ITEM_LIMITS,
-  TEMPLATE_MIN_PLAN,
-  getFeaturesForPlan,
-  getItemLimit,
-  getTemplateForPlan,
-  getEffectivePlan,
-  hasMinPlan,
+  PLAN_MAP, PLAN_ORDER, BOOLEAN_FEATURES, TEMPLATE_IDS,
+  isValidFeatures, isValidPeriodMultipliers, getTemplateForFeatures, getEffectivePlan,
 };

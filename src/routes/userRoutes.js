@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { protect, requirePlan } = require("../middleware/auth");
+const { protect, requireFeature } = require("../middleware/auth");
 const { authLimiter } = require("../middleware/rateLimiters");
 const { uploadUser } = require("../config/cloudinary");
 const {
@@ -36,8 +36,8 @@ router.post("/login", authLimiter, loginUser);
 // ──────────────────────────────────────────────
 router.get("/me", protect, getAuthUser);    // Datos del user autenticado (panel admin)
 router.get("/me/menu", protect, fetchOwnMenu); // Menú completo del user autenticado, sin filtrar ocultos
-router.get("/me/stats", protect, requirePlan("pro"), fetchStats); // Estadísticas de visitas (plan pro+)
-router.get("/me/item-stats", protect, requirePlan("pro"), fetchItemStats); // Top de productos más vistos (plan pro+)
+router.get("/me/stats", protect, requireFeature("estadisticas"), fetchStats); // Estadísticas de visitas (plan pro+)
+router.get("/me/item-stats", protect, requireFeature("estadisticas"), fetchItemStats); // Top de productos más vistos (plan pro+)
 router.put("/me", protect, editUser);
 router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.post("/upload-background", protect, uploadUser.single("image"), uploadBackground);

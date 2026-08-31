@@ -40,6 +40,8 @@ const paymentCheckoutSchema = new mongoose.Schema(
       immutable: true,
     },
     expectedAmount: { type: Number, required: true, min: 0, immutable: true },
+    // Opcional solo por compatibilidad con checkouts anteriores al catálogo.
+    planVersion: { type: Number, min: 0, validate: Number.isSafeInteger, immutable: true },
     currency: {
       type: String,
       required: true,

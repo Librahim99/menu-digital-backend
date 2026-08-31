@@ -2,7 +2,7 @@ const { handleError } = require("../utils/handleError");
 const ExcelJS = require("exceljs");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
-const { getItemLimit } = require("../config/plans");
+const { getRequestPlan } = require("../services/planCatalog");
 const { normalizeOffer } = require("../utils/offers");
 
 // ──────────────────────────────────────────────
@@ -23,11 +23,11 @@ const countNewItemCodes = (itemsRows, existingItems) => {
   ).size;
 };
 
-const exceedsItemLimit = (plan, existingItems, itemsRows) => {
-  const itemLimit = getItemLimit(plan);
+const exceedsItemLimit = (itemLimit, existingItems, itemsRows) => {
   if (itemLimit === null) return null;
-  const requestedTotal = existingItems.length + countNewItemCodes(itemsRows, existingItems);
-  return requestedTotal > itemLimit ? { itemLimit, requestedTotal } : null;
+  const newCount = countNewItemCodes(itemsRows, existingItems);
+  const requestedTotal = existingItems.length + newCount;
+  return newCount > 0 && requestedTotal > itemLimit ? { itemLimit, requestedTotal } : null;
 };
 
 // ──────────────────────────────────────────────
@@ -254,7 +254,7 @@ const previewMassive = async (req, res) => {
     const existingItems = await Item.find({
       menuID: { $in: existingMenus.map((m) => m._id) },
     });
-    const limitExceeded = exceedsItemLimit(req.user.subscription, existingItems, itemsRows);
+    const limitExceeded = exceedsItemLimit((await getRequestPlan(req)).features.item_limit, existingItems, itemsRows);
     if (limitExceeded) {
       return res.status(403).json({
         message: `La importación dejaría ${limitExceeded.requestedTotal} productos y tu plan permite hasta ${limitExceeded.itemLimit}.`,
@@ -371,7 +371,7 @@ const confirmMassive = async (req, res) => {
     // Se valida antes de crear categorías para evitar una importación parcial
     // si el Excel supera el límite de productos del plan.
     const existingItems = await Item.find({ menuID: { $in: existingMenus.map((m) => m._id) } });
-    const limitExceeded = exceedsItemLimit(req.user.subscription, existingItems, itemsRows);
+    const limitExceeded = exceedsItemLimit((await getRequestPlan(req)).features.item_limit, existingItems, itemsRows);
     if (limitExceeded) {
       return res.status(403).json({
         message: `La importación dejaría ${limitExceeded.requestedTotal} productos y tu plan permite hasta ${limitExceeded.itemLimit}.`,

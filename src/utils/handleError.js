@@ -5,6 +5,9 @@
 // nunca para el usuario final (y sí le sirve a un atacante).
 const handleError = (res, error, status = 500) => {
   console.error(error);
+  if (error?.code === "PLAN_CATALOG_UNAVAILABLE") {
+    return res.status(503).json({ code: error.code, message: "No se pudo consultar el plan. Intentá de nuevo." });
+  }
   res.status(status).json({ message: "Ocurrió un error interno. Intentá de nuevo." });
 };
 

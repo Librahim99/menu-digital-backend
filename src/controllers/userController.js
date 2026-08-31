@@ -8,11 +8,10 @@ const PageView = require("../models/PageView");
 const ItemView = require("../models/ItemView");
 const {
   getEffectivePlan,
-  getItemLimit,
-  getTemplateForPlan,
-  hasMinPlan,
-  TEMPLATE_MIN_PLAN,
+  getTemplateForFeatures,
+  TEMPLATE_IDS,
 } = require("../config/plans");
+const { getPlanForUser, getRequestPlan } = require("../services/planCatalog");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { buildMenuHTML } = require("../utils/menuPdfTemplate");
@@ -54,21 +53,20 @@ const trackItemView = (userID, itemID) => {
   ).catch(() => {});
 };
 
-const getContactInfoForPlan = (contactInfo, plan) => {
-  const filtered = contactInfo?.toObject?.() ?? { ...(contactInfo || {}) };
-  if (!hasMinPlan(plan, "pro")) {
-    delete filtered.googleReviewUrl;
-    delete filtered.googlePlaceId;
-    delete filtered.googleRating;
-    delete filtered.googleReviewCount;
-  }
-  return filtered;
+// Exponer y editar solo el contrato vigente, aunque un documento antiguo
+// todavía conserve campos que ya no forman parte del producto.
+const getContactInfo = (contactInfo) => {
+  const source = contactInfo?.toObject?.() ?? contactInfo ?? {};
+  const fields = ["mail", "number", "location", "address", "social", "businessName", "reservationMessage"];
+  return Object.fromEntries(fields
+    .filter(field => Object.prototype.hasOwnProperty.call(source, field))
+    .map(field => [field, source[field]]));
 };
 
-const getPublicItemForPlan = (item, plan) => {
+const getPublicItemForPlan = (item, features) => {
   const filtered = item.toObject({ flattenMaps: true });
   const hasSchedule = filtered.offerRange?.from || filtered.offerRange?.to;
-  if (hasSchedule && !hasMinPlan(plan, "basic")) {
+  if (hasSchedule && !features.programacion_productos) {
     filtered.offerPrice = null;
     filtered.offerRange = { from: null, to: null };
   }
@@ -77,7 +75,7 @@ const getPublicItemForPlan = (item, plan) => {
   }
   if (
     filtered.available &&
-    hasMinPlan(plan, "basic") &&
+    features.programacion_productos &&
     filtered.availabilitySchedule?.enabled
   ) {
     filtered.available = isScheduleAvailableAt(filtered.availabilitySchedule);
@@ -139,6 +137,9 @@ if (acceptedTerms !== true) {
     message: "Debes aceptar los términos y condiciones",
   });
 }
+
+    // El alta gratuita también exige un catálogo disponible y válido.
+    await getPlanForUser({ subscription: "free" });
 
     // Crea el user; el hook pre-save hashea la password automáticamente
     const user = await createUserWithUniqueSlug({
@@ -217,12 +218,14 @@ const getAuthUser = async (req, res) => {
     const menuIDs = categorias.map(m => m._id);
     const itemCount = await Item.countDocuments({ menuID: { $in: menuIDs }, hidden: false });
 
-    const effectivePlan = getEffectivePlan(user.subscription, user.subscriptionExpiresAt);
+    const plan = await getPlanForUser(user);
+    const effectivePlan = plan.name;
     res.json({
       ...user.toObject(),
-      contactInfo: getContactInfoForPlan(user.contactInfo, effectivePlan),
+      contactInfo: getContactInfo(user.contactInfo),
       subscription: effectivePlan,
-      template: getTemplateForPlan(user.template, effectivePlan),
+      features: plan.features,
+      template: getTemplateForFeatures(user.template, plan.features),
       itemCount,
       categoryCount: categorias.length,
     });
@@ -246,7 +249,8 @@ const fetchUserWithMenu = async (req, res) => {
  
     const user = await User.findOne({ slug: slugNormalizado, active: true });
     if (!user) return res.status(404).json({ message: "Local no encontrado" });
-    const effectivePlan = getEffectivePlan(user.subscription, user.subscriptionExpiresAt);
+    const plan = await getPlanForUser(user);
+    const effectivePlan = plan.name;
 
     // Esta ruta es la que carga el cliente al ver la carta (ej: al escanear
     // el QR de la mesa), así que es el lugar correcto para contar la
@@ -268,12 +272,13 @@ const fetchUserWithMenu = async (req, res) => {
 
     const userFiltered = {
       _id: user._id,
-      contactInfo: getContactInfoForPlan(user.contactInfo, effectivePlan),
+      contactInfo: getContactInfo(user.contactInfo),
       media: user.media,
       hasDelivery: user.hasDelivery,
-      template: getTemplateForPlan(user.template, effectivePlan),
+      template: getTemplateForFeatures(user.template, plan.features),
       schedule: user.schedule,
       subscription: effectivePlan,
+      features: plan.features,
     }
  
     const menuArmado = {
@@ -285,7 +290,7 @@ const fetchUserWithMenu = async (req, res) => {
             ...cat.toObject(),
             items: allItems
               .filter((item) => item.menuID.equals(cat._id))
-              .map((item) => getPublicItemForPlan(item, effectivePlan)),
+              .map((item) => getPublicItemForPlan(item, plan.features)),
           })),
       })),
       sinSeccion: categorias
@@ -294,7 +299,7 @@ const fetchUserWithMenu = async (req, res) => {
           ...cat.toObject(),
           items: allItems
             .filter((item) => item.menuID.equals(cat._id))
-            .map((item) => getPublicItemForPlan(item, effectivePlan)),
+            .map((item) => getPublicItemForPlan(item, plan.features)),
         })),
     };
  
@@ -321,9 +326,9 @@ const downloadMenuPdf = async (req, res) => {
 
     const user = await User.findOne({ slug: slugNormalizado, active: true });
     if (!user) return res.status(404).json({ message: "Local no encontrado" });
-    const effectivePlan = getEffectivePlan(user.subscription, user.subscriptionExpiresAt);
-    if (!hasMinPlan(effectivePlan, "basic")) {
-      return res.status(403).json({ message: "Exportar el menú a PDF requiere el plan Basic." });
+    const plan = await getPlanForUser(user);
+    if (!plan.features.menu_pdf) {
+      return res.status(403).json({ message: "Tu plan no incluye exportar el menú a PDF." });
     }
 
     const menus = await Menu.find({ userID: user._id, hidden: false });
@@ -339,7 +344,7 @@ const downloadMenuPdf = async (req, res) => {
       available: true,
       isExtra: false,
     }).select("-__v")).filter((item) =>
-      getPublicItemForPlan(item, effectivePlan).available
+      getPublicItemForPlan(item, plan.features).available
     );
 
     const secciones  = menus.filter((m) => m.section === true);
@@ -357,7 +362,7 @@ const downloadMenuPdf = async (req, res) => {
             ...cat.toObject(),
             items: allItems
               .filter((item) => item.menuID.equals(cat._id))
-              .map((item) => getPublicItemForPlan(item, effectivePlan)),
+              .map((item) => getPublicItemForPlan(item, plan.features)),
           })),
       })),
       sinSeccion: categorias
@@ -366,7 +371,7 @@ const downloadMenuPdf = async (req, res) => {
           ...cat.toObject(),
           items: allItems
             .filter((item) => item.menuID.equals(cat._id))
-            .map((item) => getPublicItemForPlan(item, effectivePlan)),
+            .map((item) => getPublicItemForPlan(item, plan.features)),
         })),
     };
 
@@ -444,16 +449,18 @@ const fetchOwnMenu = async (req, res) => {
     // El front usa esto para mostrar "X/límite productos", deshabilitar
     // "Agregar producto" al llegar al tope, y mostrar el candado en
     // "Importar desde Excel" — la fuente de verdad real sigue siendo
-    // el check en newItem y el middleware requirePlan en massiveRoutes,
+    // el check en newItem y el middleware requireFeature en massiveRoutes,
     // esto es solo para la UI.
-    const itemLimit = getItemLimit(req.user.subscription);
+    const { features } = await getRequestPlan(req);
+    const itemLimit = features.item_limit;
     const limits = {
       itemCount: allItems.length,
       itemLimit,
-      canImportExcel: hasMinPlan(req.user.subscription, "basic"),
-      canExportPdf: hasMinPlan(req.user.subscription, "basic"),
-      canScheduleItems: hasMinPlan(req.user.subscription, "basic"),
-      canScheduleOffers: hasMinPlan(req.user.subscription, "basic"),
+      canEditMenu: features.menu_editor,
+      canImportExcel: features.carga_masiva_excel,
+      canExportPdf: features.menu_pdf,
+      canScheduleItems: features.programacion_productos,
+      canScheduleOffers: features.programacion_productos,
     };
 
     res.json({ menu: menuArmado, limits });
@@ -465,7 +472,7 @@ const fetchOwnMenu = async (req, res) => {
 // ──────────────────────────────────────────────
 // @desc    Estadísticas de visitas a la carta pública del usuario
 //          autenticado: total y serie diaria de los últimos 30 días.
-//          El gating a pro+ lo hace el middleware requirePlan
+//          El gating de estadísticas lo hace el middleware requireFeature
 //          en la ruta, no este controller.
 // @route   GET /api/users/me/stats
 // @access  Private (pro+)
@@ -594,16 +601,22 @@ const fetchUser = async (req, res) => {
  
     const user = await User.findOne({ slug: slugNormalizado, active: true });
     if (!user) return res.status(404).json({ message: "Local no encontrado" });
-    const effectivePlan = getEffectivePlan(user.subscription, user.subscriptionExpiresAt);
+    const plan = await getPlanForUser(user);
+    const effectivePlan = plan.name;
+
+    if (!plan.features.landing_page) {
+      return res.status(403).json({ code: "LANDING_NOT_INCLUDED", message: "La página del local no está incluida en este plan. Consultá la carta." });
+    }
 
     const userFiltered = {
       _id: user._id,
-      contactInfo: getContactInfoForPlan(user.contactInfo, effectivePlan),
+      contactInfo: getContactInfo(user.contactInfo),
       media: user.media,
       hasDelivery: user.hasDelivery,
-      template: getTemplateForPlan(user.template, effectivePlan),
+      template: getTemplateForFeatures(user.template, plan.features),
       schedule: user.schedule,
       subscription: effectivePlan,
+      features: plan.features,
     }
  
     res.json( userFiltered );
@@ -630,35 +643,16 @@ const editUser = async (req, res) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
 
-    const restrictedReviewFields = ["googleReviewUrl", "googlePlaceId"];
-    const triesToUpdateReviews = restrictedReviewFields.some((field) =>
-      Object.prototype.hasOwnProperty.call(updates.contactInfo || {}, field)
-    );
-    if (triesToUpdateReviews && !hasMinPlan(req.user.subscription, "pro")) {
-      return res.status(403).json({ message: "Las reseñas integradas requieren el plan Pro." });
-    }
-
-    // `contactInfo` es un subdocumento. Mezclamos con el valor actual para
-    // que omitir los campos Pro desde un plan inferior no los borre al
-    // guardar otros datos del negocio.
+    // Conservar los datos de contacto vigentes que no llegan en una edición
+    // parcial, sin volver a aceptar campos retirados enviados por clientes viejos.
     if (updates.contactInfo) {
       updates.contactInfo = {
-        ...(req.user.contactInfo?.toObject?.() ?? {}),
-        ...updates.contactInfo,
+        ...getContactInfo(req.user.contactInfo),
+        ...getContactInfo(updates.contactInfo),
       };
     }
 
-    // Único campo de contactInfo con validación propia: se renderiza como
-    // link real en la carta pública, así que al menos evitamos guardar
-    // cualquier cosa que no sea una URL (el resto de contactInfo son
-    // strings libres sin validar, a propósito, para no bloquear al dueño).
-    const reviewUrl = updates.contactInfo?.googleReviewUrl;
-    if (reviewUrl && !/^https?:\/\//i.test(reviewUrl)) {
-      return res.status(400).json({ message: "El link de reseñas debe empezar con http:// o https://" });
-    }
-
-    // Validación liviana del horario: mismo criterio que reviewUrl arriba,
-    // solo lo mínimo para que la carta pública no reciba datos que rompan
+    // Validación liviana del horario para que la carta pública no reciba datos que rompan
     // el cálculo de "abierto ahora" (ver ScheduleSection en UserHome.tsx).
     // El front (UserEditor.tsx) ya valida esto mismo antes de mandar, esto
     // es la segunda barrera del lado del servidor.
@@ -818,16 +812,13 @@ const useTemplate = async (req, res) => {
       return res.status(400).json({ message: "Template debe ser un número" });
     }
 
-    // TEMPLATE_MIN_PLAN es la fuente de verdad del gating escalonado (ver
-    // config/plans.js). Si el id no está en el mapa es un template inexistente.
-    // Este check es la barrera real: el front muestra candados/upsell, pero
-    // esto impide guardarlo aunque alguien se saltee la UI (PATCH directo).
-    const minPlan = TEMPLATE_MIN_PLAN[template];
-    if (!minPlan) {
+    // La lista técnica valida el ID; MongoDB decide si el usuario puede usarlo.
+    if (!TEMPLATE_IDS.includes(template)) {
       return res.status(400).json({ message: "Template inválido" });
     }
-    if (!hasMinPlan(req.user.subscription, minPlan)) {
-      return res.status(403).json({ message: "Ese template requiere un plan superior." });
+    const { features } = await getRequestPlan(req);
+    if (!features.templateIds.includes(template)) {
+      return res.status(403).json({ message: "Tu plan no incluye ese template." });
     }
 
     const previousTemplate = req.user.template;

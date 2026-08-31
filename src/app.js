@@ -16,7 +16,7 @@ const { apiLimiter } = require("./middleware/rateLimiters");
 // Fallar antes de abrir el puerto evita aceptar registros o pagos con una
 // configuración parcial, credenciales de prueba en producción o sin firma.
 validateEnvironment();
-connectDB();
+const { initializePlans } = require("./services/planCatalog");
 
 const app = express();
 
@@ -73,6 +73,8 @@ app.use("/api", apiLimiter);
 // intercepte el GET /:userID de adminRoutes.
 app.use("/api/admin/crm", require("./routes/crmRoutes"));
 app.use("/api/admin/payments", require("./routes/adminPaymentRoutes"));
+app.use("/api/admin/plans", require("./routes/adminPlanRoutes"));
+app.use("/api/plans", require("./routes/planRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"))
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/menus", require("./routes/menuRoutes"));
@@ -130,6 +132,14 @@ app.use((err, req, res, next) => {
 // Inicio del servidor
 // ──────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+const start = async () => {
+  await connectDB();
+  await initializePlans();
+  app.listen(PORT, () => {
+    console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
+  });
+};
+start().catch(error => {
+  console.error("No se pudo iniciar la API con un catálogo válido:", error);
+  process.exit(1);
 });

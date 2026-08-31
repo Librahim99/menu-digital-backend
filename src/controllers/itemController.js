@@ -1,7 +1,7 @@
 const { handleError } = require("../utils/handleError");
 const Item = require("../models/Item");
 const Menu = require("../models/Menu");
-const { getItemLimit, hasMinPlan } = require("../config/plans");
+const { getRequestPlan } = require("../services/planCatalog");
 const { validateAvailabilitySchedule } = require("../utils/itemAvailability");
 const { normalizeOffer } = require("../utils/offers");
 
@@ -37,7 +37,8 @@ const newItem = async (req, res) => {
     const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
 
     // Tope total escalonado por plan (todas las categorías juntas).
-    const itemLimit = getItemLimit(req.user.subscription);
+    const { features } = await getRequestPlan(req);
+    const itemLimit = features.item_limit;
     if (itemLimit !== null) {
       const itemCount = await Item.countDocuments({ menuID: { $in: userMenuIDs } });
       if (itemCount >= itemLimit) {
@@ -49,16 +50,16 @@ const newItem = async (req, res) => {
 
     const normalizedOffer = normalizeOffer({ price, offerPrice, offerRange });
     if (normalizedOffer.error) return res.status(400).json({ message: normalizedOffer.error });
-    if (normalizedOffer.isScheduled && !hasMinPlan(req.user.subscription, "basic")) {
-      return res.status(403).json({ message: "La programación de ofertas requiere el plan Basic." });
+    if (normalizedOffer.isScheduled && !features.programacion_productos) {
+      return res.status(403).json({ message: "La programación de ofertas no está incluida en tu plan." });
     }
 
     let normalizedAvailabilitySchedule;
     if (availabilitySchedule !== undefined) {
       const validation = validateAvailabilitySchedule(availabilitySchedule);
       if (validation.error) return res.status(400).json({ message: validation.error });
-      if (validation.schedule.enabled && !hasMinPlan(req.user.subscription, "basic")) {
-        return res.status(403).json({ message: "Programar la disponibilidad requiere el plan Basic." });
+      if (validation.schedule.enabled && !features.programacion_productos) {
+        return res.status(403).json({ message: "Programar la disponibilidad no está incluida en tu plan." });
       }
       normalizedAvailabilitySchedule = validation.schedule;
     }
@@ -117,6 +118,7 @@ const editItem = async (req, res) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
 
+    const { features } = await getRequestPlan(req);
     const changesOffer = updates.offerPrice !== undefined || updates.offerRange !== undefined;
     const changesPrice = updates.price !== undefined && (
       updates.price == null ? item.price != null : Number(updates.price) !== Number(item.price)
@@ -128,8 +130,8 @@ const editItem = async (req, res) => {
         offerRange: updates.offerRange !== undefined ? updates.offerRange : item.offerRange,
       });
       if (normalizedOffer.error) return res.status(400).json({ message: normalizedOffer.error });
-      if (changesOffer && normalizedOffer.isScheduled && !hasMinPlan(req.user.subscription, "basic")) {
-        return res.status(403).json({ message: "La programación de ofertas requiere el plan Basic." });
+      if (changesOffer && normalizedOffer.isScheduled && !features.programacion_productos) {
+        return res.status(403).json({ message: "La programación de ofertas no está incluida en tu plan." });
       }
       if (changesOffer) {
         updates.offerPrice = normalizedOffer.offerPrice;
@@ -140,8 +142,8 @@ const editItem = async (req, res) => {
     if (updates.availabilitySchedule !== undefined) {
       const validation = validateAvailabilitySchedule(updates.availabilitySchedule);
       if (validation.error) return res.status(400).json({ message: validation.error });
-      if (validation.schedule.enabled && !hasMinPlan(req.user.subscription, "basic")) {
-        return res.status(403).json({ message: "Programar la disponibilidad requiere el plan Basic." });
+      if (validation.schedule.enabled && !features.programacion_productos) {
+        return res.status(403).json({ message: "Programar la disponibilidad no está incluida en tu plan." });
       }
       updates.availabilitySchedule = validation.schedule;
     }
