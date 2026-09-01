@@ -146,7 +146,23 @@ const editItem = async (req, res) => {
         updates.offerPrice = normalizedOffer.offerPrice;
         updates.offerRange = normalizedOffer.offerRange;
       }
-    }
+      // ---- create ----
+        if (req.body.price != null && Number(req.body.price) < 0) {
+          return res.status(400).json({ message: "El precio no puede ser negativo" });
+        }
+        if (req.body.offerPrice != null && Number(req.body.offerPrice) < 0) {
+          return res.status(400).json({ message: "El precio de oferta no puede ser negativo" });
+        }
+
+        // ---- update (inside the block that already handles price/offer) ----
+        if (updates.price !== undefined && updates.price != null && Number(updates.price) < 0) {
+          return res.status(400).json({ message: "El precio no puede ser negativo" });
+        }
+        if (updates.offerPrice !== undefined && updates.offerPrice != null && Number(updates.offerPrice) < 0) {
+          return res.status(400).json({ message: "El precio de oferta no puede ser negativo" });
+        }
+
+      }
 
     if (updates.availabilitySchedule !== undefined) {
       const validation = validateAvailabilitySchedule(updates.availabilitySchedule);
