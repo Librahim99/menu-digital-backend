@@ -1672,7 +1672,7 @@ test("el alta encadena pending, aprobación, completed y sesión autenticada", a
   assert.equal(paymentContext.crmUpdates.length, 1);
 });
 
-test("un alta paga crea el usuario con plan y vencimiento correctos", async (t) => {
+test("un alta con sellerID crea el usuario y suma los 7 días de vendedor", async (t) => {
   const previousSecret = process.env.PENDING_REGISTRATION_SECRET;
   process.env.PENDING_REGISTRATION_SECRET = "secret-de-prueba-con-mas-de-32-caracteres";
   t.after(() => {
@@ -1691,6 +1691,7 @@ test("un alta paga crea el usuario con plan y vencimiento correctos", async (t) 
     contactInfo: { mail: "test@example.com", businessName: "Restaurante Test" },
     months: 12,
     preferenceId: PREFERENCE_ID,
+    sellerID: "64f000000000000000000321",
   };
   t.mock.method(PendingRegistration, "findById", () => ({
     select: async () => pending,
@@ -1715,7 +1716,8 @@ test("un alta paga crea el usuario con plan y vencimiento correctos", async (t) 
   assert.equal(res.statusCode, 200);
   assert.equal(created.password, "password-seguro");
   assert.equal(created.subscription, "pro");
-  assert.equal(created.subscriptionExpiresAt.toISOString(), "2027-08-21T15:00:00.000Z");
+  assert.equal(created.sellerID, pending.sellerID);
+  assert.equal(created.subscriptionExpiresAt.toISOString(), "2027-08-28T15:00:00.000Z");
   assert.equal(pendingUpdate.id, PENDING_REGISTRATION_ID);
   assert.deepEqual(pendingUpdate.update.$unset, {
     password: 1,
@@ -1735,7 +1737,7 @@ test("un alta paga crea el usuario con plan y vencimiento correctos", async (t) 
   assert.equal(transaction.subscriptionExpiresAtBefore, null);
   assert.equal(
     transaction.subscriptionExpiresAtAfter.toISOString(),
-    "2027-08-21T15:00:00.000Z"
+    "2027-08-28T15:00:00.000Z"
   );
   assert.equal(paymentContext.crmUpdates.length, 1);
 });

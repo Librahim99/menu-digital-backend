@@ -6,6 +6,7 @@ const User = require("../src/models/User");
 const PendingRegistration = require("../src/models/PendingRegistration");
 const PaymentCheckout = require("../src/models/PaymentCheckout");
 const Plan = require("../src/models/Plan");
+const Seller = require("../src/models/Seller");
 const catalog = require("../src/services/planCatalog");
 const planController = require("../src/controllers/planController");
 const { getCheckoutAmount } = require("../src/config/paymentPlans");
@@ -13,6 +14,7 @@ const { getCheckoutAmount } = require("../src/config/paymentPlans");
 process.env.MP_ACCESS_TOKEN = "TEST-token";
 process.env.MP_WEBHOOK_URL = "https://backend.test/api/payments/webhook";
 process.env.FRONTEND_URL = "https://frontend.test";
+process.env.PENDING_REGISTRATION_SECRET = "test-secret-with-at-least-32-characters";
 
 const paymentRouter = require("../src/routes/paymentRoutes");
 
@@ -101,8 +103,10 @@ const mockPendingLookup = (t, pending) => {
   }));
 };
 
-const silencePaymentLogs = (t) => {
-  t.mock.method(Plan, "findOne", async ({ name }) => new Plan({ ...catalog.INITIAL_PLANS.find(plan => plan.name === name), __v: 0 }));
+const silencePaymentLogs = (t, planOverrides = {}) => {
+  t.mock.method(Plan, "findOne", async ({ name }) => new Plan({
+    ...catalog.INITIAL_PLANS.find(plan => plan.name === name), __v: 0, ...planOverrides,
+  }));
   t.mock.method(console, "log", () => {});
   t.mock.method(console, "error", () => {});
 };
@@ -133,7 +137,7 @@ for (const path of ["/crear-preferencia", "/crear-preferencia-registro"]) {
   });
 }
 
-test("upgrade y renovación cotizan todos los períodos desde MongoDB y guardan ese importe", async (t) => {
+test("upgrade y renovación usan precio regular aunque exista descuento para vendedor", async (t) => {
   silencePaymentLogs(t);
   let saved, sent;
   t.mock.method(Plan, "findOne", async ({ name }) => new Plan({
@@ -152,7 +156,7 @@ test("upgrade y renovación cotizan todos los períodos desde MongoDB y guardan 
         const res = createResponse();
         await getHandler("/crear-preferencia")({ user: { _id: "owner", subscription }, body: { planId, months, planVersion: 7, amount: 1 } }, res);
         assert.equal(res.statusCode, 200);
-        assert.equal(saved.expectedAmount, Math.round(45000 * multiplier));
+        assert.equal(saved.expectedAmount, Math.round(61000 * multiplier));
         assert.equal(sent.items[0].unit_price, saved.expectedAmount);
         assert.equal(saved.planVersion, 7);
         assert.equal(saved.operation, subscription === "free" ? "upgrade" : "renewal");
@@ -160,6 +164,74 @@ test("upgrade y renovación cotizan todos los períodos desde MongoDB y guardan 
     }
   }
 });
+
+test(
+  "el alta aplica discountPrice únicamente cuando el código resuelve un sellerID",
+  { concurrency: false },
+  async (t) => {
+    silencePaymentLogs(t, {
+      price: 61000,
+      discountPrice: 45000,
+      periodMultipliers: { 1: 1, 3: 2.5, 6: 4.5, 12: 8 },
+      __v: 7,
+    });
+    const sellerID = "64f000000000000000000777";
+    let sellerLookups = 0;
+    const pendingDocuments = new Set();
+    const checkoutSnapshots = [];
+    const sentAmounts = [];
+
+    t.mock.method(Seller, "findOne", async ({ code }) => {
+      sellerLookups += 1;
+      assert.equal(code, "ABC-123");
+      return { _id: sellerID, code };
+    });
+    t.mock.method(User, "findOne", async () => null);
+    t.mock.method(PendingRegistration, "findOne", () => ({
+      select() { return this; },
+      async sort() { return null; },
+    }));
+    t.mock.method(PendingRegistration.prototype, "save", async function () {
+      pendingDocuments.add(this);
+      return this;
+    });
+    t.mock.method(PaymentCheckout, "create", async (snapshot) => {
+      checkoutSnapshots.push(structuredClone(snapshot));
+      return { ...snapshot, _id: `registration-checkout-${checkoutSnapshots.length}` };
+    });
+    t.mock.method(PaymentCheckout, "findByIdAndUpdate", async (id, update) => ({
+      _id: id,
+      status: update.$set.status,
+    }));
+    t.mock.method(RestClient, "fetch", async (_url, config) => {
+      const body = JSON.parse(config.body);
+      sentAmounts.push(body.items[0].unit_price);
+      return {
+        id: `preference-${sentAmounts.length}`,
+        init_point: `https://mercadopago.test/preference-${sentAmounts.length}`,
+      };
+    });
+
+    for (const overrides of [{}, { sellerCode: "abc-123" }]) {
+      const res = createResponse();
+      await getHandler("/crear-preferencia-registro")({
+        body: createRegistrationBody({ planVersion: 7, ...overrides }),
+      }, res);
+      assert.equal(res.statusCode, 200);
+    }
+
+    assert.deepEqual(
+      checkoutSnapshots.map(({ expectedAmount }) => expectedAmount),
+      [152500, 112500],
+    );
+    assert.deepEqual(sentAmounts, [152500, 112500]);
+    assert.deepEqual(
+      [...pendingDocuments].map(pending => String(pending.sellerID || "")),
+      ["", sellerID],
+    );
+    assert.equal(sellerLookups, 1);
+  },
+);
 
 test("cambiar solo multiplicadores exige reconfirmar y conserva el importe de checkouts anteriores", async (t) => {
   silencePaymentLogs(t);

@@ -86,7 +86,8 @@ const newItem = async (req, res) => {
 //          (título, descripción, precios, opciones, etc.)
 //          No mueve el item entre categorías — para eso está moveItem.
 //          No cambia imagen — para eso está uploadImage.
-//          No cambia hidden/available — para eso están setHidden/setAvailable.
+//          hidden/available también llegan desde el formulario completo;
+//          setHidden/setAvailable quedan para los toggles rápidos.
 // @route   PUT /api/items/:itemID
 // @access  Private
 // ──────────────────────────────────────────────
@@ -110,6 +111,8 @@ const editItem = async (req, res) => {
   "options",
   "isExtra",
   "recommended",
+  "hidden",
+  "available",
   "apt",
 ];
  
@@ -117,6 +120,12 @@ const editItem = async (req, res) => {
     allowedFields.forEach((field) => {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
     });
+
+    for (const field of ["available", "hidden", "recommended"]) {
+      if (updates[field] !== undefined && typeof updates[field] !== "boolean") {
+        return res.status(400).json({ message: `${field} debe ser un booleano` });
+      }
+    }
 
     const { features } = await getRequestPlan(req);
     const changesOffer = updates.offerPrice !== undefined || updates.offerRange !== undefined;
