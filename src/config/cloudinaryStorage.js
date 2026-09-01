@@ -1,46 +1,74 @@
 // ──────────────────────────────────────────────
-// Storage engine de Multer para subir directo a Cloudinary, sin pasar por
-// disco. Reemplaza a "multer-storage-cloudinary": ese paquete nunca
-// actualizó su dependencia interna a cloudinary@2.x (sigue pidiendo
-// ^1.21.0 en su propio package.json), así que aunque subamos el cloudinary
-// de este proyecto, esa librería seguía instalando por debajo su propia
-// copia vieja y vulnerable (GHSA-g4mf-96x5-5m2c). Este archivo replica el
-// mismo comportamiento (mismos campos en req.file) hablando directo con el
-// SDK de cloudinary@2.x, sin ese intermediario.
+// Storage engine de Multer para subir directo a Cloudinary (cloudinary@2.x).
+// Reemplaza a "multer-storage-cloudinary" (abandonado + dependencia vulnerable).
 // ──────────────────────────────────────────────
 class CloudinaryStorage {
-  // params: objeto plano con las opciones de upload de Cloudinary
-  // (folder, allowed_formats, transformation, etc. — mismo formato que
-  // ya usábamos con multer-storage-cloudinary).
+  /**
+   * @param {object} options
+   * @param {object} options.cloudinary  - Instancia de cloudinary.v2 ya configurada
+   * @param {object|function} [options.params={}] - Parámetros de upload (estáticos o función async)
+   */
   constructor({ cloudinary, params = {} }) {
-    if (!cloudinary) throw new Error("`cloudinary` es requerido");
+    if (!cloudinary) {
+      throw new Error("`cloudinary` es requerido");
+    }
     this.cloudinary = cloudinary;
     this.params = params;
   }
 
-  // Multer llama a esto por cada archivo subido. Streamea el archivo
-  // directo al upload_stream de Cloudinary, sin guardarlo en disco.
-  _handleFile(req, file, callback) {
-    const uploadStream = this.cloudinary.uploader.upload_stream(
-      this.params,
-      (err, result) => {
-        if (err) return callback(err);
-        // Mismos nombres de campo que multer-storage-cloudinary: los
-        // controllers ya leen req.file.path esperando la URL pública.
-        callback(null, {
-          path: result.secure_url,
-          size: result.bytes,
-          filename: result.public_id,
-        });
-      }
-    );
-    file.stream.pipe(uploadStream);
+  async _resolveParams(req, file) {
+    if (typeof this.params === "function") {
+      return await this.params(req, file);
+    }
+    return this.params;
   }
 
-  // Multer llama a esto si necesita revertir una subida (ej: otro archivo
-  // del mismo request falló). No la usa ningún controller directamente.
+  _handleFile(req, file, callback) {
+    // Resolvemos params (pueden ser función)
+    this._resolveParams(req, file)
+      .then((params) => {
+        // Forzamos resource_type image + los params del usuario
+        const uploadOptions = {
+          resource_type: "image",
+          ...params,
+        };
+
+        const uploadStream = this.cloudinary.uploader.upload_stream(
+          uploadOptions,
+          (err, result) => {
+            if (err) return callback(err);
+
+            // Mismos campos que esperan los controllers (compatibilidad)
+            callback(null, {
+              path: result.secure_url,
+              size: result.bytes,
+              filename: result.public_id,   // public_id
+              // extras útiles (opcional, no rompen nada)
+              format: result.format,
+              width: result.width,
+              height: result.height,
+            });
+          }
+        );
+
+        // Propagar errores del stream de Multer
+        file.stream.on("error", (err) => {
+          uploadStream.destroy(err);
+          callback(err);
+        });
+
+        file.stream.pipe(uploadStream);
+      })
+      .catch(callback);
+  }
+
   _removeFile(req, file, callback) {
-    this.cloudinary.uploader.destroy(file.filename, { invalidate: true }, callback);
+    // file.filename = public_id
+    this.cloudinary.uploader.destroy(
+      file.filename,
+      { resource_type: "image", invalidate: true },
+      callback
+    );
   }
 }
 

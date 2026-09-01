@@ -1,37 +1,45 @@
-// Ojo acá: cloudinary@2.x sigue exponiendo, en require("cloudinary") a
-// secas, una capa de compatibilidad con la API vieja (v1) — colgaba
-// upload_stream sin nunca llamar al callback. El namespace realmente
-// mantenido y activo sigue siendo .v2 (verificado subiendo un archivo de
-// prueba real contra ambos), igual que antes de actualizar la dependencia.
+// Ojo: siempre usar .v2. El require("cloudinary") a secas en 2.x
+// sigue exponiendo una capa de compatibilidad vieja que en algunos
+// casos cuelga upload_stream.
 const cloudinary = require("cloudinary").v2;
 const { CloudinaryStorage } = require("./cloudinaryStorage");
 const multer = require("multer");
 
 // ──────────────────────────────────────────────
-// Configura Cloudinary con las credenciales del .env
+// Configuración
 // ──────────────────────────────────────────────
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true, // fuerza https
 });
 
+// 8MB — suficiente para foto de celular, evita abuso de memoria/cuota
+const IMAGE_SIZE_LIMIT = { fileSize: 8 * 1024 * 1024 };
+
+// Filtro de mimetype (primera línea de defensa)
+const imageFilter = (req, file, cb) => {
+  const allowed = ["image/jpeg", "image/png", "image/webp"];
+  if (allowed.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error("Solo se permiten imágenes JPG, PNG o WebP"), false);
+  }
+};
+
 // ──────────────────────────────────────────────
-// Storage para imágenes de Usuario
-// Se guardan en la carpeta "menu-digital/users" de tu Cloudinary
+// Storages
 // ──────────────────────────────────────────────
 const userStorage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder: "menu-digital/users",
     allowed_formats: ["jpg", "jpeg", "png", "webp"],
-    transformation: [{ width: 1200, crop: "limit" }], // Limita tamaño máximo
+    transformation: [{ width: 1200, crop: "limit" }],
   },
 });
 
-// ──────────────────────────────────────────────
-// Storage para imágenes de Menú (categorías)
-// ──────────────────────────────────────────────
 const menuStorage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -41,9 +49,6 @@ const menuStorage = new CloudinaryStorage({
   },
 });
 
-// ──────────────────────────────────────────────
-// Storage para imágenes de Items (productos)
-// ──────────────────────────────────────────────
 const itemStorage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -53,14 +58,24 @@ const itemStorage = new CloudinaryStorage({
   },
 });
 
-// 8MB — de sobra para una foto de celular, evita que alguien mande archivos
-// enormes que consuman memoria del server o cuota de Cloudinary sin sentido.
-const IMAGE_SIZE_LIMIT = { fileSize: 8 * 1024 * 1024 };
-
-// Exportamos cloudinary por si necesitamos usarlo directamente (ej: eliminar imágenes)
+// ──────────────────────────────────────────────
+// Exports
+// ──────────────────────────────────────────────
 module.exports = {
   cloudinary,
-  uploadUser: multer({ storage: userStorage, limits: IMAGE_SIZE_LIMIT }),
-  uploadMenu: multer({ storage: menuStorage, limits: IMAGE_SIZE_LIMIT }),
-  uploadItem: multer({ storage: itemStorage, limits: IMAGE_SIZE_LIMIT }),
+  uploadUser: multer({
+    storage: userStorage,
+    limits: IMAGE_SIZE_LIMIT,
+    fileFilter: imageFilter,
+  }),
+  uploadMenu: multer({
+    storage: menuStorage,
+    limits: IMAGE_SIZE_LIMIT,
+    fileFilter: imageFilter,
+  }),
+  uploadItem: multer({
+    storage: itemStorage,
+    limits: IMAGE_SIZE_LIMIT,
+    fileFilter: imageFilter,
+  }),
 };
