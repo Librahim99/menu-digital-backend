@@ -302,7 +302,10 @@ const applyExistingUserEntitlement = async ({
   const futureCurrentExpiry = currentExpiry && currentExpiry > new Date()
     ? currentExpiry
     : null;
+
+    
   let subscriptionExpiresAt;
+
   if (capturedExpiry) {
     // Recuperación de una aplicación inconclusa de una versión anterior.
     // Nunca suma otra vez los meses del mismo paymentID.
@@ -871,7 +874,13 @@ const processPaymentEvent = async (paymentId) => {
     const paidMonths = [1, 3, 6, 12].includes(metadataMonths)
       ? metadataMonths
       : pending.months;
-    const subscriptionExpiresAt = addCalendarMonths(approvedAt, paidMonths);
+
+    let subscriptionExpiresAt = addCalendarMonths(approvedAt, paidMonths);
+    if (pending.sellerID) {
+      subscriptionExpiresAt = new Date(
+        subscriptionExpiresAt.getTime() + 7 * 24 * 60 * 60 * 1000
+      );
+    }
 
     const pendingPassword = decryptPendingPassword(pending);
 
