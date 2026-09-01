@@ -302,7 +302,10 @@ const applyExistingUserEntitlement = async ({
   const futureCurrentExpiry = currentExpiry && currentExpiry > new Date()
     ? currentExpiry
     : null;
-  
+
+    
+  let subscriptionExpiresAt;
+
   if (capturedExpiry) {
     // Recuperación de una aplicación inconclusa de una versión anterior.
     // Nunca suma otra vez los meses del mismo paymentID.
