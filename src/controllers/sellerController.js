@@ -1,26 +1,145 @@
-import Seller from "../models/Seller.js";
+const Seller = require("../models/Seller");
+const User = require("../models/User");
+const { getEffectivePlan } = require("../config/plans");
+const { handleError } = require("../utils/handleError");
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const CLIENT_FIELDS =
+  "username slug active menu subscription subscriptionExpiresAt " +
+  "contactInfo.businessName sellerID createdAt";
+
+const toTime = (value) => {
+  if (!value) return null;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : null;
+};
+
+const getSellerMetrics = (clients, now = new Date()) => {
+  const nowTime = now.getTime();
+  const thirtyDaysAgo = nowTime - 30 * DAY_MS;
+  const thirtyDaysAhead = nowTime + 30 * DAY_MS;
+  const metrics = {
+    clientsTotal: clients.length,
+    activeAccounts: 0,
+    paidCurrent: 0,
+    newClients30d: 0,
+    expiring30d: 0,
+    expired: 0,
+    withMenu: 0,
+    plans: { basic: 0, pro: 0 },
+    lastClientAt: null,
+  };
+  let latestClientTime = null;
+
+  for (const client of clients) {
+    const createdAt = toTime(client.createdAt);
+    const expiresAt = toTime(client.subscriptionExpiresAt);
+    const effectivePlan = getEffectivePlan(
+      client.subscription,
+      client.subscriptionExpiresAt,
+      now,
+    );
+
+    if (client.active) metrics.activeAccounts += 1;
+    if (client.menu) metrics.withMenu += 1;
+    if (
+      createdAt !== null &&
+      createdAt >= thirtyDaysAgo &&
+      createdAt <= nowTime
+    ) {
+      metrics.newClients30d += 1;
+    }
+    if (createdAt !== null && (latestClientTime === null || createdAt > latestClientTime)) {
+      latestClientTime = createdAt;
+      metrics.lastClientAt = client.createdAt;
+    }
+
+    if (effectivePlan === "basic" || effectivePlan === "pro") {
+      metrics.paidCurrent += 1;
+      metrics.plans[effectivePlan] += 1;
+      if (expiresAt !== null && expiresAt > nowTime && expiresAt <= thirtyDaysAhead) {
+        metrics.expiring30d += 1;
+      }
+    } else if (
+      client.subscription !== "free" &&
+      expiresAt !== null &&
+      expiresAt <= nowTime
+    ) {
+      metrics.expired += 1;
+    }
+  }
+
+  return metrics;
+};
+
+const sellerToSummary = (seller, clients, now = new Date()) => ({
+  ...(typeof seller.toObject === "function" ? seller.toObject() : seller),
+  metrics: getSellerMetrics(clients, now),
+});
+
+const clientToDTO = (client, now = new Date()) => ({
+  _id: client._id,
+  username: client.username,
+  businessName: client.contactInfo?.businessName || "",
+  slug: client.slug || null,
+  active: Boolean(client.active),
+  menu: Boolean(client.menu),
+  subscription: client.subscription,
+  effectiveSubscription: getEffectivePlan(
+    client.subscription,
+    client.subscriptionExpiresAt,
+    now,
+  ),
+  subscriptionExpiresAt: client.subscriptionExpiresAt || null,
+  createdAt: client.createdAt,
+});
+
+const groupClientsBySeller = (clients) => {
+  const grouped = new Map();
+  for (const client of clients) {
+    const sellerID = String(client.sellerID || "");
+    if (!sellerID) continue;
+    const current = grouped.get(sellerID) || [];
+    current.push(client);
+    grouped.set(sellerID, current);
+  }
+  return grouped;
+};
 
 // Obtener todos los sellers
-export const getSellers = async (req, res) => {
+const getSellers = async (req, res) => {
   try {
-    const sellers = await Seller.find().sort({ createdAt: -1 });
+    const sellers = await Seller.find().sort({ createdAt: -1 }).lean();
+    if (sellers.length === 0) return res.status(200).json([]);
 
-    res.status(200).json(sellers);
+    const clients = await User.find({
+      admin: false,
+      sellerID: { $in: sellers.map((seller) => seller._id) },
+    })
+      .select(CLIENT_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean();
+    const clientsBySeller = groupClientsBySeller(clients);
+    const now = new Date();
+
+    res.status(200).json(
+      sellers.map((seller) =>
+        sellerToSummary(
+          seller,
+          clientsBySeller.get(String(seller._id)) || [],
+          now,
+        ),
+      ),
+    );
   } catch (error) {
-    console.error("Error al obtener sellers:", error);
-
-    res.status(500).json({
-      message: "Error al obtener los vendedores",
-      error: error.message,
-    });
+    handleError(res, error);
   }
 };
 
 // Obtener seller por ID
-export const getSellerById = async (req, res) => {
+const getSellerById = async (req, res) => {
   try {
-    const seller = await Seller.findById(req.params.id);
+    const seller = await Seller.findById(req.params.id).lean();
 
     if (!seller) {
       return res.status(404).json({
@@ -28,19 +147,26 @@ export const getSellerById = async (req, res) => {
       });
     }
 
-    res.status(200).json(seller);
-  } catch (error) {
-    console.error("Error al obtener seller:", error);
+    const clients = await User.find({
+      admin: false,
+      sellerID: seller._id,
+    })
+      .select(CLIENT_FIELDS)
+      .sort({ createdAt: -1 })
+      .lean();
+    const now = new Date();
 
-    res.status(500).json({
-      message: "Error al obtener el vendedor",
-      error: error.message,
+    res.status(200).json({
+      ...sellerToSummary(seller, clients, now),
+      clients: clients.map((client) => clientToDTO(client, now)),
     });
+  } catch (error) {
+    handleError(res, error);
   }
 };
 
 // Crear seller
-export const createSeller = async (req, res) => {
+const createSeller = async (req, res) => {
   try {
     const { name, dni } = req.body;
 
@@ -106,25 +232,19 @@ export const createSeller = async (req, res) => {
 
     res.status(201).json(seller);
   } catch (error) {
-    console.error("Error al crear seller:", error);
-
     // Manejar duplicados de MongoDB
     if (error.code === 11000) {
       return res.status(409).json({
         message: "El vendedor ya existe",
-        error: error.keyValue,
       });
     }
 
-    res.status(500).json({
-      message: "Error al crear el vendedor",
-      error: error.message,
-    });
+    handleError(res, error);
   }
 };
 
 // Modificar seller
-export const updateSeller = async (req, res) => {
+const updateSeller = async (req, res) => {
   try {
     const { name, dni } = req.body;
 
@@ -172,24 +292,18 @@ export const updateSeller = async (req, res) => {
 
     res.status(200).json(seller);
   } catch (error) {
-    console.error("Error al modificar seller:", error);
-
     if (error.code === 11000) {
       return res.status(409).json({
         message: "El vendedor ya existe",
-        error: error.keyValue,
       });
     }
 
-    res.status(500).json({
-      message: "Error al modificar el vendedor",
-      error: error.message,
-    });
+    handleError(res, error);
   }
 };
 
 // Eliminar seller
-export const deleteSeller = async (req, res) => {
+const deleteSeller = async (req, res) => {
   try {
     const seller = await Seller.findByIdAndDelete(req.params.id);
 
@@ -204,12 +318,17 @@ export const deleteSeller = async (req, res) => {
       seller,
     });
   } catch (error) {
-    console.error("Error al eliminar seller:", error);
-
-    res.status(500).json({
-      message: "Error al eliminar el vendedor",
-      error: error.message,
-    });
+    handleError(res, error);
   }
+};
+
+module.exports = {
+  getSellers,
+  getSellerById,
+  createSeller,
+  updateSeller,
+  deleteSeller,
+  getSellerMetrics,
+  clientToDTO,
 };
 

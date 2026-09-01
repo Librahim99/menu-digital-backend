@@ -8,7 +8,6 @@ const  {
   createSeller,
   updateSeller,
   deleteSeller,
-  validateSellerCode
 } = require("../controllers/sellerController.js");
 // Obtener todos
 router.get("/", protect, isAdmin, getSellers);

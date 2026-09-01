@@ -2,14 +2,14 @@
 
 > API multi-tenant para negocios
 
-Revisión documental: **30-08-2026**. Las entradas anteriores conservan su fecha y
+Revisión documental vigente: **01-09-2026**. Las entradas anteriores conservan su fecha y
 sus resultados históricos; no describen necesariamente el código, precios o
-despliegue actual. La entrada final incorpora la actualización funcional del 31-08-2026.
+despliegue actual. La entrada final registra el contraste más reciente.
 
 La documentación técnica compartida vive en el repositorio frontend:
-[arquitectura](../menu-digital-frontend/ARCHITECTURE.md),
-[blueprint](../menu-digital-frontend/BLUEPRINT.md) y
-[catálogo/rollout](../menu-digital-frontend/docs/PLAN_CATALOG_ROLLOUT.md).
+[arquitectura](../menu-digital-frontend/docs/ARCHITECTURE.md),
+[blueprint](../menu-digital-frontend/docs/BLUEPRINT.md) y
+[README](../menu-digital-frontend/docs/README.md).
 Estos enlaces requieren clonar ambos repositorios como carpetas hermanas.
 
 ━━━━━━━━━━━━━━━━━━
@@ -104,8 +104,8 @@ Estos enlaces requieren clonar ambos repositorios como carpetas hermanas.
 
 ### ⏳ Pendientes registrados al 22-08-2026
 
-- Confirmar los despliegues de Vercel/Koyeb y ejecutar un pago real con comprador
-  distinto del vendedor. Verificar preferencia, `checkout_id`, webhook,
+- Confirmar los despliegues de Vercel/Koyeb y ejecutar un pago real con una cuenta
+  compradora distinta de la cuenta vendedora de MercadoPago. Verificar preferencia, `checkout_id`, webhook,
   `PaymentCheckout`, `PaymentTransaction`, alta/plan/vencimiento, CRM, redirección y
   sincronización del dashboard.
 - Después del E2E, definir un procedimiento o pantalla para conciliar/reembolsar
@@ -274,7 +274,7 @@ ambos siguen fuera del producto.
   publicación coordinada, revisión del catálogo existente, permisos HTTP/persistencia
   reales y E2E MercadoPago autorizado. PAY-05 sigue separado.
 
-Modelo y checklist: [PLAN_CATALOG_ROLLOUT.md](../menu-digital-frontend/docs/PLAN_CATALOG_ROLLOUT.md).
+Modelo y estado actual: [ARCHITECTURE.md](../menu-digital-frontend/docs/ARCHITECTURE.md).
 
 ## 31-08-2026 — Edición de multiplicadores por plan (local)
 
@@ -292,3 +292,98 @@ Modelo y checklist: [PLAN_CATALOG_ROLLOUT.md](../menu-digital-frontend/docs/PLAN
 - Validación: catálogo/cotizaciones 28/28; suite completa 117/119, con los mismos
   dos fallos previos de `editItem` sobre available/hidden. Pruebas con Mongoose y
   MercadoPago simulados; sin cambios en Atlas, webhook, despliegues ni pagos reales.
+
+## 01-09-2026 — Auditoría de vendedores y códigos (estado no liberable)
+
+La incorporación de `Seller`, `sellerID` en altas/usuarios y el precio especial por
+código agrega una colección y cambia el flujo de suscripciones: es un **cambio de
+arquitectura**, no un ajuste solo visual.
+
+### Presente y conectado en código
+
+- `Seller` guarda nombre, DNI y código único `AAA-999`; `/api/admin/sellers` ofrece
+  CRUD con `protect + isAdmin`. El frontend monta `/admin/sellers` y permite listar,
+  crear y editar.
+- `POST /api/payments/validate-seller-code` valida el código públicamente. El alta
+  paga lo vuelve a comprobar, usa `discountPrice ?? price`, enlaza el vendedor al
+  `PendingRegistration` y lo copia al `User` cuando el webhook crea la cuenta.
+
+### Bloqueos encontrados
+
+- **P0 — webhook de cuentas existentes roto:** `applyExistingUserEntitlement`
+  referencia `pending` y `paidMonths`, variables inexistentes en ese alcance. Rompe
+  upgrades, renovaciones e idempotencia/vencimientos relacionados.
+- **P0 — promesa no acreditada:** `RegisterPlans` anuncia siete días de regalo con
+  código, pero la rama de alta calcula `subscriptionExpiresAt` solo con los meses
+  comprados. La única suma de siete días quedó en la función equivocada anterior.
+- **P1 — contrato de precio divergente:** el DTO público sigue usando
+  `discountPrice` como `effectivePrice` y alimenta landing/upgrade, mientras
+  upgrade/renovación cotizan `price` y solo el alta con vendedor usa la promoción.
+  Dos pruebas de catálogo/cotización ya detectan esa diferencia.
+- **P1 — sin cobertura nueva:** no hay tests de CRUD, validación de código,
+  atribución, precio con/sin vendedor ni bonus. `sellerController.js` tampoco sigue
+  `handleError` y devuelve detalles internos de excepciones.
+- **P2 — retry ambiguo:** el alta consulta dos veces el mismo vendedor y sobrescribe
+  `pending.sellerID` antes de calcular `sameSeller`, por lo que esa comparación no
+  protege la atribución previa al reutilizar un checkout.
+
+### Validación reproducida
+
+- Backend: `npm test` → **119 tests, 104 pasan y 15 fallan**. Además de los dos
+  fallos históricos de `editItem`, hay tres de promociones/cotización y diez de
+  checkout/webhook/vencimientos.
+- Frontend: lint pasa. Typecheck y build no resuelven `lucide-react` porque falta en
+  el `node_modules` actual, aunque `package.json` y `package-lock.json` lo declaran.
+  No se ejecutó `npm ci` sobre la instalación existente.
+- No se modificó código funcional, Atlas, MercadoPago, Vercel ni Koyeb durante esta
+  auditoría documental. Corregir los P0/P1 y recuperar las suites antes de cualquier
+  deploy o E2E real.
+
+## 01-09-2026 — Correcciones por aprobación: Punto 1 completado
+
+Alcance autorizado: reparar únicamente la regresión del webhook de upgrades y
+renovaciones, sin adelantar bonus, promociones, dependencias frontend ni edición de
+productos.
+
+- En `applyExistingUserEntitlement` se eliminó la inicialización accidental con
+  `paidMonths` y el acceso a `pending.sellerID`; ambas variables pertenecen a la rama
+  de registro y no existen en esa función. Se restauró `let subscriptionExpiresAt;`.
+- Las ramas ya existentes vuelven a decidir el vencimiento con el parámetro `months`:
+  recuperación durable, renovación desde la vigencia actual o upgrade sin acortar
+  un vencimiento posterior.
+- Validación focalizada: `node --test test/paymentWebhook.test.js` → **44/44**.
+- Suite completa: `npm test` → **114/119**. Quedan cinco fallos fuera de este punto:
+  dos de `editItem` (`available`/`hidden`) y tres de promoción/cotización.
+- Sin deploy, consultas a Atlas/MercadoPago ni E2E real. El Punto 2 continúa siendo
+  acreditar y probar los siete días extra prometidos por código de vendedor.
+
+## 01-09-2026 — Vista operativa de vendedores y clientes atribuidos
+
+Alcance autorizado: ampliar la administración de vendedores con datos funcionales,
+sin agregar colecciones ni modificar el flujo de pagos.
+
+- `GET /api/admin/sellers` conserva el array existente y agrega métricas calculadas
+  en lote desde `User.sellerID`: clientes vendidos, cuentas activas, planes pagos
+  vigentes, altas/vencimientos a 30 días, vencidos, menú creado, Basic/Pro y última
+  alta. Los administradores quedan excluidos.
+- `GET /api/admin/sellers/:id` suma un DTO acotado de clientes con negocio, usuario,
+  plan almacenado/efectivo, estado, menú, alta y vencimiento. No expone mail,
+  teléfono, contacto completo, contraseña ni `sellerID`.
+- `sellerController.js` se alineó a CommonJS y `handleError`; dejó de devolver
+  `error.message`/`keyValue`. Se retiró del router la importación inexistente y no
+  usada de `validateSellerCode`.
+- `/admin/sellers` agrega resumen general, búsqueda por nombre/código/DNI, orden,
+  copia de código, métricas por tarjeta y detalle bajo demanda con accesos a CRM y
+  Pagos. Conserva el CSS Module, tokens `--admin-*` y layout responsive.
+- No se muestran conversión, comisiones ni ingresos históricos: Checkout y
+  Transaction no conservan un snapshot inmutable del vendedor, por lo que esas
+  cifras serían ambiguas.
+- Prueba focalizada nueva: `node --test test/sellerController.test.js` → **6/6**.
+  Suite completa: `npm test` → **120/125**; permanecen los mismos dos fallos de
+  `editItem` y tres de promociones/cotización, fuera de este punto.
+- Frontend: typecheck, lint y build pasan. Se restauró únicamente en `node_modules`
+  la versión de `lucide-react` ya fijada en package/lock, sin cambios rastreados de
+  dependencias.
+- El responsable del producto informó que el alta paga y los siete días adicionales
+  ya pasaron E2E en el despliegue probado. Esta intervención no repitió el pago ni
+  desplegó; reconciliar esa revisión con el worktree queda separado de esta vista.
