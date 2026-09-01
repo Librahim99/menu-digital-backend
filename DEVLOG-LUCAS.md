@@ -387,3 +387,60 @@ sin agregar colecciones ni modificar el flujo de pagos.
 - El responsable del producto informó que el alta paga y los siete días adicionales
   ya pasaron E2E en el despliegue probado. Esta intervención no repitió el pago ni
   desplegó; reconciliar esa revisión con el worktree queda separado de esta vista.
+
+## 01-09-2026 — Reconciliación de fixes y auditoría de salida a producción
+
+Esta entrada actualiza el estado operativo sin reescribir las revisiones históricas
+anteriores. Los resultados corresponden al código y a las referencias Git locales
+inspeccionadas; no certifican el entorno desplegado.
+
+### Resuelto y validado localmente
+
+- El contrato de vendedores quedó unificado: `discountPrice` se aplica únicamente
+  al registro pago cuando el código ingresado resuelve a un `Seller` válido y deja
+  un `sellerID`. Catálogo público, upgrade y renovación conservan el precio regular.
+- `editItem` persiste `available`, `hidden` y `recommended`, exige booleanos y
+  conserva las verificaciones de pertenencia del producto.
+- Backend: `npm test` → **126/126 tests pasan**.
+- Frontend: `npm run typecheck`, `npm run lint` y `npm run build` pasan.
+
+### Bloqueos pendientes para producción
+
+- **Inyección/SSRF en PDF:** `Item.image` admite una URL arbitraria y el generador
+  la inserta sin escapar en un `<img>` procesado por Puppeteer. Debe restringirse
+  el origen/formato de la imagen, escaparse el HTML y probarse el aislamiento antes
+  de exponer la generación de PDF en producción.
+- **PAY-05 no está en las referencias Git actuales:** no considerar implementada
+  la expiración inmutable de siete días ni anunciarla como control activo. Hay que
+  restaurar o reimplementar el contrato completo, cubrir retries y pagos aprobados
+  tardíos, y validarlo antes del despliegue.
+- **Validación del alta paga:** `acceptedTerms` debe aceptar exclusivamente el
+  booleano `true`; además, la contraseña debe aplicar la misma política completa
+  que el registro gratuito, no solo una longitud mínima.
+- **Precios de productos:** `Item.price` todavía admite valores negativos y debe
+  rechazarlos tanto en modelo como en las rutas de creación/edición pertinentes.
+- **Dependencias:** `npm audit` informa **8 vulnerabilidades en frontend**
+  (7 altas y 1 moderada) y **4 vulnerabilidades runtime en backend** (2 altas,
+  1 moderada y 1 baja). Las actualizaciones sugeridas deben aplicarse y regresionarse
+  de forma controlada; esta auditoría no modificó dependencias.
+
+### Hardening y deuda operativa observada
+
+- Las variables de Cloudinary no forman parte de `REQUIRED_ENV_VARS`, aunque son
+  necesarias para el flujo de imágenes.
+- La generación de PDF cuenta solo con el rate limiter genérico; falta un límite
+  específico acorde a su costo de CPU/memoria.
+- Permanecen logs temporales demasiado verbosos en el registro con MercadoPago.
+- Hay wrappers de API frontend obsoletos para rutas de menú que ya no coinciden con
+  las rutas activas y aparentemente no tienen consumidores; deben eliminarse o
+  corregirse después de confirmar su uso.
+- El frontend no dispone de una suite automatizada de tests. Typecheck, lint y build
+  son controles necesarios, pero no reemplazan regresiones de comportamiento.
+
+### Criterio de liberación
+
+Estado recomendado: **NO-GO**. Antes de salir a producción deben corregirse y
+regresionarse los bloqueos anteriores, repetirse las auditorías de dependencias y
+ejecutarse E2E reales y autorizados de MercadoPago, MongoDB Atlas, Cloudinary y del
+despliegue. En esta revisión no se ejecutaron pagos reales, consultas productivas,
+uploads reales ni deploys en Vercel/Koyeb.

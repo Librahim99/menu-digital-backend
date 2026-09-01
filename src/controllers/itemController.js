@@ -28,6 +28,13 @@ const newItem = async (req, res) => {
       menuID, code, title, description, price, image,
       offerPrice, offerRange, availabilitySchedule, options, isExtra, recommended, apt, hidden, available
     } = req.body;
+
+        if (req.body.price != null && Number(req.body.price) < 0) {
+          return res.status(400).json({ message: "El precio no puede ser negativo" });
+        }
+        if (req.body.offerPrice != null && Number(req.body.offerPrice) < 0) {
+          return res.status(400).json({ message: "El precio de oferta no puede ser negativo" });
+        }
  
     const { error, status } = await verifyMenuOwnership(menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
@@ -130,23 +137,37 @@ const editItem = async (req, res) => {
     const { features } = await getRequestPlan(req);
     const changesOffer = updates.offerPrice !== undefined || updates.offerRange !== undefined;
     const changesPrice = updates.price !== undefined && (
-      updates.price == null ? item.price != null : Number(updates.price) !== Number(item.price)
-    );
-    if (changesPrice || changesOffer) {
-      const normalizedOffer = normalizeOffer({
-        price: updates.price !== undefined ? updates.price : item.price,
-        offerPrice: updates.offerPrice !== undefined ? updates.offerPrice : item.offerPrice,
-        offerRange: updates.offerRange !== undefined ? updates.offerRange : item.offerRange,
-      });
-      if (normalizedOffer.error) return res.status(400).json({ message: normalizedOffer.error });
-      if (changesOffer && normalizedOffer.isScheduled && !features.programacion_productos) {
-        return res.status(403).json({ message: "La programación de ofertas no está incluida en tu plan." });
-      }
-      if (changesOffer) {
-        updates.offerPrice = normalizedOffer.offerPrice;
-        updates.offerRange = normalizedOffer.offerRange;
-      }
-    }
+          updates.price == null ? item.price != null : Number(updates.price) !== Number(item.price)
+        );
+
+        if (changesPrice || changesOffer) {
+          // Rechazar precios negativos
+          if (updates.price !== undefined && updates.price != null && Number(updates.price) < 0) {
+            return res.status(400).json({ message: "El precio no puede ser negativo" });
+          }
+          if (updates.offerPrice !== undefined && updates.offerPrice != null && Number(updates.offerPrice) < 0) {
+            return res.status(400).json({ message: "El precio de oferta no puede ser negativo" });
+          }
+
+          const normalizedOffer = normalizeOffer({
+            price: updates.price !== undefined ? updates.price : item.price,
+            offerPrice: updates.offerPrice !== undefined ? updates.offerPrice : item.offerPrice,
+            offerRange: updates.offerRange !== undefined ? updates.offerRange : item.offerRange,
+          });
+
+          if (normalizedOffer.error) {
+            return res.status(400).json({ message: normalizedOffer.error });
+          }
+
+          if (changesOffer && normalizedOffer.isScheduled && !features.programacion_productos) {
+            return res.status(403).json({ message: "La programación de ofertas no está incluida en tu plan." });
+          }
+
+          if (changesOffer) {
+            updates.offerPrice = normalizedOffer.offerPrice;
+            updates.offerRange = normalizedOffer.offerRange;
+          }
+        }
 
     if (updates.availabilitySchedule !== undefined) {
       const validation = validateAvailabilitySchedule(updates.availabilitySchedule);

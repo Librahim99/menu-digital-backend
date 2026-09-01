@@ -38,13 +38,17 @@ const ItemSchema = new mongoose.Schema(
     },
 
     price: {
-      type: Number,
-      default: null, // null = sin precio (ej: item de sección)
+        type: Number,
+          validate: {
+            validator: (v) => v == null || v >= 0,
+            message: "El precio no puede ser negativo",
+        },
     },
 
     offerPrice: {
       type: Number,
       default: null, // Precio en oferta, si aplica
+      min: [0, "El precio en oferta no puede ser negativo"],
     },
 
     // Rango de fecha y hora en el que aplica la oferta. Sin rango, el
