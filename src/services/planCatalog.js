@@ -60,7 +60,10 @@ const planToDTO = (document) => {
     ? document.toObject({ flattenMaps: true }) : document;
   const multipliers = plan.periodMultipliers instanceof Map
     ? Object.fromEntries(plan.periodMultipliers) : plan.periodMultipliers;
-  const effectivePrice = plan.discountPrice ?? plan.price;
+  // El catálogo público no tiene un vendedor validado. Por eso su precio
+  // efectivo y sus totales siempre representan el cobro regular; el
+  // discountPrice solo se aplica al cotizar un alta con sellerID.
+  const effectivePrice = plan.price;
   return {
     name: plan.name,
     label: plan.label,

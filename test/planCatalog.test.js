@@ -48,18 +48,23 @@ test("el modelo rechaza precios y promociones incompatibles con cada plan", asyn
   ]) await assert.rejects(document(name, overrides).validate(), { name: "ValidationError" });
 });
 
-test("la cotización lee MongoDB y combina promoción con el período una sola vez", async (t) => {
+test("la cotización solo aplica discountPrice cuando hay vendedor validado", async (t) => {
   const plan = document("basic", { price: 34999, discountPrice: 29999, __v: 4 });
   t.mock.method(Plan, "findOne", async (filter) => {
     assert.deepEqual(filter, { name: "basic" });
     return plan;
   });
   const quote = await catalog.getCheckoutQuote("basic", 3);
-  assert.equal(quote.total, 80997);
+  assert.equal(quote.total, 94497);
   assert.equal(quote.version, 4);
   assert.equal(quote.currency, "ARS");
+  assert.equal(quote.withSellerDiscount, false);
+  assert.equal(quote.plan.effectivePrice, 34999);
   assert.equal(quote.plan.billingOptions[1].regularTotal, 104997);
-  assert.equal(quote.plan.billingOptions[1].savings, 24000);
+  assert.equal(quote.plan.billingOptions[1].savings, 10500);
+  const sellerQuote = await catalog.getCheckoutQuote("basic", 3, { withSellerDiscount: true });
+  assert.equal(sellerQuote.total, 80997);
+  assert.equal(sellerQuote.withSellerDiscount, true);
   plan.price = 40000;
   plan.discountPrice = null;
   plan.__v = 5;
@@ -96,7 +101,7 @@ test("el DTO conserva los multiplicadores editados al serializar el mapa de Mong
     const dto = JSON.parse(JSON.stringify(catalog.planToDTO(source)));
     assert.deepEqual(dto.periodMultipliers, periodMultipliers);
     assert.deepEqual(dto.billingOptions.map(option => option.multiplier), [1, 2.4, 4.75, 8.5]);
-    assert.deepEqual(dto.billingOptions.map(option => option.total), [8000, 19200, 38000, 68000]);
+    assert.deepEqual(dto.billingOptions.map(option => option.total), [10000, 24000, 47500, 85000]);
     assert.deepEqual(Object.fromEntries(document("pro", dto).periodMultipliers), periodMultipliers);
   }
 });
@@ -169,8 +174,9 @@ test("guardar un plan valida, atribuye el cambio y devuelve catálogo actualizad
   const res = response();
   await controller.updatePlan(adminRequest(), res);
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.plan.effectivePrice, 29999);
+  assert.equal(res.body.plan.effectivePrice, 34999);
   assert.equal(res.body.plan.price, 34999);
+  assert.equal(res.body.plan.discountPrice, 29999);
   assert.equal(res.body.plan.version, 1);
   assert.equal(String(current.updatedBy), "64f000000000000000000123");
   assert.equal(res.headers["Cache-Control"], "no-store");
@@ -194,10 +200,11 @@ test("editar únicamente los períodos actualiza cotización, ahorro y versión 
   assert.deepEqual(res.body.plan.periodMultipliers, periodMultipliers);
   const quote = await catalog.getCheckoutQuote("basic", 3);
   assert.equal(quote.version, 5);
-  assert.equal(quote.total, 19200);
+  assert.equal(quote.total, 24000);
   assert.equal(quote.plan.billingOptions[1].regularTotal, 30000);
-  assert.equal(quote.plan.billingOptions[1].savings, 10800);
-  assert.equal(oldQuote.billingOptions[1].total, 21600);
+  assert.equal(quote.plan.billingOptions[1].savings, 6000);
+  assert.equal((await catalog.getCheckoutQuote("basic", 3, { withSellerDiscount: true })).total, 19200);
+  assert.equal(oldQuote.billingOptions[1].total, 27000);
   assert.equal(oldQuote.version, 4);
 });
 

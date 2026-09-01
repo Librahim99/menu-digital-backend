@@ -310,22 +310,6 @@ router.post("/crear-preferencia-registro", async (req, res) => {
   let seller = null;
 
   try {
-    if (
-      sellerCode !== undefined &&
-      sellerCode !== null &&
-      String(sellerCode).trim() !== ""
-    ) {
-      const code = String(sellerCode).trim().toUpperCase();
-      if (!/^[A-Z]{3}-\d{3}$/.test(code)) {
-        return res.status(400).json({ error: "Código de vendedor inválido" });
-      }
-      seller = await Seller.findOne({ code });
-      if (!seller) {
-        return res
-          .status(400)
-          .json({ error: "Código de vendedor no encontrado" });
-      }
-    }
     paymentDebugStage = "checking_plan_catalog";
 
     // Código de vendedor (opcional). Inválido → 400, no se crea preferencia.
@@ -346,10 +330,12 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       }
     }
 
-    const catalogPlan = await catalog.getPlan(planId);
+    const plan = await catalog.getCheckoutQuote(planId, monthsNum, {
+      withSellerDiscount: Boolean(seller),
+    });
     if (
       !Number.isSafeInteger(req.body.planVersion) ||
-      req.body.planVersion !== catalogPlan.version
+      req.body.planVersion !== plan.version
     ) {
       return res.status(409).json({
         code: "PLAN_PRICE_CHANGED",
@@ -358,23 +344,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       });
     }
 
-    // Con vendedor: precio promocional (discountPrice ?? price). Sin vendedor: lista.
-    const monthly = seller
-      ? (catalogPlan.discountPrice ?? catalogPlan.price)
-      : catalogPlan.price;
-    const unitPrice = Math.round(
-      monthly * catalogPlan.periodMultipliers[monthsNum],
-    );
-    if (!Number.isSafeInteger(unitPrice) || unitPrice <= 0) {
-      return res.status(400).json({ error: "Importe de plan inválido" });
-    }
-
-    const plan = {
-      title: `Menú Digital — Plan ${catalogPlan.label}`,
-      description: catalogPlan.description,
-      total: unitPrice,
-      version: catalogPlan.version,
-    };
+    const unitPrice = plan.total;
     // Username o email ya usados
     paymentDebugStage = "checking_existing_user";
     const existing = await User.findOne({
@@ -477,6 +447,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       hasPreferenceID: Boolean(pending.preferenceId),
       hasInitPoint: Boolean(pending.initPoint),
     });
+    const previousSellerID = pending.sellerID;
     pending.sellerID = seller ? seller._id : null;
     paymentDebugStage = "preparing_checkout";
 
@@ -492,7 +463,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       ? await PaymentCheckout.findById(pending.checkoutID)
       : null;
     const sameSeller =
-      String(pending.sellerID || "") === String(seller?._id || "");
+      String(previousSellerID || "") === String(seller?._id || "");
 
     const canReuseCheckout = Boolean(
       previousCheckout &&
