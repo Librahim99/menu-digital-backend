@@ -14,6 +14,7 @@ const { PLAN_ORDER } = require("../config/plans");
 const {
   PAYMENT_CURRENCY,
   VALID_PAYMENT_MONTHS,
+  getCheckoutExpiration,
 } = require("../config/paymentPlans");
 const catalog = require("../services/planCatalog");
 const { handleError } = require("../utils/handleError");
@@ -41,6 +42,22 @@ const sameSecret = (left, right) => {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 };
 
+const toValidDate = (value) => {
+  if (value === null || value === undefined) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const buildPreferenceExpiration = ({
+  preferenceStartsAt,
+  preferenceExpiresAt,
+}) => ({
+  expires: true,
+  expiration_date_from: preferenceStartsAt.toISOString(),
+  expiration_date_to: preferenceExpiresAt.toISOString(),
+  date_of_expiration: preferenceExpiresAt.toISOString(),
+});
+
 const buildRegistrationPreference = ({
   pendingID,
   checkoutID,
@@ -48,8 +65,8 @@ const buildRegistrationPreference = ({
   planId,
   months,
   unitPrice,
-  checkoutStartsAt,
-  checkoutExpiresAt,
+  preferenceStartsAt,
+  preferenceExpiresAt,
 }) => ({
   items: [
     {
@@ -71,10 +88,10 @@ const buildRegistrationPreference = ({
   // La preferencia y los medios offline dejan de aceptar pagos al mismo
   // tiempo. PendingRegistration conserva un margen adicional para recibir
   // la acreditación y el webhook de pagos iniciados cerca del vencimiento.
-  expires: true,
-  expiration_date_from: checkoutStartsAt.toISOString(),
-  expiration_date_to: checkoutExpiresAt.toISOString(),
-  date_of_expiration: checkoutExpiresAt.toISOString(),
+  ...buildPreferenceExpiration({
+    preferenceStartsAt,
+    preferenceExpiresAt,
+  }),
   external_reference: pendingID.toString(),
   metadata: {
     plan_id: planId,
@@ -131,6 +148,8 @@ router.post("/crear-preferencia", protect, async (req, res) => {
     const preference = createPreferenceClient();
     const totalPrice = plan.total;
     const isRenewal = planId === req.user.subscription;
+    const preferenceStartsAt = new Date();
+    const preferenceExpiresAt = getCheckoutExpiration(preferenceStartsAt);
     const currentExpiry = new Date(req.user.subscriptionExpiresAt || 0);
     const renewalBase =
       isRenewal &&
@@ -148,6 +167,8 @@ router.post("/crear-preferencia", protect, async (req, res) => {
       currency: PAYMENT_CURRENCY,
       sourcePlan: req.user.subscription,
       sourceExpiresAt: req.user.subscriptionExpiresAt || null,
+      preferenceStartsAt,
+      preferenceExpiresAt,
     });
 
     const result = await preference.create({
@@ -175,6 +196,10 @@ router.post("/crear-preferencia", protect, async (req, res) => {
           pending: `${process.env.FRONTEND_URL}/dashboard?payment=pending`,
         },
         auto_return: "approved", // redirige automáticamente si el pago es aprobado
+        ...buildPreferenceExpiration({
+          preferenceStartsAt,
+          preferenceExpiresAt,
+        }),
         // Identifica quién paga — lo lee mpWebhook para saber a qué
         // cuenta actualizarle la suscripción cuando MP confirme el pago.
         external_reference: req.user._id.toString(),
@@ -451,12 +476,9 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     pending.sellerID = seller ? seller._id : null;
     paymentDebugStage = "preparing_checkout";
 
-    const checkoutStartsAt = new Date();
-    const checkoutExpiresAt = PendingRegistration.getCheckoutExpiration(
-      checkoutStartsAt.getTime(),
-    );
-    const pendingExpiresAt = PendingRegistration.getPendingExpiration(
-      checkoutStartsAt.getTime(),
+    const newPreferenceStartsAt = new Date();
+    const newPreferenceExpiresAt = getCheckoutExpiration(
+      newPreferenceStartsAt,
     );
     paymentDebugStage = "loading_previous_checkout";
     const previousCheckout = pending.checkoutID
@@ -464,6 +486,20 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       : null;
     const sameSeller =
       String(previousSellerID || "") === String(seller?._id || "");
+    const previousPreferenceStartsAt = toValidDate(
+      previousCheckout?.preferenceStartsAt,
+    );
+    const previousPreferenceExpiresAt = toValidDate(
+      previousCheckout?.preferenceExpiresAt,
+    );
+    const hasReusablePreferenceWindow = Boolean(
+      previousPreferenceStartsAt &&
+      previousPreferenceExpiresAt &&
+      previousPreferenceStartsAt <= now &&
+      previousPreferenceExpiresAt > now &&
+      previousPreferenceExpiresAt.getTime() ===
+        getCheckoutExpiration(previousPreferenceStartsAt).getTime(),
+    );
 
     const canReuseCheckout = Boolean(
       previousCheckout &&
@@ -475,7 +511,10 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       previousCheckout.currency === PAYMENT_CURRENCY &&
       sameSeller &&
       pending.preferenceId &&
-      pending.initPoint,
+      pending.initPoint &&
+      previousCheckout.preferenceId === pending.preferenceId &&
+      previousCheckout.initPoint === pending.initPoint &&
+      hasReusablePreferenceWindow,
     );
     paymentDebugStage = "persisting_checkout";
     console.log("[MP registro] checkout antes de persistir", {
@@ -502,7 +541,18 @@ router.post("/crear-preferencia-registro", async (req, res) => {
           expectedAmount: unitPrice,
           planVersion: plan.version,
           currency: PAYMENT_CURRENCY,
+          preferenceStartsAt: newPreferenceStartsAt,
+          preferenceExpiresAt: newPreferenceExpiresAt,
         });
+    const preferenceStartsAt = canReuseCheckout
+      ? previousPreferenceStartsAt
+      : newPreferenceStartsAt;
+    const preferenceExpiresAt = canReuseCheckout
+      ? previousPreferenceExpiresAt
+      : newPreferenceExpiresAt;
+    const pendingExpiresAt = PendingRegistration.getPendingExpiration(
+      preferenceStartsAt.getTime(),
+    );
     console.log("[MP registro] checkout listo", {
       paymentDebugID,
       checkoutID: String(checkout._id),
@@ -517,6 +567,27 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       });
     }
 
+    pending.planId = planId;
+    pending.months = monthsNum;
+    pending.checkoutID = checkout._id;
+    pending.expiresAt = pendingExpiresAt;
+
+    if (canReuseCheckout) {
+      paymentDebugStage = "saving_reused_checkout";
+      await pending.save();
+      console.log("[MP registro] preferencia reutilizada sin actualizar", {
+        paymentDebugID,
+        pendingRegistrationID: String(pending._id),
+        checkoutID: String(checkout._id),
+      });
+      paymentDebugStage = "completed";
+      return res.json({
+        init_point: pending.initPoint,
+        registrationToken: activationToken,
+        reused: true,
+      });
+    }
+
     const preferenceBody = buildRegistrationPreference({
       pendingID: pending._id,
       checkoutID: checkout._id,
@@ -524,43 +595,24 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       planId,
       months: monthsNum,
       unitPrice,
-      checkoutStartsAt,
-      checkoutExpiresAt,
+      preferenceStartsAt,
+      preferenceExpiresAt,
     });
     const preference = createPreferenceClient();
-    const wasReused = canReuseCheckout;
     let result;
-    let preferenceId;
-    let initPoint;
     try {
-      paymentDebugStage = wasReused
-        ? "updating_mercadopago_preference"
-        : "creating_mercadopago_preference";
+      paymentDebugStage = "creating_mercadopago_preference";
       console.log("[MP registro] llamada a MercadoPago", {
         paymentDebugID,
         checkoutID: String(checkout._id),
-        action: wasReused ? "update" : "create",
+        action: "create",
         hasWebhookUrl: Boolean(process.env.MP_WEBHOOK_URL),
         hasFrontendUrl: Boolean(process.env.FRONTEND_URL),
       });
-      result = wasReused
-        ? await preference.update({
-            id: pending.preferenceId,
-            updatePreferenceRequest: preferenceBody,
-            requestOptions: {
-              idempotencyKey: `registration-update-${paymentDebugID}`,
-            },
-          })
-        : await preference.create({
-            body: preferenceBody,
-            requestOptions: { idempotencyKey: `registration-${checkout._id}` },
-          });
-      preferenceId = wasReused
-        ? result?.id || pending.preferenceId
-        : result?.id;
-      initPoint = wasReused
-        ? result?.init_point || pending.initPoint
-        : result?.init_point;
+      result = await preference.create({
+        body: preferenceBody,
+        requestOptions: { idempotencyKey: `registration-${checkout._id}` },
+      });
       console.log("[MP registro] respuesta de MercadoPago", {
         paymentDebugID,
         checkoutID: String(checkout._id),
@@ -579,27 +631,21 @@ router.post("/crear-preferencia-registro", async (req, res) => {
           result.init_point === pending.initPoint,
         ),
       });
-      if (!preferenceId || !initPoint) {
+      if (!result?.id || !result?.init_point) {
         throw new Error(
           "MercadoPago no devolvió una preferencia de checkout completa",
         );
       }
     } catch (error) {
-      if (!wasReused) {
-        paymentDebugStage = "marking_checkout_failed";
-        await PaymentCheckout.findByIdAndUpdate(checkout._id, {
-          $set: { status: "failed", failureReason: error.message },
-        });
-      }
+      paymentDebugStage = "marking_checkout_failed";
+      await PaymentCheckout.findByIdAndUpdate(checkout._id, {
+        $set: { status: "failed", failureReason: error.message },
+      });
       throw error;
     }
 
-    pending.planId = planId;
-    pending.months = monthsNum;
-    pending.preferenceId = preferenceId;
-    pending.initPoint = initPoint;
-    pending.checkoutID = checkout._id;
-    pending.expiresAt = pendingExpiresAt;
+    pending.preferenceId = result.id;
+    pending.initPoint = result.init_point;
     paymentDebugStage = "saving_pending_checkout";
     await pending.save();
     console.log("[MP registro] registro pendiente actualizado", {
@@ -616,7 +662,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       {
         $set: {
           preferenceId: pending.preferenceId,
-          initPoint,
+          initPoint: pending.initPoint,
           status: "ready",
           failureReason: null,
         },
@@ -638,9 +684,9 @@ router.post("/crear-preferencia-registro", async (req, res) => {
 
     paymentDebugStage = "completed";
     res.json({
-      init_point: initPoint,
+      init_point: pending.initPoint,
       registrationToken: activationToken,
-      reused: wasReused,
+      reused: false,
     });
   } catch (error) {
     if (error.code === "PLAN_CATALOG_UNAVAILABLE")

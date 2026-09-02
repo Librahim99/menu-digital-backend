@@ -206,6 +206,8 @@ const validateCheckoutSnapshot = ({
   if (String(currency || "").toUpperCase() !== String(checkout.currency || "").toUpperCase()) {
     return "checkout_currency_mismatch";
   }
+  // `status` y `preferenceExpiresAt` controlan reutilización/auditoría, no la
+  // acreditación de un pago que MercadoPago ya confirmó como aprobado.
   return null;
 };
 

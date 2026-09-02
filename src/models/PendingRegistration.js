@@ -1,12 +1,12 @@
 const mongoose = require("mongoose");
+const {
+  CHECKOUT_VALIDITY_MS,
+  getCheckoutExpiration,
+} = require("../config/paymentPlans");
 
-const CHECKOUT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PAYMENT_GRACE_MS = 3 * 24 * 60 * 60 * 1000;
-const PENDING_TTL_MS = CHECKOUT_TTL_MS + PAYMENT_GRACE_MS;
+const PENDING_TTL_MS = CHECKOUT_VALIDITY_MS + PAYMENT_GRACE_MS;
 const TERMINAL_TTL_MS = 24 * 60 * 60 * 1000;
-
-const getCheckoutExpiration = (now = Date.now()) =>
-  new Date(now + CHECKOUT_TTL_MS);
 
 const getPendingExpiration = (now = Date.now()) =>
   new Date(now + PENDING_TTL_MS);

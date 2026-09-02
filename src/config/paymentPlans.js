@@ -1,4 +1,5 @@
 const PAYMENT_CURRENCY = "ARS";
+const CHECKOUT_VALIDITY_MS = 7 * 24 * 60 * 60 * 1000;
 
 // Valores históricos para inicializar documentos que todavía no existen.
 // El checkout consulta services/planCatalog; estos importes NO son un fallback.
@@ -34,10 +35,15 @@ const getCheckoutAmount = (planId, months) => {
   return Math.round(plan.unitPrice * multiplier);
 };
 
+const getCheckoutExpiration = (now = Date.now()) =>
+  new Date(Number(now) + CHECKOUT_VALIDITY_MS);
+
 module.exports = {
   PAYMENT_CURRENCY,
+  CHECKOUT_VALIDITY_MS,
   PAYMENT_PLANS,
   MONTH_MULTIPLIERS,
   VALID_PAYMENT_MONTHS,
   getCheckoutAmount,
+  getCheckoutExpiration,
 };

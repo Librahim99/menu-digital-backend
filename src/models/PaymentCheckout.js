@@ -69,6 +69,27 @@ const paymentCheckoutSchema = new mongoose.Schema(
       },
     },
     sourceExpiresAt: { type: Date, default: null, immutable: true },
+    preferenceStartsAt: {
+      type: Date,
+      required: function () {
+        return this.isNew;
+      },
+      immutable: true,
+    },
+    preferenceExpiresAt: {
+      type: Date,
+      required: function () {
+        return this.isNew;
+      },
+      immutable: true,
+      validate: {
+        validator: function (value) {
+          if (!value || !this.preferenceStartsAt) return true;
+          return value > this.preferenceStartsAt;
+        },
+        message: "preferenceExpiresAt debe ser posterior a preferenceStartsAt",
+      },
+    },
     status: {
       type: String,
       enum: ["creating", "ready", "superseded", "failed", "payment_received"],
