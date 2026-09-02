@@ -46,10 +46,19 @@ const ItemSchema = new mongoose.Schema(
     },
 
     offerPrice: {
-      type: Number,
-      default: null, // Precio en oferta, si aplica
-      min: [0, "El precio en oferta no puede ser negativo"],
+  type: Number,
+  default: null, // Precio en oferta, si aplica
+  min: [0, "El precio en oferta no puede ser negativo"],
+  validate: {
+    validator: function (v) {
+      // Si no hay precio de oferta, está bien
+      if (v == null) return true;
+      // Debe ser menor que el precio normal
+      return this.price != null && v < this.price;
     },
+    message: "El precio de oferta debe ser menor al precio",
+  },
+},
 
     // Rango de fecha y hora en el que aplica la oferta. Sin rango, el
     // offerPrice es manual/permanente; la API pública resuelve la vigencia.
