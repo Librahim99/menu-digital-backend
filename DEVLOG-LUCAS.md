@@ -444,3 +444,27 @@ regresionarse los bloqueos anteriores, repetirse las auditorías de dependencias
 ejecutarse E2E reales y autorizados de MercadoPago, MongoDB Atlas, Cloudinary y del
 despliegue. En esta revisión no se ejecutaron pagos reales, consultas productivas,
 uploads reales ni deploys en Vercel/Koyeb.
+
+## 02-09-2026 — PAY-05 completo localmente
+
+Esta entrada actualiza el estado posterior a la auditoría del 01-09 sin reescribir
+sus observaciones históricas. No hubo deploy, consultas a Atlas ni pagos reales.
+
+- `config/paymentPlans.js` centraliza una ventana de checkout de siete días.
+- Los `PaymentCheckout` nuevos guardan `preferenceStartsAt` y
+  `preferenceExpiresAt` inmutables. No usan TTL y los snapshots legacy sin fechas
+  siguen siendo legibles.
+- Registro, upgrade y renovación envían `expires`, `expiration_date_from`,
+  `expiration_date_to` y `date_of_expiration` con las fechas exactas persistidas.
+- Un retry de registro solo reutiliza un checkout `ready`, vigente, con ventana de
+  siete días, selección, versión, importe, moneda y enlaces coincidentes. Devuelve
+  el enlace guardado sin actualizar MercadoPago ni extender el vencimiento.
+- Un checkout vencido, legacy, futuro o inconsistente crea un reemplazo y conserva
+  el anterior como `superseded` para auditoría.
+- El webhook acredita pagos aprobados tardíos aunque la preferencia haya vencido o
+  el checkout esté `superseded`; mantiene la validación estricta del snapshot.
+- Validación focalizada: **64/64**. Suite completa: `npm test` → **135/135**.
+  `git diff --check` pasa.
+- Pendiente antes de liberar: desplegar de forma coordinada y ejecutar el E2E real
+  autorizado contra MercadoPago/Atlas, comprobando payload, checkout, transacción,
+  webhook, plan/vencimiento, CRM, redirect y sincronización del dashboard.

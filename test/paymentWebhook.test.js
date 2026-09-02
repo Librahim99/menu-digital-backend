@@ -14,6 +14,7 @@ const { encryptPendingPassword } = require("../src/utils/pendingCredentials");
 const {
   PAYMENT_CURRENCY,
   getCheckoutAmount,
+  getCheckoutExpiration,
 } = require("../src/config/paymentPlans");
 
 const USER_ID = "64f000000000000000000123";
@@ -262,6 +263,7 @@ function mockExistingRegistrationUser(
     approvedAt,
     currentPlan,
     currentExpiresAt,
+    checkoutOverrides = null,
   }
 ) {
   const previousSecret = process.env.PENDING_REGISTRATION_SECRET;
@@ -278,8 +280,20 @@ function mockExistingRegistrationUser(
       plan_id: purchasedPlan,
       months,
       type: "registration",
+      ...(checkoutOverrides && { checkout_id: CHECKOUT_ID }),
     },
   }));
+  const checkout = checkoutOverrides
+    ? mockCheckout(t, {
+        operation: "registration",
+        userID: null,
+        pendingRegistrationID: PENDING_REGISTRATION_ID,
+        planId: purchasedPlan,
+        months,
+        expectedAmount: 5400,
+        ...checkoutOverrides,
+      })
+    : null;
   const pending = {
     _id: PENDING_REGISTRATION_ID,
     status: "pending",
@@ -325,6 +339,7 @@ function mockExistingRegistrationUser(
     existingUser,
     userUpdates,
     getUserCreates: () => userCreates,
+    checkout,
   };
 }
 
@@ -333,6 +348,10 @@ test("el checkout de registro vence después de 7 días", () => {
 
   assert.equal(
     PendingRegistration.getCheckoutExpiration(now).toISOString(),
+    "2026-08-28T15:00:00.000Z"
+  );
+  assert.equal(
+    getCheckoutExpiration(now).toISOString(),
     "2026-08-28T15:00:00.000Z"
   );
 });
@@ -564,6 +583,55 @@ test("un checkout nuevo valida asociación, plan, período, importe y moneda", a
   assert.equal(transaction.checkoutValidationReason, null);
   assert.equal(transaction.entitlementStatus, "applied");
 });
+
+for (const checkoutCase of [
+  {
+    name: "con preferencia vencida",
+    overrides: {
+      status: "ready",
+      preferenceStartsAt: new Date("2026-08-01T15:00:00.000Z"),
+      preferenceExpiresAt: new Date("2026-08-08T15:00:00.000Z"),
+    },
+  },
+  {
+    name: "marcado superseded",
+    overrides: {
+      status: "superseded",
+      preferenceStartsAt: new Date("2026-08-20T15:00:00.000Z"),
+      preferenceExpiresAt: new Date("2026-08-27T15:00:00.000Z"),
+    },
+  },
+]) {
+  test(`un upgrade aprobado acredita aunque el checkout esté ${checkoutCase.name}`, async (t) => {
+    const paymentContext = mockCommon(t, approvedPayment({
+      metadata: {
+        plan_id: "basic",
+        months: 3,
+        type: "upgrade",
+        payment_mode: "upgrade",
+        checkout_id: CHECKOUT_ID,
+      },
+    }));
+    const checkout = mockCheckout(t, checkoutCase.overrides);
+    const updates = [];
+    mockExistingUser(t, {
+      subscription: "free",
+      subscriptionExpiresAt: null,
+    }, updates);
+
+    const res = response();
+    await mpWebhook(request(), res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].update.subscription, "basic");
+    assert.equal(checkout.status, "payment_received");
+    const transaction = paymentContext.getTransaction();
+    assert.equal(transaction.checkoutValidation, "strict");
+    assert.equal(transaction.checkoutValidationReason, null);
+    assert.equal(transaction.entitlementStatus, "applied");
+  });
+}
 
 test("un importe distinto al checkout original no acredita el plan", async (t) => {
   const paymentContext = mockCommon(t, approvedPayment({
@@ -1048,6 +1116,14 @@ test("el checkout conserva un snapshot durable y los precios iniciales de migrac
   assert.equal(PAYMENT_CURRENCY, "ARS");
   assert.equal(PaymentCheckout.schema.path("expiresAt"), undefined);
   assert.equal(
+    PaymentCheckout.schema.path("preferenceStartsAt").options.immutable,
+    true
+  );
+  assert.equal(
+    PaymentCheckout.schema.path("preferenceExpiresAt").options.immutable,
+    true
+  );
+  assert.equal(
     PaymentCheckout.schema.path("expectedAmount").options.required,
     true
   );
@@ -1060,6 +1136,46 @@ test("el checkout conserva un snapshot durable y los precios iniciales de migrac
   );
   assert.equal(preferenceIndex[1].unique, true);
   assert.equal(preferenceIndex[1].sparse, true);
+});
+
+test("los checkouts nuevos exigen una ventana válida y los legacy siguen siendo compatibles", () => {
+  const baseCheckout = {
+    operation: "upgrade",
+    userID: USER_ID,
+    planId: "basic",
+    months: 1,
+    expectedAmount: 29999,
+    planVersion: 0,
+    currency: "ARS",
+    sourcePlan: "free",
+  };
+  const preferenceStartsAt = new Date("2026-09-02T12:00:00.000Z");
+  const preferenceExpiresAt = getCheckoutExpiration(preferenceStartsAt);
+
+  const validCheckout = new PaymentCheckout({
+    ...baseCheckout,
+    preferenceStartsAt,
+    preferenceExpiresAt,
+  });
+  assert.equal(validCheckout.validateSync(), undefined);
+
+  const missingWindow = new PaymentCheckout(baseCheckout).validateSync();
+  assert.ok(missingWindow.errors.preferenceStartsAt);
+  assert.ok(missingWindow.errors.preferenceExpiresAt);
+
+  const invertedWindow = new PaymentCheckout({
+    ...baseCheckout,
+    preferenceStartsAt,
+    preferenceExpiresAt: new Date("2026-09-01T12:00:00.000Z"),
+  }).validateSync();
+  assert.ok(invertedWindow.errors.preferenceExpiresAt);
+
+  const legacyCheckout = PaymentCheckout.hydrate({
+    _id: CHECKOUT_ID,
+    ...baseCheckout,
+  });
+  assert.equal(legacyCheckout.isNew, false);
+  assert.equal(legacyCheckout.validateSync(), undefined);
 });
 
 test("preferencias antiguas sin months acreditan un mes con vencimiento", async (t) => {
@@ -1385,6 +1501,48 @@ test("un usuario existente recibe el entitlement antes de completar el alta", as
     entitlementUpdate.subscriptionExpiresAt.toISOString()
   );
   assert.equal(paymentContext.crmUpdates.length, 1);
+});
+
+test("un alta aprobada tarde acredita un checkout vencido y superseded", async (t) => {
+  const preferenceStartsAt = new Date("2026-08-13T15:00:00.000Z");
+  const preferenceExpiresAt = getCheckoutExpiration(preferenceStartsAt);
+  const {
+    paymentContext,
+    pending,
+    pendingUpdates,
+    userUpdates,
+    getUserCreates,
+    checkout,
+  } = mockExistingRegistrationUser(t, {
+    purchasedPlan: "basic",
+    months: 3,
+    approvedAt: "2026-08-21T15:00:00.000Z",
+    currentPlan: "free",
+    currentExpiresAt: null,
+    checkoutOverrides: {
+      status: "superseded",
+      preferenceStartsAt,
+      preferenceExpiresAt,
+    },
+  });
+  pending.expiresAt = PendingRegistration.getPendingExpiration(
+    preferenceStartsAt.getTime(),
+  );
+
+  const res = response();
+  await mpWebhook(request(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(getUserCreates(), 0);
+  assert.equal(userUpdates.length, 1);
+  assert.equal(userUpdates[0].update.$set.subscription, "basic");
+  assert.equal(pendingUpdates.length, 1);
+  assert.equal(pending.status, "completed");
+  assert.equal(checkout.status, "payment_received");
+  const transaction = paymentContext.getTransaction();
+  assert.equal(transaction.checkoutValidation, "strict");
+  assert.equal(transaction.checkoutValidationReason, null);
+  assert.equal(transaction.entitlementStatus, "applied");
 });
 
 test("un alta Basic no degrada un Pro activo ni acorta su vencimiento", async (t) => {

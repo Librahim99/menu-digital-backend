@@ -9,7 +9,10 @@ const Plan = require("../src/models/Plan");
 const Seller = require("../src/models/Seller");
 const catalog = require("../src/services/planCatalog");
 const planController = require("../src/controllers/planController");
-const { getCheckoutAmount } = require("../src/config/paymentPlans");
+const {
+  getCheckoutAmount,
+  getCheckoutExpiration,
+} = require("../src/config/paymentPlans");
 
 process.env.MP_ACCESS_TOKEN = "TEST-token";
 process.env.MP_WEBHOOK_URL = "https://backend.test/api/payments/webhook";
@@ -160,6 +163,24 @@ test("upgrade y renovación usan precio regular aunque exista descuento para ven
         assert.equal(sent.items[0].unit_price, saved.expectedAmount);
         assert.equal(saved.planVersion, 7);
         assert.equal(saved.operation, subscription === "free" ? "upgrade" : "renewal");
+        assert.ok(saved.preferenceStartsAt instanceof Date);
+        assert.equal(
+          saved.preferenceExpiresAt.toISOString(),
+          getCheckoutExpiration(saved.preferenceStartsAt).toISOString(),
+        );
+        assert.equal(sent.expires, true);
+        assert.equal(
+          sent.expiration_date_from,
+          saved.preferenceStartsAt.toISOString(),
+        );
+        assert.equal(
+          sent.expiration_date_to,
+          saved.preferenceExpiresAt.toISOString(),
+        );
+        assert.equal(
+          sent.date_of_expiration,
+          saved.preferenceExpiresAt.toISOString(),
+        );
       }
     }
   }
@@ -398,14 +419,13 @@ for (const testCase of [
 }
 
 test(
-  "un update reutilizado conserva los datos guardados si MercadoPago no los repite",
+  "un retry vigente devuelve los datos guardados sin llamar a MercadoPago ni extender fechas",
   { concurrency: false },
   async (t) => {
     silencePaymentLogs(t);
     const { pending, getSaveCalls } = createPending();
-    let sentEndpoint;
-    let sentConfig;
-    let readyCheckoutUpdate;
+    const preferenceStartsAt = new Date(Date.now() - 60 * 60 * 1000);
+    const preferenceExpiresAt = getCheckoutExpiration(preferenceStartsAt);
     mockPendingLookup(t, pending);
 
     t.mock.method(PaymentCheckout, "findById", async () => ({
@@ -417,22 +437,19 @@ test(
       expectedAmount: getCheckoutAmount("pro", 3),
       currency: "ARS",
       sourcePlan: null,
+      preferenceId: OLD_PREFERENCE_ID,
+      initPoint: OLD_INIT_POINT,
+      preferenceStartsAt,
+      preferenceExpiresAt,
     }));
     t.mock.method(PaymentCheckout, "create", async () => {
       throw new Error("No debe crear otro checkout cuando puede reutilizarlo");
     });
-    t.mock.method(
-      PaymentCheckout,
-      "findByIdAndUpdate",
-      async (id, update) => {
-        readyCheckoutUpdate = update.$set;
-        return { _id: id, status: update.$set.status };
-      }
-    );
-    t.mock.method(RestClient, "fetch", async (endpoint, config) => {
-      sentEndpoint = endpoint;
-      sentConfig = config;
-      return {};
+    t.mock.method(PaymentCheckout, "findByIdAndUpdate", async () => {
+      throw new Error("No debe actualizar el checkout reutilizado");
+    });
+    t.mock.method(RestClient, "fetch", async () => {
+      throw new Error("No debe llamar a MercadoPago al reutilizar");
     });
 
     const req = { body: createRegistrationBody() };
@@ -446,14 +463,147 @@ test(
     assert.equal(pending.preferenceId, OLD_PREFERENCE_ID);
     assert.equal(pending.initPoint, OLD_INIT_POINT);
     assert.equal(getSaveCalls(), 1);
-    assert.equal(readyCheckoutUpdate.preferenceId, OLD_PREFERENCE_ID);
-    assert.equal(readyCheckoutUpdate.initPoint, OLD_INIT_POINT);
-    assert.equal(readyCheckoutUpdate.status, "ready");
-    assert.equal(sentEndpoint, `/checkout/preferences/${OLD_PREFERENCE_ID}`);
-    assert.equal(sentConfig.method, "PUT");
-    assert.match(
-      sentConfig.idempotencyKey,
-      /^registration-update-[0-9a-f-]{36}$/
+    assert.equal(
+      pending.expiresAt.toISOString(),
+      PendingRegistration.getPendingExpiration(
+        preferenceStartsAt.getTime(),
+      ).toISOString(),
     );
   }
 );
+
+for (const replacementCase of [
+  {
+    name: "legacy sin fechas",
+    getOverrides: () => ({
+      preferenceStartsAt: undefined,
+      preferenceExpiresAt: undefined,
+    }),
+  },
+  {
+    name: "vencido",
+    getOverrides: () => {
+      const preferenceStartsAt = new Date(
+        Date.now() - 8 * 24 * 60 * 60 * 1000,
+      );
+      return {
+        preferenceStartsAt,
+        preferenceExpiresAt: getCheckoutExpiration(preferenceStartsAt),
+      };
+    },
+  },
+  {
+    name: "con inicio futuro",
+    getOverrides: () => {
+      const preferenceStartsAt = new Date(Date.now() + 60 * 60 * 1000);
+      return {
+        preferenceStartsAt,
+        preferenceExpiresAt: getCheckoutExpiration(preferenceStartsAt),
+      };
+    },
+  },
+  {
+    name: "con duración distinta de siete días",
+    getOverrides: () => {
+      const preferenceStartsAt = new Date(Date.now() - 60 * 60 * 1000);
+      return {
+        preferenceStartsAt,
+        preferenceExpiresAt: new Date(
+          getCheckoutExpiration(preferenceStartsAt).getTime() + 1000,
+        ),
+      };
+    },
+  },
+  {
+    name: "con enlaces inconsistentes",
+    getOverrides: () => {
+      const preferenceStartsAt = new Date(Date.now() - 60 * 60 * 1000);
+      return {
+        preferenceId: "otra-preferencia",
+        preferenceStartsAt,
+        preferenceExpiresAt: getCheckoutExpiration(preferenceStartsAt),
+      };
+    },
+  },
+]) {
+  test(
+    `un checkout ${replacementCase.name} crea un reemplazo sin mutar su snapshot`,
+    { concurrency: false },
+    async (t) => {
+      silencePaymentLogs(t);
+      const { pending, getSaveCalls } = createPending();
+      const validPreferenceStartsAt = new Date(Date.now() - 60 * 60 * 1000);
+      const previousCheckout = {
+        _id: OLD_CHECKOUT_ID,
+        status: "ready",
+        planId: "pro",
+        months: 3,
+        planVersion: 0,
+        expectedAmount: getCheckoutAmount("pro", 3),
+        currency: "ARS",
+        sourcePlan: null,
+        preferenceId: OLD_PREFERENCE_ID,
+        initPoint: OLD_INIT_POINT,
+        preferenceStartsAt: validPreferenceStartsAt,
+        preferenceExpiresAt: getCheckoutExpiration(validPreferenceStartsAt),
+        ...replacementCase.getOverrides(),
+      };
+      let createdSnapshot;
+      let mercadoPagoCalls = 0;
+      const updates = [];
+      mockPendingLookup(t, pending);
+
+      t.mock.method(PaymentCheckout, "findById", async () => previousCheckout);
+      t.mock.method(PaymentCheckout, "create", async (snapshot) => {
+        createdSnapshot = structuredClone(snapshot);
+        return { ...snapshot, _id: NEW_CHECKOUT_ID, status: "creating" };
+      });
+      t.mock.method(PaymentCheckout, "findByIdAndUpdate", async (id, update) => {
+        updates.push({ id: String(id), fields: structuredClone(update.$set) });
+        return { _id: id, status: update.$set.status };
+      });
+      t.mock.method(RestClient, "fetch", async (_endpoint, config) => {
+        mercadoPagoCalls += 1;
+        const body = JSON.parse(config.body);
+        assert.equal(
+          body.expiration_date_from,
+          createdSnapshot.preferenceStartsAt.toISOString(),
+        );
+        assert.equal(
+          body.expiration_date_to,
+          createdSnapshot.preferenceExpiresAt.toISOString(),
+        );
+        return {
+          id: "new-preference",
+          init_point: "https://mercadopago.test/new-preference",
+        };
+      });
+
+      const res = createResponse();
+      await getHandler("/crear-preferencia-registro")({
+        body: createRegistrationBody(),
+      }, res);
+
+      assert.equal(res.statusCode, 200);
+      assert.equal(res.body.reused, false);
+      assert.equal(mercadoPagoCalls, 1);
+      assert.equal(getSaveCalls(), 1);
+      assert.equal(pending.checkoutID, NEW_CHECKOUT_ID);
+      assert.equal(pending.preferenceId, "new-preference");
+      assert.equal(
+        createdSnapshot.preferenceExpiresAt.toISOString(),
+        getCheckoutExpiration(
+          createdSnapshot.preferenceStartsAt,
+        ).toISOString(),
+      );
+      assert.deepEqual(
+        updates.find(update => update.id === OLD_CHECKOUT_ID)?.fields,
+        { status: "superseded" },
+      );
+      assert.equal(
+        updates.find(update => update.id === NEW_CHECKOUT_ID)?.fields.status,
+        "ready",
+      );
+    },
+  );
+}
