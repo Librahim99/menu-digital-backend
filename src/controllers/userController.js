@@ -7,7 +7,7 @@ const Item = require("../models/Item");
 const PageView = require("../models/PageView");
 const ItemView = require("../models/ItemView");
 const {
-  getEffectivePlan,
+  getSubscriptionState,
   getTemplateForFeatures,
   TEMPLATE_IDS,
 } = require("../config/plans");
@@ -188,13 +188,22 @@ const loginUser = async (req, res) => {
       return res.status(403).json({ message: "Cuenta desactivada" });
     }
 
+    const subscriptionState = getSubscriptionState(
+      user.subscription,
+      user.subscriptionExpiresAt
+    );
+
     res.json({
       _id: user._id,
       username: user.username,
       admin: user.admin,
       slug: user.slug,
-      subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
+      subscription: subscriptionState.effectivePlan,
       subscriptionExpiresAt: user.subscriptionExpiresAt,
+      subscriptionStatus: subscriptionState.subscriptionStatus,
+      previousSubscription: subscriptionState.previousSubscription,
+      downgradeReason: subscriptionState.downgradeReason,
+      downgradedAt: subscriptionState.downgradedAt,
       token: generateAuthToken(user._id),
     });
   } catch (error) {
@@ -219,11 +228,19 @@ const getAuthUser = async (req, res) => {
     const itemCount = await Item.countDocuments({ menuID: { $in: menuIDs }, hidden: false });
 
     const plan = await getPlanForUser(user);
+    const subscriptionState = getSubscriptionState(
+      user.subscription,
+      user.subscriptionExpiresAt
+    );
     const effectivePlan = plan.name;
     res.json({
       ...user.toObject(),
       contactInfo: getContactInfo(user.contactInfo),
       subscription: effectivePlan,
+      subscriptionStatus: subscriptionState.subscriptionStatus,
+      previousSubscription: subscriptionState.previousSubscription,
+      downgradeReason: subscriptionState.downgradeReason,
+      downgradedAt: subscriptionState.downgradedAt,
       features: plan.features,
       template: getTemplateForFeatures(user.template, plan.features),
       itemCount,

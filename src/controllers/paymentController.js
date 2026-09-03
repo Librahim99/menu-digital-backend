@@ -5,7 +5,12 @@ const User = require("../models/User");
 const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
 const PaymentTransaction = require("../models/PaymentTransaction");
-const { PLAN_MAP, PLAN_ORDER, getEffectivePlan } = require("../config/plans");
+const {
+  PLAN_MAP,
+  PLAN_ORDER,
+  getEffectivePlan,
+  getSubscriptionState,
+} = require("../config/plans");
 const { getExpectedPaymentLiveMode } = require("../config/environment");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { addCalendarMonths } = require("../utils/dates");
@@ -517,6 +522,11 @@ const getRegistrationStatus = async (req, res) => {
       return res.status(403).json({ message: "Cuenta desactivada" });
     }
 
+    const subscriptionState = getSubscriptionState(
+      user.subscription,
+      user.subscriptionExpiresAt
+    );
+
     res.json({
       status: "completed",
       auth: {
@@ -524,8 +534,12 @@ const getRegistrationStatus = async (req, res) => {
         username: user.username,
         admin: user.admin,
         slug: user.slug,
-        subscription: getEffectivePlan(user.subscription, user.subscriptionExpiresAt),
+        subscription: subscriptionState.effectivePlan,
         subscriptionExpiresAt: user.subscriptionExpiresAt,
+        subscriptionStatus: subscriptionState.subscriptionStatus,
+        previousSubscription: subscriptionState.previousSubscription,
+        downgradeReason: subscriptionState.downgradeReason,
+        downgradedAt: subscriptionState.downgradedAt,
         token: generateAuthToken(user._id),
       },
     });

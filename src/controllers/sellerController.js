@@ -1,6 +1,6 @@
 const Seller = require("../models/Seller");
 const User = require("../models/User");
-const { getEffectivePlan } = require("../config/plans");
+const { getSubscriptionState } = require("../config/plans");
 const { handleError } = require("../utils/handleError");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -34,11 +34,12 @@ const getSellerMetrics = (clients, now = new Date()) => {
   for (const client of clients) {
     const createdAt = toTime(client.createdAt);
     const expiresAt = toTime(client.subscriptionExpiresAt);
-    const effectivePlan = getEffectivePlan(
+    const subscriptionState = getSubscriptionState(
       client.subscription,
       client.subscriptionExpiresAt,
       now,
     );
+    const effectivePlan = subscriptionState.effectivePlan;
 
     if (client.active) metrics.activeAccounts += 1;
     if (client.menu) metrics.withMenu += 1;
@@ -60,11 +61,7 @@ const getSellerMetrics = (clients, now = new Date()) => {
       if (expiresAt !== null && expiresAt > nowTime && expiresAt <= thirtyDaysAhead) {
         metrics.expiring30d += 1;
       }
-    } else if (
-      client.subscription !== "free" &&
-      expiresAt !== null &&
-      expiresAt <= nowTime
-    ) {
+    } else if (subscriptionState.subscriptionStatus === "expired") {
       metrics.expired += 1;
     }
   }
@@ -85,11 +82,11 @@ const clientToDTO = (client, now = new Date()) => ({
   active: Boolean(client.active),
   menu: Boolean(client.menu),
   subscription: client.subscription,
-  effectiveSubscription: getEffectivePlan(
+  effectiveSubscription: getSubscriptionState(
     client.subscription,
     client.subscriptionExpiresAt,
     now,
-  ),
+  ).effectivePlan,
   subscriptionExpiresAt: client.subscriptionExpiresAt || null,
   createdAt: client.createdAt,
 });

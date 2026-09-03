@@ -2,7 +2,25 @@ const { handleError } = require("../utils/handleError");
 const User = require("../models/User");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
+const { getSubscriptionState } = require("../config/plans");
 const { logCrmEvent } = require("../utils/crmEvents");
+
+const toAdminUserDTO = (user) => {
+  const plain = typeof user.toObject === "function" ? user.toObject() : { ...user };
+  const state = getSubscriptionState(plain.subscription, plain.subscriptionExpiresAt);
+  return {
+    ...plain,
+    // Conservamos el plan comprado en el campo histórico y añadimos el
+    // efectivo para que los consumidores puedan filtrar permisos sin perder
+    // contexto de la cuenta.
+    subscription: plain.subscription,
+    effectiveSubscription: state.effectivePlan,
+    subscriptionStatus: state.subscriptionStatus,
+    previousSubscription: state.previousSubscription,
+    downgradeReason: state.downgradeReason,
+    downgradedAt: state.downgradedAt,
+  };
+};
 
 
 // ──────────────────────────────────────────────
@@ -17,7 +35,7 @@ const getAllUsers = async (req, res) => {
       return res.status(403).json({ message: "Acceso denegado" });
     }
     const users = await User.find().select("-password");
-    res.json(users);
+    res.json(users.map(toAdminUserDTO));
   } catch (error) {
     handleError(res, error);
   }
@@ -37,7 +55,7 @@ const getUser = async (req, res) => {
         }
     const { userID } = req.params 
     const user = await User.findById(userID).select("-password");
-    res.json(user);
+    res.json(user ? toAdminUserDTO(user) : user);
   } catch (error) {
     handleError(res, error);
   }

@@ -7,6 +7,7 @@ const Item = require("../models/Item");
 const CrmProfile = require("../models/CrmProfile");
 const PaymentTransaction = require("../models/PaymentTransaction");
 const { buenosAiresDateStr } = require("../utils/dates");
+const { getSubscriptionState } = require("../config/plans");
 const { STAGES } = CrmProfile;
 
 const STAGE_LABEL = {
@@ -169,13 +170,18 @@ const listClients = async (req, res) => {
         itemCount: menuStats.itemCount,
       });
       const subscriptionExpiresAt = u.subscriptionExpiresAt || null;
+      const subscriptionState = getSubscriptionState(
+        u.subscription,
+        subscriptionExpiresAt,
+        now
+      );
       const attention = [];
       const isOperationalClient = u.active && p?.stage !== "baja";
 
       if (payment?.attentionCount > 0) attention.push("payment_issue");
       if (isOperationalClient && u.subscription !== "free") {
-        if (!subscriptionExpiresAt) attention.push("subscription_missing_expiry");
-        else if (subscriptionExpiresAt < now) attention.push("subscription_expired");
+        if (subscriptionState.subscriptionStatus === "expired") attention.push("subscription_expired");
+        else if (!subscriptionExpiresAt) attention.push("subscription_missing_expiry");
         else if (subscriptionExpiresAt <= expiringLimit) attention.push("subscription_expiring");
       }
       if (p?.nextFollowUp && p.nextFollowUp < todayCalendarCutoff) {
@@ -189,6 +195,11 @@ const listClients = async (req, res) => {
         businessName: u.contactInfo?.businessName || "",
         slug: u.slug,
         subscription: u.subscription,
+        effectiveSubscription: subscriptionState.effectivePlan,
+        subscriptionStatus: subscriptionState.subscriptionStatus,
+        previousSubscription: subscriptionState.previousSubscription,
+        downgradeReason: subscriptionState.downgradeReason,
+        downgradedAt: subscriptionState.downgradedAt,
         subscriptionExpiresAt,
         active: u.active,
         createdAt: u.createdAt,
@@ -425,7 +436,7 @@ const exportClients = async (req, res) => {
     }
 
     const users = await User.find({ admin: false })
-      .select("username slug subscription active createdAt contactInfo.businessName")
+      .select("username slug subscription subscriptionExpiresAt active createdAt contactInfo.businessName")
       .sort({ createdAt: -1 });
 
     const profiles = await CrmProfile.find({ userID: { $in: users.map((u) => u._id) } })
@@ -436,11 +447,18 @@ const exportClients = async (req, res) => {
     const rows = users
       .map((u) => {
         const p = byUser[u._id.toString()];
+        const subscriptionState = getSubscriptionState(
+          u.subscription,
+          u.subscriptionExpiresAt
+        );
         return {
           businessName: u.contactInfo?.businessName || "",
           username: u.username,
           slug: u.slug || "",
-          subscription: u.subscription,
+          subscription: subscriptionState.effectivePlan,
+          previousSubscription: subscriptionState.previousSubscription,
+          subscriptionStatus: subscriptionState.subscriptionStatus,
+          subscriptionExpiresAt: u.subscriptionExpiresAt || null,
           active: u.active,
           stage: p?.stage || "lead",
           tags: (p?.tags || []).join(", "),
@@ -459,6 +477,8 @@ const exportClients = async (req, res) => {
       { header: "Usuario", key: "username", width: 20 },
       { header: "Slug", key: "slug", width: 24 },
       { header: "Plan", key: "subscription", width: 12 },
+      { header: "Estado del plan", key: "subscriptionStatus", width: 16 },
+      { header: "Vigencia", key: "subscriptionExpiresAt", width: 16 },
       { header: "Estado", key: "active", width: 12 },
       { header: "Etapa", key: "stage", width: 14 },
       { header: "Etiquetas", key: "tags", width: 28 },
@@ -473,6 +493,10 @@ const exportClients = async (req, res) => {
         username: r.username,
         slug: r.slug,
         subscription: PLAN_LABEL[r.subscription] || r.subscription,
+        subscriptionStatus: r.subscriptionStatus === "expired" ? "Downgrade por vencimiento" : "Vigente",
+        subscriptionExpiresAt: r.subscriptionExpiresAt
+          ? new Date(r.subscriptionExpiresAt).toLocaleDateString("es-AR")
+          : "Sin fecha registrada",
         active: r.active ? "Activo" : "Inactivo",
         stage: STAGE_LABEL[r.stage] || r.stage,
         tags: r.tags,
