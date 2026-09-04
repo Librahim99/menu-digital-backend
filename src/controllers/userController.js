@@ -23,6 +23,7 @@ const {
 } = require("../utils/slug");
 const { isScheduleAvailableAt } = require("../utils/itemAvailability");
 const { isOfferActive } = require("../utils/offers");
+const { isValidEmail } = require("../utils/validators");
 
 // ──────────────────────────────────────────────
 // Helper: suma 1 a la visita de hoy del local (upsert, no bloqueante).
@@ -116,6 +117,14 @@ const newUser = async (req, res) => {
     // a la query de Mongo o a bcrypt.
     if (typeof username !== "string" || typeof password !== "string") {
       return res.status(400).json({ message: "Usuario y contraseña son obligatorios" });
+    }
+
+    // El email de contacto no es solo un dato de perfil: baja y arrepentimiento
+    // (Ley 24.240) dependen de poder mandarle un código de confirmación a esta
+    // cuenta. Sin este chequeo, una cuenta con contactInfo.mail vacío o
+    // inválido (ej. "ididid") queda sin forma de ejercer esos derechos.
+    if (!isValidEmail(contactInfo?.mail)) {
+      return res.status(400).json({ message: "Ingresá un email de contacto válido" });
     }
 
     if (isWeakPassword(password)) {
@@ -667,6 +676,15 @@ const editUser = async (req, res) => {
         ...getContactInfo(req.user.contactInfo),
         ...getContactInfo(updates.contactInfo),
       };
+
+      // Mismo chequeo que en el alta (newUser): el email de contacto no es
+      // solo un dato de perfil, baja/arrepentimiento dependen de poder
+      // mandarle un código ahí. Se valida el resultado ya fusionado, así
+      // una edición parcial que no toca "mail" no se ve afectada, pero
+      // tampoco se puede dejar vacío/inválido a propósito.
+      if (!isValidEmail(updates.contactInfo.mail)) {
+        return res.status(400).json({ message: "Ingresá un email de contacto válido" });
+      }
     }
 
     // Validación liviana del horario para que la carta pública no reciba datos que rompan

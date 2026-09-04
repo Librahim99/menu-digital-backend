@@ -89,7 +89,20 @@ const UserSchema = new mongoose.Schema(
 
     // Info de contacto del local (mail, teléfono, ubicación, redes, etc.)
     contactInfo: {
-      mail: { type: String, default: "" },
+      // Sin default vacío a propósito: los tres puntos que escriben acá
+      // (newUser, el alta paga vía webhook, editUser) ya validan formato
+      // antes de llegar hasta el modelo — este validator es la segunda
+      // barrera, no la primera. Cuentas viejas sin email válido (creadas
+      // antes de este fix) no se ven afectadas: los validators de Mongoose
+      // solo corren sobre los campos que un write realmente toca.
+      mail: {
+        type: String,
+        required: [true, "contactInfo.mail es obligatorio"],
+        validate: {
+          validator: (v) => typeof v === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v),
+          message: "contactInfo.mail debe ser un email válido",
+        },
+      },
       number: { type: Number, default: null },
       location: { type: Object, default: {} }, // Ej: { lat, lng }
       address: { type: String, default: "" },
