@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "menu-digital-frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "C:\\Users\\Thomas\\OneDrive\\Documentos\\GitHub\\menu-digital-frontend"],
+      "port": 5173
+    }
+  ]
+}

@@ -5,6 +5,10 @@ const User = require("../models/User");
 const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
 const PaymentTransaction = require("../models/PaymentTransaction");
+const PendingServiceAction = require("../models/PendingServiceAction");
+// Se accede como `mailer.sendConfirmationCodeEmail` (no destructurado) para
+// que los tests puedan mockear el envío reasignando la propiedad del módulo.
+const mailer = require("../utils/mailer");
 const {
   PLAN_MAP,
   PLAN_ORDER,
@@ -1155,12 +1159,91 @@ const mpWebhook = async (req, res) => {
 
 
 // ──────────────────────────────────────────────
+// Baja y arrepentimiento — verificación de identidad por email
+//
+// Ambos flujos son públicos y no piden login (Art. 10 ter y Ley 24.240
+// exigen que rescindir sea al menos tan fácil como contratar). Pero el
+// email/username por sí solo NO prueba que quien pide la acción sea el
+// titular de la cuenta — cualquiera puede escribir el email de otro. Por
+// eso el pedido inicial ("solicitar...") nunca ejecuta nada: solo valida
+// que exista algo que accionar y manda un código de 6 dígitos al email
+// REAL de la cuenta (nunca al que haya tipeado quien pide la baja). Recién
+// "confirmar..." con ese código ejecuta el downgrade o el reembolso.
+// ──────────────────────────────────────────────
+const DIAS_ARREPENTIMIENTO = 10;
+
+const generateNumericCode = () => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+const hashCode = (code) => crypto.createHash("sha256").update(String(code)).digest("hex");
+const maskEmail = (mail) => String(mail).replace(/^(.).*(@.*)$/, "$1***$2");
+
+const createPendingServiceAction = async ({ action, userID, email, paymentID = null }) => {
+  // Un pedido nuevo invalida cualquier código anterior sin usar para la misma acción.
+  await PendingServiceAction.deleteMany({ action, userID, consumed: false });
+
+  const code = generateNumericCode();
+  const pending = await PendingServiceAction.create({
+    action,
+    userID,
+    email,
+    paymentID,
+    codeHash: hashCode(code),
+    expiresAt: new Date(Date.now() + PendingServiceAction.CODE_TTL_MS),
+  });
+
+  try {
+    await mailer.sendConfirmationCodeEmail({ to: email, code, action });
+  } catch (mailError) {
+    await PendingServiceAction.deleteOne({ _id: pending._id });
+    throw Object.assign(new Error("No se pudo enviar el email de confirmación"), {
+      cause: mailError,
+      isMailError: true,
+    });
+  }
+
+  return pending;
+};
+
+// Busca el código pendiente, valida vencimiento/intentos y lo marca
+// consumido de forma atómica (evita doble ejecución por doble click/retry).
+const claimPendingServiceAction = async ({ requestId, code, action }) => {
+  const pending = await PendingServiceAction.findOne({
+    _id: requestId,
+    action,
+    consumed: false,
+    expiresAt: { $gt: new Date() },
+  });
+
+  if (!pending) {
+    return { error: { status: 400, message: "El código venció o ya fue usado. Volvé a solicitarlo." } };
+  }
+
+  if (pending.attempts >= PendingServiceAction.MAX_ATTEMPTS) {
+    await PendingServiceAction.updateOne({ _id: pending._id }, { $set: { consumed: true } });
+    return { error: { status: 400, message: "Superaste el límite de intentos. Volvé a solicitarlo." } };
+  }
+
+  if (hashCode(code) !== pending.codeHash) {
+    await PendingServiceAction.updateOne({ _id: pending._id }, { $inc: { attempts: 1 } });
+    return { error: { status: 400, message: "El código ingresado no es correcto." } };
+  }
+
+  const claimed = await PendingServiceAction.findOneAndUpdate(
+    { _id: pending._id, consumed: false },
+    { $set: { consumed: true } },
+    { new: true }
+  );
+  if (!claimed) {
+    return { error: { status: 409, message: "Esta solicitud ya fue confirmada." } };
+  }
+
+  return { pending: claimed };
+};
+
+// ──────────────────────────────────────────────
 // Derecho de arrepentimiento (Ley 24.240 + Disp. 954/2025)
 // El consumidor puede revocar la aceptación dentro de los
 // 10 días corridos desde la aprobación del pago.
 // ──────────────────────────────────────────────
-const DIAS_ARREPENTIMIENTO = 10;
-
 const solicitarArrepentimiento = async (req, res) => {
   try {
     const { email, orderId } = req.body;
@@ -1202,31 +1285,20 @@ const solicitarArrepentimiento = async (req, res) => {
           refunded: { $ne: true },
         }).sort({ paymentApprovedAt: -1 });
       }
-
-      if (!transaction) {
-        const pending = await PendingRegistration.findOne({
-          $or: [
-            { "contactInfo.mail": normalized },
-            { username: normalized },
-          ],
-          status: "completed",
-          paymentStatus: "approved",
-        }).sort({ completedAt: -1 });
-
-        if (pending?.paymentID) {
-          transaction = await PaymentTransaction.findOne({
-            paymentID: String(pending.paymentID),
-            status: "approved",
-            entitlementStatus: "applied",
-            refunded: { $ne: true },
-          });
-        }
-      }
+      // Nota: no hace falta un fallback vía PendingRegistration acá — toda
+      // transacción con entitlementStatus "applied" ya tiene userID seteado
+      // por markPaymentApplied, así que el bloque de arriba siempre la cubre.
     }
 
     if (!transaction) {
       return res.status(404).json({
         message: "No encontramos una compra aprobada con esos datos.",
+      });
+    }
+
+    if (!transaction.userID) {
+      return res.status(404).json({
+        message: "No pudimos identificar la cuenta asociada a esa compra. Escribinos a menudigitalappsoporte@gmail.com.",
       });
     }
 
@@ -1245,57 +1317,160 @@ const solicitarArrepentimiento = async (req, res) => {
       });
     }
 
-    // ── 3. Reembolso en Mercado Pago ──
-    const refundClient = new PaymentRefund(client);
-    const refund = await refundClient.create({
-      payment_id: transaction.paymentID,
+    // ── 3. Mandar código de confirmación al email real de la cuenta ──
+    const owner = await User.findById(transaction.userID).select("contactInfo.mail");
+    if (!owner?.contactInfo?.mail) {
+      return res.status(400).json({
+        message: "Esta cuenta no tiene un email de contacto configurado. Escribinos a menudigitalappsoporte@gmail.com.",
+      });
+    }
+
+    let pending;
+    try {
+      pending = await createPendingServiceAction({
+        action: "arrepentimiento",
+        userID: transaction.userID,
+        email: owner.contactInfo.mail,
+        paymentID: transaction.paymentID,
+      });
+    } catch (error) {
+      if (error.isMailError) {
+        console.error("No se pudo enviar el email de confirmación de arrepentimiento:", error.cause);
+        return res.status(503).json({
+          message: "No pudimos enviar el email de confirmación. Intentá de nuevo o escribinos a menudigitalappsoporte@gmail.com.",
+        });
+      }
+      throw error;
+    }
+
+    return res.json({
+      ok: true,
+      requiresConfirmation: true,
+      requestId: String(pending._id),
+      maskedEmail: maskEmail(owner.contactInfo.mail),
+      message: "Te enviamos un código de confirmación a tu email.",
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// Paso 2: ejecuta el reembolso real y baja el plan, solo si el código coincide.
+const confirmarArrepentimiento = async (req, res) => {
+  try {
+    const { requestId, code } = req.body;
+
+    if (!requestId || !code) {
+      return res.status(400).json({ message: "Faltan datos para confirmar el arrepentimiento." });
+    }
+
+    const { pending, error } = await claimPendingServiceAction({
+      requestId,
+      code: String(code).trim(),
+      action: "arrepentimiento",
+    });
+    if (error) {
+      return res.status(error.status).json({ message: error.message });
+    }
+
+    // Re-chequeo: puede haber pasado el plazo o haberse reembolsado por otra
+    // vía entre el pedido inicial y la confirmación.
+    const transaction = await PaymentTransaction.findOne({
+      paymentID: pending.paymentID,
+      status: "approved",
+      entitlementStatus: "applied",
+      refunded: { $ne: true },
     });
 
-    // ── 4. Marcar la transacción como reembolsada ──
-    await PaymentTransaction.findOneAndUpdate(
-      { paymentID: transaction.paymentID },
+    if (!transaction) {
+      return res.status(409).json({
+        message: "Esta compra ya no está disponible para reembolso (puede que ya se haya procesado).",
+      });
+    }
+
+    const fechaPago =
+      transaction.paymentApprovedAt ||
+      transaction.paymentUpdatedAt ||
+      transaction.createdAt;
+    const diasPasados =
+      (Date.now() - new Date(fechaPago).getTime()) / (1000 * 60 * 60 * 24);
+    if (diasPasados > DIAS_ARREPENTIMIENTO) {
+      return res.status(400).json({
+        message: `El plazo de ${DIAS_ARREPENTIMIENTO} días para ejercer el arrepentimiento ya venció.`,
+      });
+    }
+
+    // ── Lock atómico contra doble reembolso (antes de llamar a Mercado Pago) ──
+    const locked = await PaymentTransaction.findOneAndUpdate(
+      { paymentID: transaction.paymentID, refunded: { $ne: true } },
       {
         $set: {
           refunded: true,
           refundedAt: new Date(),
-          refundId: String(refund.id),
           status: "refunded",
           refundedAmount: transaction.amount,
         },
-      }
+      },
+      { new: true }
     );
-
-    // ── 5. Bajar al usuario a plan free ──
-    if (transaction.userID) {
-      await User.findByIdAndUpdate(transaction.userID, {
-        $set: {
-          subscription: "free",
-          subscriptionExpiresAt: null,
-          updatedAt: new Date(),
-        },
-      });
-
-      await logCrmEvent(
-        transaction.userID,
-        `Arrepentimiento ejercido — reembolso MP ${transaction.paymentID} · plan bajado a free`
-      );
+    if (!locked) {
+      return res.status(409).json({ message: "Esta compra ya fue reembolsada." });
     }
 
-    // ── 6. Código de identificación (obligatorio) ──
-    const codigo = `ARR-${Date.now().toString(36).toUpperCase()}`;
-
-    return res.json({
-      ok: true,
-      codigo,
-      message: "Solicitud de arrepentimiento procesada. El reembolso se acreditó en Mercado Pago.",
-    });
-  } catch (error) {
-    if (error?.message?.includes("refund") || error?.status === 400) {
+    let refund;
+    try {
+      const refundClient = new PaymentRefund(client);
+      refund = await refundClient.create(
+        { payment_id: transaction.paymentID },
+        { requestOptions: { idempotencyKey: `refund-${transaction.paymentID}` } }
+      );
+    } catch (refundError) {
+      // El reembolso en MP falló: revertimos el lock para no dejar la
+      // transacción marcada como reembolsada sin haberlo estado realmente.
+      await PaymentTransaction.updateOne(
+        { paymentID: transaction.paymentID },
+        {
+          $set: {
+            refunded: false,
+            refundedAt: null,
+            status: transaction.status,
+            refundedAmount: null,
+          },
+        }
+      );
+      console.error("Error al reembolsar en Mercado Pago:", refundError);
       return res.status(400).json({
         message:
           "No se pudo procesar el reembolso. Contactanos a menudigitalappsoporte@gmail.com con el número de operación.",
       });
     }
+
+    await PaymentTransaction.updateOne(
+      { paymentID: transaction.paymentID },
+      { $set: { refundId: String(refund.id) } }
+    );
+
+    await User.findByIdAndUpdate(pending.userID, {
+      $set: {
+        subscription: "free",
+        subscriptionExpiresAt: null,
+        updatedAt: new Date(),
+      },
+    });
+
+    await logCrmEvent(
+      pending.userID,
+      `Arrepentimiento confirmado por email — reembolso MP ${transaction.paymentID} · plan bajado a free`
+    );
+
+    const codigo = `ARR-${Date.now().toString(36).toUpperCase()}`;
+
+    return res.json({
+      ok: true,
+      codigo,
+      message: "Solicitud de arrepentimiento confirmada. El reembolso se acreditó en Mercado Pago.",
+    });
+  } catch (error) {
     handleError(res, error);
   }
 };
@@ -1327,17 +1502,70 @@ const solicitarBaja = async (req, res) => {
       "_id username subscription subscriptionExpiresAt contactInfo"
     );
 
-    if (!user) {
+    // Mensaje genérico a propósito: no revelamos si la cuenta existe o si ya
+    // está en free (evita que se use este endpoint para enumerar cuentas).
+    if (!user || user.subscription === "free" || !user.subscription) {
       return res.status(404).json({
-        message: "No encontramos una cuenta con esos datos.",
+        message: "No encontramos una cuenta paga con esos datos.",
       });
     }
 
-    // Si ya está en free, no hay nada que bajar
-    if (user.subscription === "free" || !user.subscription) {
+    if (!user.contactInfo?.mail) {
       return res.status(400).json({
-        message: "Esta cuenta ya está en el plan Gratis.",
+        message: "Esta cuenta no tiene un email de contacto configurado. Escribinos a menudigitalappsoporte@gmail.com.",
       });
+    }
+
+    let pending;
+    try {
+      pending = await createPendingServiceAction({
+        action: "baja",
+        userID: user._id,
+        email: user.contactInfo.mail,
+      });
+    } catch (error) {
+      if (error.isMailError) {
+        console.error("No se pudo enviar el email de confirmación de baja:", error.cause);
+        return res.status(503).json({
+          message: "No pudimos enviar el email de confirmación. Intentá de nuevo o escribinos a menudigitalappsoporte@gmail.com.",
+        });
+      }
+      throw error;
+    }
+
+    return res.json({
+      ok: true,
+      requiresConfirmation: true,
+      requestId: String(pending._id),
+      maskedEmail: maskEmail(user.contactInfo.mail),
+      message: "Te enviamos un código de confirmación a tu email.",
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// Paso 2: ejecuta la baja real, solo si el código coincide.
+const confirmarBaja = async (req, res) => {
+  try {
+    const { requestId, code } = req.body;
+
+    if (!requestId || !code) {
+      return res.status(400).json({ message: "Faltan datos para confirmar la baja." });
+    }
+
+    const { pending, error } = await claimPendingServiceAction({
+      requestId,
+      code: String(code).trim(),
+      action: "baja",
+    });
+    if (error) {
+      return res.status(error.status).json({ message: error.message });
+    }
+
+    const user = await User.findById(pending.userID).select("subscription");
+    if (!user || user.subscription === "free" || !user.subscription) {
+      return res.status(400).json({ message: "Esta cuenta ya está en el plan Gratis." });
     }
 
     await User.findByIdAndUpdate(user._id, {
@@ -1350,7 +1578,7 @@ const solicitarBaja = async (req, res) => {
 
     await logCrmEvent(
       user._id,
-      `Baja de servicio solicitada — plan ${user.subscription} → free`
+      `Baja de servicio confirmada por email — plan ${user.subscription} → free`
     );
 
     const codigo = `BAJA-${Date.now().toString(36).toUpperCase()}`;
@@ -1358,7 +1586,7 @@ const solicitarBaja = async (req, res) => {
     return res.json({
       ok: true,
       codigo,
-      message: "Baja procesada. Tu cuenta pasó al plan Gratis.",
+      message: "Baja confirmada. Tu cuenta pasó al plan Gratis.",
     });
   } catch (error) {
     handleError(res, error);
@@ -1366,4 +1594,12 @@ const solicitarBaja = async (req, res) => {
 };
 
 
-module.exports = { getRegistrationStatus, mpWebhook, processPaymentEvent, solicitarArrepentimiento, solicitarBaja };
+module.exports = {
+  getRegistrationStatus,
+  mpWebhook,
+  processPaymentEvent,
+  solicitarArrepentimiento,
+  confirmarArrepentimiento,
+  solicitarBaja,
+  confirmarBaja,
+};

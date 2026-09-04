@@ -136,6 +136,11 @@ const PORT = process.env.PORT || 5000;
 const start = async () => {
   await connectDB();
   await initializePlans();
+  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    console.warn(
+      "⚠️  SMTP_USER/SMTP_PASS no configurados: los códigos de confirmación de /baja y /arrepentimiento no se van a poder enviar."
+    );
+  }
   app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
   });
