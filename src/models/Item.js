@@ -76,6 +76,13 @@ const ItemSchema = new mongoose.Schema(
       type: Map,
       of: Number,
       default: {},
+      validate: {
+        // Segunda barrera — itemController ya rechaza esto antes de llegar
+        // acá (ver hasNegativeOptionPrice), pero a diferencia de price no
+        // había ningún chequeo a nivel modelo.
+        validator: (map) => !map || [...map.values()].every((v) => v == null || v >= 0),
+        message: "El precio de una variante no puede ser negativo",
+      },
     },
 
     image: {

@@ -92,3 +92,56 @@ test("el login informa el downgrade efectivo cuando venció un plan pago", async
   assert.equal(res.body.downgradeReason, "subscription_expired");
   assert.equal(new Date(res.body.downgradedAt).getTime(), 0);
 });
+
+test("el login encuentra la cuenta sin importar mayúsculas, incluso cuentas viejas guardadas con mayúsculas", async (t) => {
+  const previousSecret = process.env.JWT_SECRET;
+  process.env.JWT_SECRET = "jwt-secret-de-prueba";
+  t.after(() => {
+    if (previousSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = previousSecret;
+  });
+
+  // Cuenta vieja, creada antes de que newUser normalizara a minúsculas.
+  const user = {
+    _id: "64f000000000000000000125",
+    username: "MiLocal",
+    admin: false,
+    active: true,
+    slug: "mi-local",
+    subscription: "free",
+    subscriptionExpiresAt: null,
+    matchPassword: async (password) => password === "password-seguro",
+  };
+
+  let receivedFilter;
+  t.mock.method(User, "findOne", (filter) => {
+    receivedFilter = filter;
+    return { select: async () => user };
+  });
+
+  const res = response();
+  // Escrito distinto a como está guardado.
+  await loginUser({ body: { username: "milocal", password: "password-seguro" } }, res);
+
+  assert.ok(receivedFilter.username instanceof RegExp, "debe buscar con un patrón case-insensitive");
+  assert.equal(receivedFilter.username.flags, "i");
+  assert.equal(receivedFilter.username.source, "^milocal$");
+  assert.equal(res.body.slug, user.slug);
+});
+
+test("el login escapa caracteres especiales de regex en el username", async (t) => {
+  process.env.JWT_SECRET = process.env.JWT_SECRET || "jwt-secret-de-prueba";
+
+  let receivedFilter;
+  t.mock.method(User, "findOne", (filter) => {
+    receivedFilter = filter;
+    return { select: async () => null };
+  });
+
+  const res = response();
+  await loginUser({ body: { username: "a.*", password: "x" } }, res);
+
+  // Si no se escapara, "a.*" matchearía cualquier username que empiece con "a".
+  assert.equal(receivedFilter.username.source, "^a\\.\\*$");
+  assert.equal(res.statusCode, 401);
+});

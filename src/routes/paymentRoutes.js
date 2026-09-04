@@ -3,6 +3,7 @@ const crypto = require("crypto");
 const router = express.Router();
 const { MercadoPagoConfig, Preference, PaymentRefund } = require("mercadopago");
 const { protect } = require("../middleware/auth");
+const { authLimiter } = require("../middleware/rateLimiters");
 const {
   getRegistrationStatus,
   mpWebhook,
@@ -26,7 +27,7 @@ const {
   decryptPendingPassword,
   encryptPendingPassword,
 } = require("../utils/pendingCredentials");
-const { isValidEmail } = require("../utils/validators");
+const { isValidEmail, isWeakPassword } = require("../utils/validators");
 const Seller = require("../models/Seller");
 
 // Cada operación recibe su propia configuración: el SDK muta `options`
@@ -288,10 +289,15 @@ router.post("/crear-preferencia-registro", async (req, res) => {
   } = req.body;
 
   // --- Validaciones ---
+  // acceptedTerms: antes "!acceptedTerms" aceptaba cualquier truthy — un
+  // string "false" es truthy en JS, así que ese valor pasaba el chequeo
+  // como si el usuario hubiera aceptado. El alta gratuita (newUser) ya
+  // exige el booleano exacto; acá quedó afuera. Ver PENDIENTES.md.
   if (
+    typeof username !== "string" ||
     !username ||
     !password ||
-    !acceptedTerms ||
+    acceptedTerms !== true ||
     !contactInfo?.mail ||
     !contactInfo?.businessName
   ) {
@@ -305,10 +311,14 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     return res.status(400).json({ error: "Ingresá un email de contacto válido" });
   }
 
-  if (typeof password !== "string" || password.length < 8) {
-    return res
-      .status(400)
-      .json({ error: "La contraseña debe tener al menos 8 caracteres" });
+  // Antes solo chequeaba longitud >= 8 acá — más débil que el alta gratuita
+  // (isWeakPassword también descarta las más comunes/filtradas), a pesar de
+  // que esta es la que efectivamente cobra dinero. Misma fuente de verdad
+  // que newUser (src/utils/validators.js).
+  if (isWeakPassword(password)) {
+    return res.status(400).json({
+      error: "La contraseña debe tener al menos 8 caracteres y no puede ser una demasiado común.",
+    });
   }
 
   if (!["basic", "pro"].includes(planId)) {
@@ -322,7 +332,11 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       .json({ error: "Duración inválida. Opciones: 1, 3, 6 o 12 meses" });
   }
 
-  const cleanUsername = String(username).trim();
+  // En minúsculas por el mismo motivo que newUser (alta gratuita): sin
+  // normalizar, "MiLocal" y "milocal" podían coexistir como cuentas
+  // distintas, y solicitarBaja/login (que sí normalizan) nunca encontraban
+  // una cuenta creada acá con mayúsculas.
+  const cleanUsername = String(username).trim().toLowerCase();
   const cleanMail = String(contactInfo.mail).trim().toLowerCase();
   const cleanBusinessName = String(contactInfo.businessName).trim();
 
@@ -743,10 +757,15 @@ router.post("/validate-seller-code", async (req, res) => {
 });
 
 
-router.post("/arrepentimiento", solicitarArrepentimiento);
-router.post("/arrepentimiento/confirmar", confirmarArrepentimiento);
-router.post("/baja", solicitarBaja);
-router.post("/baja/confirmar", confirmarBaja);
+// authLimiter (10 req/15min por IP): estas rutas mutan estado de cuenta y
+// disparan reembolsos reales en Mercado Pago sin login — el mismo criterio
+// que ya protege login/registro. El claim del código en /confirmar ya corta
+// a los 5 intentos por requestId, esto además limita cuántos requestId
+// distintos puede generar/probar una IP.
+router.post("/arrepentimiento", authLimiter, solicitarArrepentimiento);
+router.post("/arrepentimiento/confirmar", authLimiter, confirmarArrepentimiento);
+router.post("/baja", authLimiter, solicitarBaja);
+router.post("/baja/confirmar", authLimiter, confirmarBaja);
 
 // El frontend consulta este endpoint al volver de MercadoPago. El token es
 // aleatorio y solo permite conocer si este registro puntual ya fue activado.

@@ -23,7 +23,8 @@ const {
 } = require("../utils/slug");
 const { isScheduleAvailableAt } = require("../utils/itemAvailability");
 const { isOfferActive } = require("../utils/offers");
-const { isValidEmail } = require("../utils/validators");
+const { isValidEmail, isWeakPassword } = require("../utils/validators");
+const { escapeRegex } = require("../utils/regex");
 
 // ──────────────────────────────────────────────
 // Helper: suma 1 a la visita de hoy del local (upsert, no bloqueante).
@@ -85,24 +86,6 @@ const getPublicItemForPlan = (item, features) => {
 };
 
 // ──────────────────────────────────────────────
-// Helper: valida la contraseña en el registro.
-// Solo longitud + una lista chica de las más triviales — no pedimos
-// mayúscula/número/símbolo obligatorio: esa regla de "complejidad" está
-// desaconsejada desde NIST 800-63B, porque en la práctica termina en
-// patrones predecibles (ej. "Contraseña1!") en vez de contraseñas más
-// fuertes. Lo que de verdad ayuda es longitud + no ser una de las
-// contraseñas más usadas/filtradas.
-// ──────────────────────────────────────────────
-const COMMON_WEAK_PASSWORDS = new Set([
-  "12345678", "123456789", "1234567890", "password", "password1",
-  "qwertyui", "qwerty123", "11111111", "00000000", "abc12345",
-  "contraseña", "contrasena", "argentina", "administrador",
-]);
-
-const isWeakPassword = (password) =>
-  password.length < 8 || COMMON_WEAK_PASSWORDS.has(password.toLowerCase());
-
-// ──────────────────────────────────────────────
 // @desc    Registrar nuevo usuario (local)
 // @route   POST /api/users/register
 // @access  Public
@@ -119,6 +102,13 @@ const newUser = async (req, res) => {
       return res.status(400).json({ message: "Usuario y contraseña son obligatorios" });
     }
 
+    // Sin esto, dos cuentas con distinta capitalización ("MiLocal" /
+    // "milocal") podían coexistir (Mongo compara strings case-sensitive), y
+    // solicitarBaja -- que sí busca en minúsculas -- nunca encontraba una
+    // cuenta creada con mayúsculas. Se normaliza acá, en el único lugar
+    // donde se crea el username, en vez de en cada lugar que lo consulta.
+    const cleanUsername = username.trim().toLowerCase();
+
     // El email de contacto no es solo un dato de perfil: baja y arrepentimiento
     // (Ley 24.240) dependen de poder mandarle un código de confirmación a esta
     // cuenta. Sin este chequeo, una cuenta con contactInfo.mail vacío o
@@ -134,7 +124,7 @@ const newUser = async (req, res) => {
     }
 
     // Verifica que el username no esté tomado
-    const exists = await User.findOne({ username });
+    const exists = await User.findOne({ username: cleanUsername });
     if (exists) {
   return res.status(400).json({
     message: "El username ya está en uso",
@@ -152,7 +142,7 @@ if (acceptedTerms !== true) {
 
     // Crea el user; el hook pre-save hashea la password automáticamente
     const user = await createUserWithUniqueSlug({
-      username,
+      username: cleanUsername,
       password,
       contactInfo,
       acceptedTerms: true,
@@ -186,8 +176,17 @@ const loginUser = async (req, res) => {
       return res.status(401).json({ message: "Credenciales inválidas" });
     }
 
+    // Las cuentas nuevas se guardan en minúsculas (ver newUser), pero las
+    // creadas antes de ese fix pueden tener mayúsculas guardadas tal cual
+    // se escribieron. Un match exacto en minúsculas rompería el login de
+    // esas cuentas viejas — se busca case-insensitive (ancorado, sin
+    // comodines) para que funcione para ambas sin importar cómo se guardó
+    // ni cómo la tipeen ahora.
+    const cleanUsername = username.trim();
+    const usernamePattern = new RegExp(`^${escapeRegex(cleanUsername)}$`, "i");
+
     // Incluimos password explícitamente porque tiene select:false en el modelo
-    const user = await User.findOne({ username }).select("+password");
+    const user = await User.findOne({ username: usernamePattern }).select("+password");
 
     if (!user || !(await user.matchPassword(password))) {
       return res.status(401).json({ message: "Credenciales inválidas" });

@@ -9,6 +9,14 @@ const { normalizeOffer } = require("../utils/offers");
 // Helper: verifica que el menuID pertenezca al user autenticado.
 // Se usa en todas las funciones para garantizar ownership.
 // ──────────────────────────────────────────────
+// `options` llega desde req.body como objeto plano (JSON no tiene Map), a
+// diferencia de price/offerPrice no tenía ningún chequeo — se podía cargar
+// una variante con precio negativo sin que nada lo rechazara.
+const hasNegativeOptionPrice = (options) => {
+  if (!options || typeof options !== "object") return false;
+  return Object.values(options).some((price) => price != null && Number(price) < 0);
+};
+
 const verifyMenuOwnership = async (menuID, userID) => {
   const menu = await Menu.findById(menuID);
   if (!menu) return { error: "Menú no encontrado", status: 404 };
@@ -35,7 +43,10 @@ const newItem = async (req, res) => {
         if (req.body.offerPrice != null && Number(req.body.offerPrice) < 0) {
           return res.status(400).json({ message: "El precio de oferta no puede ser negativo" });
         }
- 
+        if (hasNegativeOptionPrice(req.body.options)) {
+          return res.status(400).json({ message: "El precio de una variante no puede ser negativo" });
+        }
+
     const { error, status } = await verifyMenuOwnership(menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
 
@@ -132,6 +143,10 @@ const editItem = async (req, res) => {
       if (updates[field] !== undefined && typeof updates[field] !== "boolean") {
         return res.status(400).json({ message: `${field} debe ser un booleano` });
       }
+    }
+
+    if (updates.options !== undefined && hasNegativeOptionPrice(updates.options)) {
+      return res.status(400).json({ message: "El precio de una variante no puede ser negativo" });
     }
 
     const { features } = await getRequestPlan(req);

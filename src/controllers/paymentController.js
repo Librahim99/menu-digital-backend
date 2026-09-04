@@ -20,6 +20,7 @@ const { logCrmEvent } = require("../utils/crmEvents");
 const { addCalendarMonths } = require("../utils/dates");
 const { handleError } = require("../utils/handleError");
 const { isValidEmail } = require("../utils/validators");
+const { escapeRegex } = require("../utils/regex");
 const { generateAuthToken } = require("../utils/authToken");
 const { decryptPendingPassword } = require("../utils/pendingCredentials");
 const { createUserWithUniqueSlug } = require("../utils/slug");
@@ -1291,15 +1292,15 @@ const solicitarArrepentimiento = async (req, res) => {
       // por markPaymentApplied, así que el bloque de arriba siempre la cubre.
     }
 
-    if (!transaction) {
+    // Mismo mensaje genérico para "no existe" y "existe pero sin userID"
+    // (este último caso no debería darse nunca en la práctica —
+    // markPaymentApplied siempre setea userID en toda transacción con
+    // entitlementStatus "applied" — pero si algún día pasara, distinguirlo
+    // con otro mensaje solo serviría para confirmarle a quien prueba con
+    // datos ajenos que "algo" existe con esos datos).
+    if (!transaction || !transaction.userID) {
       return res.status(404).json({
         message: "No encontramos una compra aprobada con esos datos.",
-      });
-    }
-
-    if (!transaction.userID) {
-      return res.status(404).json({
-        message: "No pudimos identificar la cuenta asociada a esa compra. Escribinos a menudigitalappsoporte@gmail.com.",
       });
     }
 
@@ -1496,7 +1497,11 @@ const solicitarBaja = async (req, res) => {
       conditions.push({ "contactInfo.mail": String(email).trim().toLowerCase() });
     }
     if (username) {
-      conditions.push({ username: String(username).trim().toLowerCase() });
+      // Case-insensitive: las cuentas creadas antes de que newUser
+      // normalizara el username pueden tener mayúsculas guardadas tal cual
+      // se escribieron. Un match exacto en minúsculas nunca las encuentra.
+      const cleanUsername = String(username).trim();
+      conditions.push({ username: new RegExp(`^${escapeRegex(cleanUsername)}$`, "i") });
     }
 
     const user = await User.findOne({ $or: conditions }).select(

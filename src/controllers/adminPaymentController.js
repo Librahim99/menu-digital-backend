@@ -3,11 +3,11 @@ const PaymentTransaction = require("../models/PaymentTransaction");
 const PendingRegistration = require("../models/PendingRegistration");
 const User = require("../models/User");
 const { handleError } = require("../utils/handleError");
+const { escapeRegex } = require("../utils/regex");
 
 const ENTITLEMENT_STATUSES = ["pending", "not_applied", "applied"];
 const OPERATIONS = ["registration", "upgrade", "renewal", "unknown"];
 
-const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const isPopulated = (value, identifyingField) => (
   value && typeof value === "object" && identifyingField in value
 );

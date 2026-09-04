@@ -135,6 +135,24 @@ test("POST /baja: el pedido no baja el plan — solo manda un código al email r
   assert.match(sentCode, /^\d{6}$/);
 });
 
+test("POST /baja: busca el username sin importar mayúsculas (cuentas viejas guardadas con mayúsculas)", async (t) => {
+  silenceLogs(t);
+  let receivedFilter;
+  t.mock.method(User, "findOne", (filter) => {
+    receivedFilter = filter;
+    return { select: async () => null };
+  });
+
+  const res = createResponse();
+  // Alguien escribe distinto a como podría estar guardado ("MiLocal").
+  await getHandler("/baja")({ body: { username: "milocal" } }, res);
+
+  const usernameCondition = receivedFilter.$or.find((c) => "username" in c);
+  assert.ok(usernameCondition.username instanceof RegExp, "debe buscar con un patrón case-insensitive");
+  assert.equal(usernameCondition.username.flags, "i");
+  assert.equal(usernameCondition.username.source, "^milocal$");
+});
+
 test("POST /baja: cuenta inexistente o ya en free responde 404 genérico y no manda mail", async (t) => {
   silenceLogs(t);
   t.mock.method(User, "findOne", () => ({ select: async () => null }));

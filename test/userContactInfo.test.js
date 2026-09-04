@@ -103,6 +103,33 @@ test("el modelo User rechaza un contactInfo.mail vacío o con formato inválido"
   assert.equal(mailValido.validateSync()?.errors["contactInfo.mail"], undefined);
 });
 
+test("newUser normaliza el username a minúsculas antes de chequear disponibilidad", async (t) => {
+  let receivedFilter;
+  // Devolver algo truthy corta la función en el chequeo de "ya está en uso"
+  // (antes de getPlanForUser/createUserWithUniqueSlug, que no son mockeables
+  // acá porque userController.js los importa por destructuring — el mismo
+  // motivo por el que mailer.js se llama como `mailer.sendMail` en vez de
+  // destructurado). Alcanza para confirmar qué username arma la query.
+  t.mock.method(User, "findOne", async (filter) => {
+    receivedFilter = filter;
+    return { _id: "alguien-mas" };
+  });
+
+  const res = response();
+  await newUser({
+    body: {
+      username: "MiLocal",
+      password: "password-seguro",
+      acceptedTerms: true,
+      contactInfo: activeContact,
+    },
+  }, res);
+
+  assert.equal(receivedFilter.username, "milocal");
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.message, "El username ya está en uso");
+});
+
 test("newUser rechaza un email de contacto ausente o inválido antes de tocar la base", async () => {
   for (const mail of [undefined, "", "ididid", "sin-arroba.com"]) {
     const res = response();

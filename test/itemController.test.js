@@ -92,3 +92,35 @@ test("editItem rechaza estados que no sean booleanos", async () => {
   assert.deepEqual(res.body, { message: "hidden debe ser un booleano" });
   assert.equal(updateCalled, false);
 });
+
+test("editItem rechaza una variante (options) con precio negativo", async () => {
+  const userID = mockOwnedItem();
+  let updateCalled = false;
+  Item.findByIdAndUpdate = async () => {
+    updateCalled = true;
+  };
+
+  const req = {
+    params: { itemID: "item-1" },
+    plan: INITIAL_PLANS.find(plan => plan.name === "free"),
+    user: { _id: userID, subscription: "free" },
+    body: { options: { "Tamaño chico": 800, "Tamaño grande": -100 } },
+  };
+  const res = makeResponse();
+
+  await editItem(req, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.message, /negativo/);
+  assert.equal(updateCalled, false, "no debe guardar con una variante en negativo");
+});
+
+test("el modelo Item rechaza una variante (options) con precio negativo", () => {
+  const item = new Item({
+    menuID: new (require("mongoose").Types.ObjectId)(),
+    title: "Pizza",
+    options: { "Individual": 6200, "Grande": -50 },
+  });
+  const err = item.validateSync();
+  assert.ok(err?.errors?.options, "debe rechazar la variante en negativo");
+});

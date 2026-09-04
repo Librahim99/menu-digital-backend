@@ -140,6 +140,36 @@ for (const path of ["/crear-preferencia", "/crear-preferencia-registro"]) {
   });
 }
 
+test("/crear-preferencia-registro: rechaza acceptedTerms que no sea exactamente true", async (t) => {
+  silencePaymentLogs(t);
+  t.mock.method(PendingRegistration, "findOne", async () => assert.fail("no debe buscar altas pendientes"));
+  // "false" es un string no vacío -> truthy en JS. Antes "!acceptedTerms"
+  // lo dejaba pasar como si el usuario hubiera aceptado los términos.
+  for (const acceptedTerms of ["false", "no", [], {}]) {
+    const res = createResponse();
+    await getHandler("/crear-preferencia-registro")(
+      { body: createRegistrationBody({ acceptedTerms }) },
+      res
+    );
+    assert.equal(res.statusCode, 400, `acceptedTerms=${JSON.stringify(acceptedTerms)} debería rechazarse`);
+  }
+});
+
+test("/crear-preferencia-registro: rechaza contraseñas débiles/comunes, no solo cortas", async (t) => {
+  silencePaymentLogs(t);
+  t.mock.method(PendingRegistration, "findOne", async () => assert.fail("no debe buscar altas pendientes"));
+  // Antes solo se chequeaba longitud >= 8 -- estas pasan esa barra igual.
+  for (const password of ["password1", "qwerty123", "contraseña"]) {
+    const res = createResponse();
+    await getHandler("/crear-preferencia-registro")(
+      { body: createRegistrationBody({ password }) },
+      res
+    );
+    assert.equal(res.statusCode, 400, `password="${password}" debería rechazarse`);
+    assert.match(res.body.error, /contraseña/i);
+  }
+});
+
 test("upgrade y renovación usan precio regular aunque exista descuento para vendedor", async (t) => {
   silencePaymentLogs(t);
   let saved, sent;

@@ -1,6 +1,6 @@
 # Pendientes — Menú Digital
 
-Estado al 2026-09-04, después de la sesión que cerró los 2 bugs críticos de `baja`/`arrepentimiento` y arrancó el rediseño del panel. Commits de esta sesión: `d349329` (backend), `dbd093d` (frontend) — ninguno pusheado a remoto todavía.
+Estado al 2026-09-04. Última ronda: se retomaron y cerraron los 5 pendientes de severidad media/baja que habían quedado abiertos en `baja`/`arrepentimiento`/alta de cuentas (rate limiting, precios negativos en variantes, enumeración de cuentas, normalización de username, validación de acceptedTerms/password).
 
 ## Backend (`menu-digital-backend`)
 
@@ -10,15 +10,17 @@ Estado al 2026-09-04, después de la sesión que cerró los 2 bugs críticos de 
 - [x] XSS/SSRF en el PDF vía `Item.image` (Alto) — solo Cloudinary + `escapeHTML()`.
 - [x] `solicitarBaja`/`solicitarArrepentimiento` no validaban el *formato* de `contactInfo.mail` — una cuenta con basura ahí (ej. `"ididid"`, visto en producción) llegaba a nodemailer y fallaba con `EENVELOPE "No recipients defined"`, mostrando el 503 genérico en vez de un error claro. Ahora valida formato con el mismo regex que ya usa el frontend, y devuelve 400 explícito.
 
-**Pendiente:**
-- [ ] **[Medio] Sin rate limiting específico en `/baja` y `/arrepentimiento`** — solo tienen el limitador genérico de `/api` (300 req/15min), no el `authLimiter` (10 req/15min) que protege login. El nuevo flujo de código por email ya frena el abuso automático (5 intentos y se invalida), pero conviene sumarlo igual — son rutas que mutan estado de cuenta y disparan reembolsos.
-- [ ] **[Medio] `options` (variantes de producto en `Item`) acepta precios negativos** — sin validación en el modelo ni en `itemController.js`, a diferencia de `price`/`offerPrice`.
-- [ ] **[Bajo] Enumeración de cuentas** — `solicitarBaja` ya unificó "no existe"/"ya es free" en un único 404 genérico; falta revisar si `solicitarArrepentimiento` y los mensajes del paso de confirmación tienen el mismo cuidado.
-- [ ] **[Bajo] La baja por `username` nunca matchea si tiene mayúsculas** — se busca con `.toLowerCase()` pero el username no se normaliza al crear la cuenta (alta gratuita ni paga).
-- [ ] Validación débil de `acceptedTerms` y de password en el alta paga (`PendingRegistration`) — señalado en `DEVLOG-LUCAS.md`.
-- [x] **Causa raíz del bug de "ididid" — resuelta**: `contactInfo.mail` ahora es obligatorio y se valida formato en los 3 lugares donde se escribe (`newUser`, `POST /crear-preferencia-registro`, `editUser`), más un validator a nivel schema (`User.js`) como defensa en profundidad. Cuentas viejas con email inválido ya guardado no se rompen (los validators de Mongoose solo corren sobre campos que un write realmente toca), pero no pueden volver a guardar `contactInfo` hasta corregirlo. Frontend: `Register.tsx` y `UserEditor.tsx` ahora validan formato antes de mandar el request (antes solo chequeaban que no esté vacío, con `noValidate` en el form).
-- [ ] `npm audit`: 6 vulnerabilidades (2 altas, 4 moderadas), todas con `fixAvailable: true` — falta correr `npm audit fix`.
+**Resuelto en la ronda de retomada de pendientes** (165/165 tests):
+- [x] **[Medio] Rate limiting en `/baja`, `/arrepentimiento` y sus `/confirmar`** — ahora usan `authLimiter` (10 req/15min), mismo criterio que login.
+- [x] **[Medio] `options` acepta precios negativos** — `hasNegativeOptionPrice` en `itemController.js` (`newItem`/`editItem`) + validator a nivel schema en `Item.js` como defensa en profundidad.
+- [x] **[Bajo] Enumeración de cuentas** — unificados los dos 404 distintos de `solicitarArrepentimiento` ("no encontramos"/"no pudimos identificar la cuenta") en un solo mensaje genérico, mismo criterio que ya tenía `solicitarBaja`.
+- [x] **[Bajo] La baja por `username` nunca matchea si tiene mayúsculas** — resuelto en dos capas: `username` ahora se normaliza a minúsculas al crear la cuenta (`newUser` y `POST /crear-preferencia-registro`, mismo criterio que `contactInfo.mail`), y además `solicitarBaja`/`loginUser` buscan con un regex case-insensitive (`^valor$`, flag `i`, escapado con el `escapeRegex` nuevo en `src/utils/regex.js`) para que las cuentas viejas —creadas antes de este fix, con mayúsculas ya guardadas— también funcionen sin necesitar una migración de datos.
+- [x] Validación débil de `acceptedTerms`/password en el alta paga — `!acceptedTerms` (aceptaba cualquier truthy, incluido el string `"false"`) pasó a `acceptedTerms !== true`; el chequeo de password pasó de "solo longitud ≥ 8" a `isWeakPassword` (misma lista de contraseñas comunes que ya usaba el alta gratuita). `isWeakPassword` se extrajo a `src/utils/validators.js` para que ambas altas compartan la misma fuente de verdad.
+- [x] Causa raíz del bug de "ididid" — `contactInfo.mail` ahora es obligatorio y se valida formato en los 3 lugares donde se escribe (`newUser`, `POST /crear-preferencia-registro`, `editUser`), más un validator a nivel schema (`User.js`). Cuentas viejas con email inválido ya guardado no se rompen retroactivamente, pero no pueden volver a guardar `contactInfo` hasta corregirlo. Frontend: `Register.tsx` y `UserEditor.tsx` ahora validan formato antes de mandar el request.
 - [x] ~~Acción del usuario: cargar `SMTP_USER`/`SMTP_PASS` en Koyeb~~ — confirmado funcionando en producción (envío de prueba real exitoso, 2026-09-04).
+
+**Pendiente:**
+- [ ] `npm audit`: 6 vulnerabilidades (2 altas, 4 moderadas), todas con `fixAvailable: true` — falta correr `npm audit fix`.
 
 **Ideas para Estadísticas (Pro) — discutidas, no implementadas**, ordenadas por costo:
 - [ ] Comparación vs. período anterior (+X% vs. los 30 días previos) — con datos que ya existen.
@@ -39,13 +41,19 @@ Estado al 2026-09-04, después de la sesión que cerró los 2 bugs críticos de 
 - [x] `Regret.tsx`/`Unsubscribe.tsx` actualizados al flujo de confirmación por código.
 - [x] Rediseño de `UpgradeModal` (hover, animación de entrada, checklist con checkmarks, shadow token correcto).
 - [x] Rediseño parcial de `UserDashboard` (hero con foto real del negocio, stats con más presencia visual, descripción de plan simplificada para Pro).
+- [x] `FreePlanAd` (banner de publicidad en cartas del plan Free) y el header propio de `UserMenu` (`.mpSticky`) competían por el mismo `position: sticky; top: 0` — el banner (mayor z-index) tapaba el header entero al scrollear. `FreePlanAd` ahora mide su altura real (`ResizeObserver` + `getBoundingClientRect`, no `contentRect` que excluye padding/borde) y la publica como `--free-ad-h`; `.mpSticky` usa `top: var(--free-ad-h, 0px)` para acomodarse debajo sin alturas hardcodeadas.
+
+**Resuelto en la ronda de manejo de errores** (auditoría completa del frontend, `npm run typecheck`/`npm run lint` en 0, probado en navegador con fetch mockeado):
+- [x] **"Fetch sin manejar 401"** en `MenuEditor.tsx` (9 funciones: `fetchMenu`, `refetch`, `saveItem`, `confirmDelete`, `toggleItemAvailable`, `handleDrop`, `saveCategoria`, `saveSeccion`, `exportMenu`) y `UserEditor.tsx` (6 funciones: carga inicial, `saveInfo`, `saveTemplate`, `uploadGalleryFiles`, `uploadBackgroundImage`, `removeImage`) — todas desloguean y redirigen a `/login` en 401 en vez de mostrar "no se pudo guardar" sin explicar por qué. De paso, `refetch` en `MenuEditor.tsx` tenía un bug real de fallo silencioso (nunca chequeaba `!res.ok` antes de usar la respuesta). `exportMenuPdf` pega a un endpoint público (carta pública, sin JWT) y no lleva chequeo de 401 a propósito.
+- [x] **[Alto] `MassiveImport.tsx` reimplementaba a mano** (`fetch` crudo) las llamadas que ya existían bien resueltas en `src/api/massive.ts` sobre `apiClient` (axios) — reintroducía sesión zombie en 401 y una fuga de `SyntaxError` crudo si el backend devolvía HTML no-JSON. Migrado a `downloadMassiveTemplate`/`previewMassiveImport`/`confirmMassiveImport`/`triggerBlobDownload` de `src/api/massive.ts`: el interceptor global de `apiClient` maneja el 401, y los mensajes reales del backend se extraen con `isAxiosError`.
+- [x] **[Medio] Errores de parseo JSON crudos** en `RegisterPlans.tsx` (alta paga/gratuita) y en el polling de `RegisterSuccess.tsx` — ambos con `res.json()`/`response.json()` sin try/catch propio, podían mostrar el texto crudo del parser (`Unexpected token '<'...`) si el backend devolvía HTML (502/504) en vez de JSON. Ahora tienen fallback fijo en español.
+- [x] **[Medio] 8 catches con mensaje fijo en vez del real** en `CrmClients.tsx` (carga de clientes, refresh, mover etapa, exportar, guardar perfil CRM, nota, borrar nota, activar/desactivar cuenta) y 1 en `AdminPayments.tsx` — se introdujo `src/lib/apiErrors.ts` (`extractServerMessage`, mismo patrón `isAxiosError` que ya usaban `AdminPlans.tsx`/`AdminSellers.tsx`) y se aplicó en los 9 catches.
+- [x] **[Bajo] Catch silencioso** en `AdminLayout.tsx` (badge de seguimientos CRM vencidos) — ahora loguea el error en vez de tragárselo sin rastro (no amerita un banner, es un badge secundario).
+- [x] **[Bajo-Medio] Comentario en `client.ts:27`** describía una sincronización entre pestañas (evento `storage`) que no existe — corregido para reflejar el comportamiento real (la redirección en 401 solo limpia la sesión de la pestaña actual); de paso se agregó el `removeItem("tokenExpiry")` que faltaba junto a `token`/`user`.
+- [x] **[Bajo] `tokenExpiry` hardcodeado a 7 días** en `AuthProvider.tsx` — ahora se decodifica el payload del JWT (`exp`, sin validar firma — de eso se encarga el backend) en `completeLogin`; el hardcodeo de 7 días queda solo como fallback si el token no trae `exp` decodificable.
+- [x] Revisado `Regret.tsx`/`Unsubscribe.tsx` por el patrón de "mensaje del backend reenviado tal cual": confirmado que no hay fuga de texto técnico (el catch externo ya usa un string fijo), el único problema es el ya conocido (mensaje del backend sin filtrar, riesgo de enumeración menor). No requirió cambios.
 
 **Pendiente:**
-- [ ] **El mismo patrón de "fetch sin manejar 401"** sigue en `MenuEditor.tsx` y `UserEditor.tsx` — no se tocaron en esta sesión.
-- [ ] **[Medio] Errores de parseo JSON crudos** en `RegisterPlans.tsx:233-234,282-284` — mismo bug que se arregló en `UpgradeModal`, ahí sigue.
-- [ ] **[Medio] Mensaje de error del backend reenviado tal cual** en `Regret.tsx`/`Unsubscribe.tsx` (`data.message` directo al usuario) — riesgo de enumeración; menor ahora que los mensajes del backend son más genéricos, pero el patrón no cambió.
-- [ ] **[Bajo-Medio] Comentario en `client.ts:27` describe una sincronización entre pestañas (evento `storage`) que no existe en el código.**
-- [ ] **[Bajo] `tokenExpiry` hardcodeado a 7 días** en el cliente (`AuthProvider.tsx`), no derivado del JWT real.
 - [ ] `npm audit`: 8 vulnerabilidades (7 altas, 1 moderada) — axios y react-router-dom desactualizados, ya resuelto en su propio rango semver (`npm audit fix`/`npm update` alcanza).
 - [ ] **Rediseño de `UserDashboard`, direcciones no implementadas**: fusionar plan+carta en un solo bloque con stats más grandes, y reordenar por frecuencia de uso (Editor de menú más arriba, plan como badge chico) — se descartaron por riesgo/alcance en esta sesión, quedan como opción futura.
 - [ ] **"Mejorar el CSS de todos los componentes" (pedido original del usuario) — todavía sin tocar**: `MenuEditor`, `UserEditor`, `CartDrawer`, `ItemPreviewModal`, `Login`, `Register`, y todo el panel admin (`CEODashboard`, `CrmClients`, `AdminPayments`, `AdminPlans`, `AdminSellers`). Revisados y ya en buen estado (sin cambios pendientes de diseño): `UserMenu`, `UserHome`, `UpgradeModal`, `UserDashboard` (parcial).
