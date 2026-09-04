@@ -18,9 +18,10 @@ Estado al 2026-09-04. Última ronda: se retomaron y cerraron los 5 pendientes de
 - [x] Validación débil de `acceptedTerms`/password en el alta paga — `!acceptedTerms` (aceptaba cualquier truthy, incluido el string `"false"`) pasó a `acceptedTerms !== true`; el chequeo de password pasó de "solo longitud ≥ 8" a `isWeakPassword` (misma lista de contraseñas comunes que ya usaba el alta gratuita). `isWeakPassword` se extrajo a `src/utils/validators.js` para que ambas altas compartan la misma fuente de verdad.
 - [x] Causa raíz del bug de "ididid" — `contactInfo.mail` ahora es obligatorio y se valida formato en los 3 lugares donde se escribe (`newUser`, `POST /crear-preferencia-registro`, `editUser`), más un validator a nivel schema (`User.js`). Cuentas viejas con email inválido ya guardado no se rompen retroactivamente, pero no pueden volver a guardar `contactInfo` hasta corregirlo. Frontend: `Register.tsx` y `UserEditor.tsx` ahora validan formato antes de mandar el request.
 - [x] ~~Acción del usuario: cargar `SMTP_USER`/`SMTP_PASS` en Koyeb~~ — confirmado funcionando en producción (envío de prueba real exitoso, 2026-09-04).
+- [x] `npm audit fix` parcial — `mongoose` `7.8.9` → `7.8.12` (prototype pollution en el casting de `update`; se confirmó además que ningún controller pasa `req.body` crudo a un write de Mongoose, todos reconstruyen el update con campos explícitos) e `ip-address` `10.2.0` → `10.7.0` (SSRF/trust-boundary bypass; la trae `express-rate-limit`, relevante porque Koyeb corre detrás de un proxy con `trust proxy` activado) más 2 de las 3 copias anidadas de `brace-expansion`. Sin cambios en `package.json` (dentro del rango `^7.3.1` ya declarado), 165/165 tests pasando con las versiones nuevas instaladas de verdad (hubo que forzar un reinstall — `npm install` solo no sincronizó `node_modules` con el lockfile actualizado la primera vez).
 
 **Pendiente:**
-- [ ] `npm audit`: 6 vulnerabilidades (2 altas, 4 moderadas), todas con `fixAvailable: true` — falta correr `npm audit fix`.
+- [ ] `npm audit`: 4 vulnerabilidades (1 alta, 3 moderadas) — **sin fix disponible ni con `--force`** (confirmado, no es que no se haya corrido). `qs`/`body-parser` vulnerables vía `express@4.22.2`: la única resolución real requeriría migrar a Express 5.x (cambio mayor, no trivial) o pinnear `qs`/`body-parser` a mano con `overrides` en `package.json` (no se hizo, evaluar aparte). La copia de `brace-expansion` de `nodemon` (solo dev, no se shippea) tampoco tiene upstream fix todavía.
 
 **Ideas para Estadísticas (Pro) — discutidas, no implementadas**, ordenadas por costo:
 - [ ] Comparación vs. período anterior (+X% vs. los 30 días previos) — con datos que ya existen.
@@ -39,6 +40,7 @@ Estado al 2026-09-04. Última ronda: se retomaron y cerraron los 5 pendientes de
 - [x] `CartProvider` no validaba el esquema de lo leído de `localStorage`.
 - [x] `UpgradeModal` no manejaba errores de parseo JSON (respuesta no-JSON mostraba el `SyntaxError` crudo).
 - [x] `Regret.tsx`/`Unsubscribe.tsx` actualizados al flujo de confirmación por código.
+- [x] `npm audit fix` del frontend — 8 vulnerabilidades (axios, brace-expansion, browserslist, dompurify, nanoid, postcss, react-router/react-router-dom) resueltas dentro del rango semver ya declarado, sin cambios en `package.json`.
 - [x] Rediseño de `UpgradeModal` (hover, animación de entrada, checklist con checkmarks, shadow token correcto).
 - [x] Rediseño parcial de `UserDashboard` (hero con foto real del negocio, stats con más presencia visual, descripción de plan simplificada para Pro).
 - [x] `FreePlanAd` (banner de publicidad en cartas del plan Free) y el header propio de `UserMenu` (`.mpSticky`) competían por el mismo `position: sticky; top: 0` — el banner (mayor z-index) tapaba el header entero al scrollear. `FreePlanAd` ahora mide su altura real (`ResizeObserver` + `getBoundingClientRect`, no `contentRect` que excluye padding/borde) y la publica como `--free-ad-h`; `.mpSticky` usa `top: var(--free-ad-h, 0px)` para acomodarse debajo sin alturas hardcodeadas.
@@ -54,7 +56,6 @@ Estado al 2026-09-04. Última ronda: se retomaron y cerraron los 5 pendientes de
 - [x] Revisado `Regret.tsx`/`Unsubscribe.tsx` por el patrón de "mensaje del backend reenviado tal cual": confirmado que no hay fuga de texto técnico (el catch externo ya usa un string fijo), el único problema es el ya conocido (mensaje del backend sin filtrar, riesgo de enumeración menor). No requirió cambios.
 
 **Pendiente:**
-- [ ] `npm audit`: 8 vulnerabilidades (7 altas, 1 moderada) — axios y react-router-dom desactualizados, ya resuelto en su propio rango semver (`npm audit fix`/`npm update` alcanza).
 - [ ] **Rediseño de `UserDashboard`, direcciones no implementadas**: fusionar plan+carta en un solo bloque con stats más grandes, y reordenar por frecuencia de uso (Editor de menú más arriba, plan como badge chico) — se descartaron por riesgo/alcance en esta sesión, quedan como opción futura.
 - [ ] **"Mejorar el CSS de todos los componentes" (pedido original del usuario) — todavía sin tocar**: `MenuEditor`, `UserEditor`, `CartDrawer`, `ItemPreviewModal`, `Login`, `Register`, y todo el panel admin (`CEODashboard`, `CrmClients`, `AdminPayments`, `AdminPlans`, `AdminSellers`). Revisados y ya en buen estado (sin cambios pendientes de diseño): `UserMenu`, `UserHome`, `UpgradeModal`, `UserDashboard` (parcial).
 
