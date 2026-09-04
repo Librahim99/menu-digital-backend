@@ -61,7 +61,7 @@ function renderOptions(options) {
 function renderItem(item) {
   return `
     <div class="item ${item.recommended ? "recommended" : ""}">
-      ${item.image ? `<img class="item-img" src="${item.image}" alt="" />` : ""}
+      ${item.image ? `<img class="item-img" src="${escapeHTML(item.image)}" alt="" />` : ""}
       <div class="item-body">
         <div class="item-top">
           <div class="item-name-wrap">
@@ -85,7 +85,7 @@ function renderCategoryBlock(categoria, { nested } = {}) {
   return `
     <div class="category-block ${nested ? "nested" : ""}">
       <div class="category-header">
-        ${categoria.image ? `<img class="category-img" src="${categoria.image}" alt="" />` : ""}
+        ${categoria.image ? `<img class="category-img" src="${escapeHTML(categoria.image)}" alt="" />` : ""}
         <div class="category-header-text">
           <${TitleTag}>${escapeHTML(categoria.title)}</${TitleTag}>
           ${categoria.description ? `<p class="category-desc">${escapeHTML(categoria.description)}</p>` : ""}
@@ -108,7 +108,7 @@ function renderChapter(seccion) {
   return `
     <section class="chapter">
       <div class="chapter-header">
-        ${seccion.image ? `<img class="chapter-img" src="${seccion.image}" alt="" />` : ""}
+        ${seccion.image ? `<img class="chapter-img" src="${escapeHTML(seccion.image)}" alt="" />` : ""}
         <div class="chapter-header-text">
           <h1 class="chapter-title">${escapeHTML(seccion.title)}</h1>
           ${seccion.description ? `<p class="chapter-desc">${escapeHTML(seccion.description)}</p>` : ""}

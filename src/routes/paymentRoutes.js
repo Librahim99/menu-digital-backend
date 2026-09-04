@@ -7,7 +7,9 @@ const {
   getRegistrationStatus,
   mpWebhook,
   solicitarArrepentimiento,
+  confirmarArrepentimiento,
   solicitarBaja,
+  confirmarBaja,
 } = require("../controllers/paymentController");
 const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
@@ -734,7 +736,9 @@ router.post("/validate-seller-code", async (req, res) => {
 
 
 router.post("/arrepentimiento", solicitarArrepentimiento);
+router.post("/arrepentimiento/confirmar", confirmarArrepentimiento);
 router.post("/baja", solicitarBaja);
+router.post("/baja/confirmar", confirmarBaja);
 
 // El frontend consulta este endpoint al volver de MercadoPago. El token es
 // aleatorio y solo permite conocer si este registro puntual ya fue activado.

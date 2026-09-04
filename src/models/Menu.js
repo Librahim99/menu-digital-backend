@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { isValidImageUrl } = require("../utils/imageUrl");
 
 /**
  * Cada documento Menu representa una categoría/sección del menú de un local.
@@ -39,6 +40,10 @@ const MenuSchema = new mongoose.Schema(
     image: {
       type: String,
       default: "", // URL de imagen representativa de la categoría
+      validate: {
+        validator: isValidImageUrl,
+        message: "La imagen debe ser una URL de Cloudinary válida",
+      },
     },
 
     // true = este Menu es una sección contenedora, false = es una hoja con items

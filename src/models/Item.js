@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { isValidImageUrl } = require("../utils/imageUrl");
 
 const TimeRangeSchema = new mongoose.Schema(
   {
@@ -80,6 +81,10 @@ const ItemSchema = new mongoose.Schema(
     image: {
       type: String,
       default: "", // URL de imagen del producto
+      validate: {
+        validator: isValidImageUrl,
+        message: "La imagen debe ser una URL de Cloudinary válida",
+      },
     },
 
     available: {
