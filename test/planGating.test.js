@@ -10,6 +10,7 @@ const { requireFeature } = require("../src/middleware/auth");
 const users = require("../src/controllers/userController");
 const { newItem, editItem } = require("../src/controllers/itemController");
 const plans = require("../src/controllers/planController");
+const { getSubscriptionState } = require("../src/config/plans");
 
 const document = (name, changes = {}) => {
   const initial = structuredClone(catalog.INITIAL_PLANS.find(plan => plan.name === name));
@@ -59,6 +60,33 @@ test("un plan vencido recibe las funciones de Free y un fallo del catálogo no c
   const unavailable = response();
   await requireFeature("menu_editor")({ user: { subscription: "pro" } }, unavailable, () => assert.fail("No debe habilitar el editor"));
   assert.equal(unavailable.statusCode, 503);
+});
+
+test("el estado de suscripción cubre vencimiento exacto, legacy sin fecha e inválidos", () => {
+  const now = new Date("2026-09-02T12:00:00.000Z");
+  assert.deepEqual(
+    getSubscriptionState("pro", "2026-09-02T12:00:00.000Z", now),
+    {
+      storedPlan: "pro",
+      effectivePlan: "free",
+      subscriptionStatus: "expired",
+      previousSubscription: "pro",
+      downgradeReason: "subscription_expired",
+      downgradedAt: new Date("2026-09-02T12:00:00.000Z"),
+    }
+  );
+  assert.equal(getSubscriptionState("basic", null, now).effectivePlan, "basic");
+  assert.equal(getSubscriptionState("basic", null, now).subscriptionStatus, "active");
+  assert.equal(getSubscriptionState("pro", "fecha-inválida", now).effectivePlan, "free");
+  assert.equal(getSubscriptionState("pro", "fecha-inválida", now).subscriptionStatus, "expired");
+  assert.deepEqual(getSubscriptionState("free", null, now), {
+    storedPlan: "free",
+    effectivePlan: "free",
+    subscriptionStatus: "free",
+    previousSubscription: null,
+    downgradeReason: null,
+    downgradedAt: null,
+  });
 });
 
 test("el backend bloquea un template retirado y usa uno permitido al leer la carta", async (t) => {

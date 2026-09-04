@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
-const { getEffectivePlan } = require("../config/plans");
+const { getSubscriptionState } = require("../config/plans");
 const { getRequestPlan } = require("../services/planCatalog");
 const { handleError } = require("../utils/handleError");
 
@@ -48,10 +48,12 @@ const protect = async (req, res, next) => {
 
     // El resto de los middlewares/controllers recibe siempre el plan vigente.
     // No modificamos la base acá: preservamos el plan comprado como historial.
-    req.user.subscription = getEffectivePlan(
+    const subscriptionState = getSubscriptionState(
       req.user.subscription,
       req.user.subscriptionExpiresAt
     );
+    req.user.subscription = subscriptionState.effectivePlan;
+    req.user.subscriptionStatus = subscriptionState.subscriptionStatus;
 
     next();
   } catch (error) {

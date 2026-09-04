@@ -1,6 +1,6 @@
 const Plan = require("../models/Plan");
 const {
-  PLAN_ORDER, getEffectivePlan, isValidFeatures,
+  PLAN_ORDER, getSubscriptionState, isValidFeatures,
 } = require("../config/plans");
 const { PAYMENT_PLANS, MONTH_MULTIPLIERS } = require("../config/paymentPlans");
 
@@ -105,7 +105,9 @@ const getPlan = async (name) => {
   }
 };
 
-const getPlanForUser = (user) => getPlan(getEffectivePlan(user.subscription, user.subscriptionExpiresAt));
+const getPlanForUser = (user) => getPlan(
+  getSubscriptionState(user.subscription, user.subscriptionExpiresAt).effectivePlan
+);
 
 // Reutiliza la misma lectura dentro de una petición; la siguiente vuelve a MongoDB.
 const getRequestPlan = async (req) => {
