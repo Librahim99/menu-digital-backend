@@ -60,6 +60,22 @@ const paymentTransactionSchema = new mongoose.Schema(
     // campo ausente significa que el contexto todavía no fue capturado.
     subscriptionExpiresAtBefore: { type: Date },
     subscriptionExpiresAtAfter: { type: Date },
+
+    // ── Reembolsos / arrepentimiento ──
+refunded: {
+  type: Boolean,
+  default: false,
+  index: true,
+},
+refundedAt: {
+  type: Date,
+  default: null,
+},
+refundId: {
+  type: String,
+  default: null,
+  trim: true,
+},
   },
   { timestamps: true }
 );

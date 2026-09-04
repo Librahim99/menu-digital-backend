@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const mongoose = require("mongoose");
-const { MercadoPagoConfig, Payment } = require("mercadopago");
+const { MercadoPagoConfig, Payment, PaymentRefund } = require("mercadopago");
 const User = require("../models/User");
 const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
@@ -1153,4 +1153,217 @@ const mpWebhook = async (req, res) => {
   }
 };
 
-module.exports = { getRegistrationStatus, mpWebhook, processPaymentEvent };
+
+// ──────────────────────────────────────────────
+// Derecho de arrepentimiento (Ley 24.240 + Disp. 954/2025)
+// El consumidor puede revocar la aceptación dentro de los
+// 10 días corridos desde la aprobación del pago.
+// ──────────────────────────────────────────────
+const DIAS_ARREPENTIMIENTO = 10;
+
+const solicitarArrepentimiento = async (req, res) => {
+  try {
+    const { email, orderId } = req.body;
+
+    if (!email && !orderId) {
+      return res.status(400).json({
+        message: "Ingresá el email de la compra o el número de operación de Mercado Pago.",
+      });
+    }
+
+    // ── 1. Buscar la transacción ──
+    let transaction = null;
+
+    if (orderId && /^\d+$/.test(String(orderId).trim())) {
+      transaction = await PaymentTransaction.findOne({
+        paymentID: String(orderId).trim(),
+        status: "approved",
+        entitlementStatus: "applied",
+        refunded: { $ne: true },
+      });
+    }
+
+    // Fallback por email / username
+    if (!transaction && email) {
+      const normalized = String(email).trim().toLowerCase();
+
+      const user = await User.findOne({
+        $or: [
+          { "contactInfo.mail": normalized },
+          { username: normalized },
+        ],
+      }).select("_id");
+
+      if (user) {
+        transaction = await PaymentTransaction.findOne({
+          userID: user._id,
+          status: "approved",
+          entitlementStatus: "applied",
+          refunded: { $ne: true },
+        }).sort({ paymentApprovedAt: -1 });
+      }
+
+      if (!transaction) {
+        const pending = await PendingRegistration.findOne({
+          $or: [
+            { "contactInfo.mail": normalized },
+            { username: normalized },
+          ],
+          status: "completed",
+          paymentStatus: "approved",
+        }).sort({ completedAt: -1 });
+
+        if (pending?.paymentID) {
+          transaction = await PaymentTransaction.findOne({
+            paymentID: String(pending.paymentID),
+            status: "approved",
+            entitlementStatus: "applied",
+            refunded: { $ne: true },
+          });
+        }
+      }
+    }
+
+    if (!transaction) {
+      return res.status(404).json({
+        message: "No encontramos una compra aprobada con esos datos.",
+      });
+    }
+
+    // ── 2. Control de plazo (10 días corridos) ──
+    const fechaPago =
+      transaction.paymentApprovedAt ||
+      transaction.paymentUpdatedAt ||
+      transaction.createdAt;
+
+    const diasPasados =
+      (Date.now() - new Date(fechaPago).getTime()) / (1000 * 60 * 60 * 24);
+
+    if (diasPasados > DIAS_ARREPENTIMIENTO) {
+      return res.status(400).json({
+        message: `El plazo de ${DIAS_ARREPENTIMIENTO} días para ejercer el arrepentimiento ya venció.`,
+      });
+    }
+
+    // ── 3. Reembolso en Mercado Pago ──
+    const refundClient = new PaymentRefund(client);
+    const refund = await refundClient.create({
+      payment_id: transaction.paymentID,
+    });
+
+    // ── 4. Marcar la transacción como reembolsada ──
+    await PaymentTransaction.findOneAndUpdate(
+      { paymentID: transaction.paymentID },
+      {
+        $set: {
+          refunded: true,
+          refundedAt: new Date(),
+          refundId: String(refund.id),
+          status: "refunded",
+          refundedAmount: transaction.amount,
+        },
+      }
+    );
+
+    // ── 5. Bajar al usuario a plan free ──
+    if (transaction.userID) {
+      await User.findByIdAndUpdate(transaction.userID, {
+        $set: {
+          subscription: "free",
+          subscriptionExpiresAt: null,
+          updatedAt: new Date(),
+        },
+      });
+
+      await logCrmEvent(
+        transaction.userID,
+        `Arrepentimiento ejercido — reembolso MP ${transaction.paymentID} · plan bajado a free`
+      );
+    }
+
+    // ── 6. Código de identificación (obligatorio) ──
+    const codigo = `ARR-${Date.now().toString(36).toUpperCase()}`;
+
+    return res.json({
+      ok: true,
+      codigo,
+      message: "Solicitud de arrepentimiento procesada. El reembolso se acreditó en Mercado Pago.",
+    });
+  } catch (error) {
+    if (error?.message?.includes("refund") || error?.status === 400) {
+      return res.status(400).json({
+        message:
+          "No se pudo procesar el reembolso. Contactanos a menudigitalappsoporte@gmail.com con el número de operación.",
+      });
+    }
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// Botón de Baja de Servicio (Art. 10 ter Ley 24.240)
+// El usuario puede rescindir en cualquier momento.
+// No genera reembolso; solo baja el plan a free.
+// ──────────────────────────────────────────────
+const solicitarBaja = async (req, res) => {
+  try {
+    const { email, username } = req.body;
+
+    if (!email && !username) {
+      return res.status(400).json({
+        message: "Ingresá el email o el nombre de usuario de la cuenta.",
+      });
+    }
+
+    const conditions = [];
+    if (email) {
+      conditions.push({ "contactInfo.mail": String(email).trim().toLowerCase() });
+    }
+    if (username) {
+      conditions.push({ username: String(username).trim().toLowerCase() });
+    }
+
+    const user = await User.findOne({ $or: conditions }).select(
+      "_id username subscription subscriptionExpiresAt contactInfo"
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        message: "No encontramos una cuenta con esos datos.",
+      });
+    }
+
+    // Si ya está en free, no hay nada que bajar
+    if (user.subscription === "free" || !user.subscription) {
+      return res.status(400).json({
+        message: "Esta cuenta ya está en el plan Gratis.",
+      });
+    }
+
+    await User.findByIdAndUpdate(user._id, {
+      $set: {
+        subscription: "free",
+        subscriptionExpiresAt: null,
+        updatedAt: new Date(),
+      },
+    });
+
+    await logCrmEvent(
+      user._id,
+      `Baja de servicio solicitada — plan ${user.subscription} → free`
+    );
+
+    const codigo = `BAJA-${Date.now().toString(36).toUpperCase()}`;
+
+    return res.json({
+      ok: true,
+      codigo,
+      message: "Baja procesada. Tu cuenta pasó al plan Gratis.",
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+
+module.exports = { getRegistrationStatus, mpWebhook, processPaymentEvent, solicitarArrepentimiento, solicitarBaja };

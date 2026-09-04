@@ -1,11 +1,13 @@
 const express = require("express");
 const crypto = require("crypto");
 const router = express.Router();
-const { MercadoPagoConfig, Preference } = require("mercadopago");
+const { MercadoPagoConfig, Preference, PaymentRefund } = require("mercadopago");
 const { protect } = require("../middleware/auth");
 const {
   getRegistrationStatus,
   mpWebhook,
+  solicitarArrepentimiento,
+  solicitarBaja,
 } = require("../controllers/paymentController");
 const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
@@ -731,7 +733,8 @@ router.post("/validate-seller-code", async (req, res) => {
 });
 
 
-
+router.post("/arrepentimiento", solicitarArrepentimiento);
+router.post("/baja", solicitarBaja);
 
 // El frontend consulta este endpoint al volver de MercadoPago. El token es
 // aleatorio y solo permite conocer si este registro puntual ya fue activado.
