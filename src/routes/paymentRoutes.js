@@ -26,6 +26,7 @@ const {
   decryptPendingPassword,
   encryptPendingPassword,
 } = require("../utils/pendingCredentials");
+const { isValidEmail } = require("../utils/validators");
 const Seller = require("../models/Seller");
 
 // Cada operación recibe su propia configuración: el SDK muta `options`
@@ -295,6 +296,13 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     !contactInfo?.businessName
   ) {
     return res.status(400).json({ error: "Faltan datos de registro" });
+  }
+
+  // Antes solo se exigía que "mail" no esté vacío, no que sea un email real
+  // — una cuenta con basura ahí queda sin forma de recibir el código de
+  // confirmación de baja/arrepentimiento (Ley 24.240). Ver PENDIENTES.md.
+  if (!isValidEmail(contactInfo.mail)) {
+    return res.status(400).json({ error: "Ingresá un email de contacto válido" });
   }
 
   if (typeof password !== "string" || password.length < 8) {

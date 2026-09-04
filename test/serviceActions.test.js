@@ -147,6 +147,28 @@ test("POST /baja: cuenta inexistente o ya en free responde 404 genérico y no ma
   assert.equal(res.statusCode, 404);
 });
 
+test("POST /baja: email de contacto con formato inválido responde 400 y no intenta mandar mail", async (t) => {
+  silenceLogs(t);
+  const user = {
+    _id: "user-1",
+    username: "ididi",
+    subscription: "basic",
+    // Dato real visto en producción: una cuenta con basura en contactInfo.mail
+    // (nunca se valida el formato al dar de alta). Antes de este fix, esto
+    // llegaba a nodemailer y fallaba con "No recipients defined" (503 confuso).
+    contactInfo: { mail: "ididid" },
+  };
+  t.mock.method(User, "findOne", () => ({ select: async () => user }));
+  t.mock.method(mailer, "sendConfirmationCodeEmail", async () => assert.fail("no debe intentar mandar mail a un email inválido"));
+  t.mock.method(PendingServiceAction, "create", async () => assert.fail("no debe crear un pedido pendiente"));
+
+  const res = createResponse();
+  await getHandler("/baja")({ body: { username: "ididi" } }, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.message, /no es válido/);
+});
+
 test("POST /baja/confirmar: código incorrecto no baja el plan y cuenta el intento", async (t) => {
   silenceLogs(t);
   const store = mockPendingServiceAction(t);
@@ -263,6 +285,28 @@ test("POST /arrepentimiento: fuera del plazo de 10 días no crea pedido de confi
   await getHandler("/arrepentimiento")({ body: { orderId: "1234567890" } }, res);
 
   assert.equal(res.statusCode, 400);
+});
+
+test("POST /arrepentimiento: email de contacto del titular con formato inválido responde 400 y no intenta mandar mail", async (t) => {
+  silenceLogs(t);
+  t.mock.method(PaymentTransaction, "findOne", async () => ({
+    userID: "user-1",
+    paymentID: "1234567890",
+    amount: 5000,
+    status: "approved",
+    paymentApprovedAt: new Date(),
+  }));
+  t.mock.method(User, "findById", () => ({
+    select: async () => ({ contactInfo: { mail: "ididid" } }),
+  }));
+  t.mock.method(mailer, "sendConfirmationCodeEmail", async () => assert.fail("no debe intentar mandar mail a un email inválido"));
+  t.mock.method(PendingServiceAction, "create", async () => assert.fail("no debe crear un pedido pendiente"));
+
+  const res = createResponse();
+  await getHandler("/arrepentimiento")({ body: { orderId: "1234567890" } }, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.message, /no es válido/);
 });
 
 test("POST /arrepentimiento/confirmar: reembolsa una sola vez aunque se confirme dos veces", async (t) => {

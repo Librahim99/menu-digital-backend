@@ -19,6 +19,7 @@ const { getExpectedPaymentLiveMode } = require("../config/environment");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { addCalendarMonths } = require("../utils/dates");
 const { handleError } = require("../utils/handleError");
+const { isValidEmail } = require("../utils/validators");
 const { generateAuthToken } = require("../utils/authToken");
 const { decryptPendingPassword } = require("../utils/pendingCredentials");
 const { createUserWithUniqueSlug } = require("../utils/slug");
@@ -1319,9 +1320,9 @@ const solicitarArrepentimiento = async (req, res) => {
 
     // ── 3. Mandar código de confirmación al email real de la cuenta ──
     const owner = await User.findById(transaction.userID).select("contactInfo.mail");
-    if (!owner?.contactInfo?.mail) {
+    if (!owner?.contactInfo?.mail || !isValidEmail(owner.contactInfo.mail)) {
       return res.status(400).json({
-        message: "Esta cuenta no tiene un email de contacto configurado. Escribinos a menudigitalappsoporte@gmail.com.",
+        message: "El email de contacto de esta cuenta no es válido. Escribinos a menudigitalappsoporte@gmail.com para resolverlo.",
       });
     }
 
@@ -1510,9 +1511,9 @@ const solicitarBaja = async (req, res) => {
       });
     }
 
-    if (!user.contactInfo?.mail) {
+    if (!user.contactInfo?.mail || !isValidEmail(user.contactInfo.mail)) {
       return res.status(400).json({
-        message: "Esta cuenta no tiene un email de contacto configurado. Escribinos a menudigitalappsoporte@gmail.com.",
+        message: "El email de contacto de esta cuenta no es válido. Escribinos a menudigitalappsoporte@gmail.com para resolverlo.",
       });
     }
 

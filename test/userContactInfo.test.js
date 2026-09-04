@@ -6,7 +6,7 @@ const User = require("../src/models/User");
 const Menu = require("../src/models/Menu");
 const Item = require("../src/models/Item");
 const PageView = require("../src/models/PageView");
-const { fetchUser, fetchUserWithMenu, getAuthUser, editUser } = require("../src/controllers/userController");
+const { fetchUser, fetchUserWithMenu, getAuthUser, editUser, newUser } = require("../src/controllers/userController");
 
 const activeContact = {
   businessName: "Café de prueba",
@@ -84,4 +84,75 @@ test("editar contacto conserva datos vigentes y descarta campos de clientes anti
 test("las cuentas nuevas no incorporan campos de reseñas desde un payload antiguo", () => {
   const user = new User({ contactInfo: { ...activeContact, ...retiredContact } });
   assert.deepEqual(user.toObject().contactInfo, activeContact);
+});
+
+// ──────────────────────────────────────────────
+// contactInfo.mail obligatorio y con formato válido — ver PENDIENTES.md:
+// una cuenta con basura ahí ("ididid") queda sin forma de recibir el
+// código de confirmación de baja/arrepentimiento.
+// ──────────────────────────────────────────────
+
+test("el modelo User rechaza un contactInfo.mail vacío o con formato inválido", () => {
+  const sinMail = new User({ contactInfo: { ...activeContact, mail: undefined } });
+  assert.ok(sinMail.validateSync()?.errors["contactInfo.mail"], "debe exigir el email");
+
+  const mailInvalido = new User({ contactInfo: { ...activeContact, mail: "ididid" } });
+  assert.ok(mailInvalido.validateSync()?.errors["contactInfo.mail"], "debe rechazar un email sin formato válido");
+
+  const mailValido = new User({ contactInfo: activeContact });
+  assert.equal(mailValido.validateSync()?.errors["contactInfo.mail"], undefined);
+});
+
+test("newUser rechaza un email de contacto ausente o inválido antes de tocar la base", async () => {
+  for (const mail of [undefined, "", "ididid", "sin-arroba.com"]) {
+    const res = response();
+    await newUser({
+      body: {
+        username: "nuevo-local",
+        password: "password-seguro",
+        acceptedTerms: true,
+        contactInfo: { ...activeContact, mail },
+      },
+    }, res);
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.message, /email/i);
+  }
+});
+
+test("editUser no bloquea una edición que no toca contactInfo, aunque la cuenta ya tenga un mail inválido guardado", async (t) => {
+  let saved;
+  t.mock.method(User, "findByIdAndUpdate", async (_id, update) => {
+    saved = update.$set;
+    return saved;
+  });
+
+  const res = response();
+  await editUser({
+    user: {
+      _id: "64f000000000000000000123",
+      subscription: "free",
+      contactInfo: { ...activeContact, mail: "ididid" }, // cuenta vieja, ya con basura
+    },
+    body: { hasDelivery: true }, // no manda "contactInfo": no debe disparar el chequeo de mail
+  }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(saved, { hasDelivery: true });
+});
+
+test("editUser rechaza actualizar contactInfo con un email inválido", async (t) => {
+  t.mock.method(User, "findByIdAndUpdate", async () => assert.fail("no debe guardar con un email inválido"));
+
+  const res = response();
+  await editUser({
+    user: {
+      _id: "64f000000000000000000123",
+      subscription: "free",
+      contactInfo: activeContact,
+    },
+    body: { contactInfo: { mail: "ididid" } },
+  }, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.message, /email/i);
 });
