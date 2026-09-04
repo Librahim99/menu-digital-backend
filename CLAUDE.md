@@ -2,7 +2,7 @@
 
 SaaS para que restaurantes gestionen un menú digital (carta pública + panel de administración), con planes pagos por suscripción vía Mercado Pago. Son **dos repositorios hermanos**, cada uno con su propio git:
 
-- **Backend** (este repo): `C:\Users\Thomas\OneDrive\Documentos\GitHub\menu-digital-backend` — API REST, rama activa `codex/desarrollo`.
+- **Backend** (este repo): `C:\Users\Thomas\OneDrive\Documentos\GitHub\menu-digital-backend` — API REST. Desarrollo en `codex/desarrollo`, pero **Koyeb despliega desde `master`** (no desde `codex/desarrollo` — corregido acá porque este doc lo tuvo mal documentado un tiempo). Todo cambio de producción necesita llegar a `master`, no alcanza con mergearlo solo a `codex/desarrollo`.
 - **Frontend**: `../menu-digital-frontend` (`C:\Users\Thomas\OneDrive\Documentos\GitHub\menu-digital-frontend`) — SPA.
 
 Producción: backend en **Koyeb** (`https://menu-digital-backend.koyeb.app`), frontend en **Vercel** (`https://www.menudigitalapp.com.ar`), que reescribe `/api/:path*` hacia el backend (`vercel.json`).
