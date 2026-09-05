@@ -408,7 +408,7 @@ const confirmMassive = async (req, res) => {
           const updated = await Menu.findByIdAndUpdate(
             menusByCode[codigo]._id,
             { $set: data },
-            { new: true }
+            { new: true, runValidators: true }
           );
           menusByCode[codigo] = updated; // Actualizar el mapa en memoria
           resultado.categorias.actualizadas.push({ fila: row._rowNumber, codigo });
@@ -471,7 +471,16 @@ const confirmMassive = async (req, res) => {
         };
 
         if (itemsByCode[codigo]) {
-          await Item.findByIdAndUpdate(itemsByCode[codigo]._id, { $set: data });
+          // runValidators es obligatorio acá: sin él, findByIdAndUpdate se
+          // saltea los validators del schema y esta rama quedaba como la
+          // única puerta por la que entraba un precio negativo (el editor
+          // normal lo bloquea en el controller Y en el schema, y Item.create
+          // de abajo corre validators siempre).
+          await Item.findByIdAndUpdate(
+            itemsByCode[codigo]._id,
+            { $set: data },
+            { runValidators: true },
+          );
           resultado.productos.actualizados.push({ fila: row._rowNumber, codigo });
         } else {
           if (!menuDoc) {
