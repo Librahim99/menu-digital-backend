@@ -256,6 +256,26 @@ const moveItem = async (req, res) => {
 // @route   POST /api/items/:itemID/upload-image
 // @access  Private
 // ──────────────────────────────────────────────
+// ──────────────────────────────────────────────
+// @desc    Subir una imagen todavía no asociada a un item (el editor pide la
+//          imagen antes de crear el producto, cuando no hay itemID). Existe
+//          para que ese caso no tenga que ir directo a Cloudinary desde el
+//          navegador con un preset sin firmar, que era una puerta de subida
+//          abierta a internet sin autenticación.
+// @route   POST /api/items/upload-image
+// @access  Private (requiere plan con menu_editor)
+// ──────────────────────────────────────────────
+const uploadDraftImage = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: "No se recibió ningún archivo" });
+    // multer + storage de Cloudinary ya subieron el archivo: req.file.path es
+    // la URL final, la misma que valida el schema de Item.
+    res.json({ imageUrl: req.file.path });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
 const uploadImage = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "No se recibió ningún archivo" });
@@ -350,6 +370,7 @@ module.exports = {
   editItem,
   moveItem,
   uploadImage,
+  uploadDraftImage,
   setHidden,
   setAvailable,
   deleteItem
