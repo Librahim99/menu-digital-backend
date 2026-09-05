@@ -1,6 +1,13 @@
 const Plan = require("../models/Plan");
+const User = require("../models/User");
+const PaymentTransaction = require("../models/PaymentTransaction");
 const catalog = require("../services/planCatalog");
-const { PLAN_ORDER, isValidFeatures, isValidPeriodMultipliers } = require("../config/plans");
+const {
+  PLAN_ORDER,
+  isValidFeatures,
+  isValidPeriodMultipliers,
+  getEffectivePlan,
+} = require("../config/plans");
 const { handleError } = require("../utils/handleError");
 
 const listPlans = async (_req, res) => {
@@ -9,6 +16,99 @@ const listPlans = async (_req, res) => {
     return res.json({ plans: await catalog.listPlans() });
   } catch (error) {
     return handleError(res, error, 503);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Cuentas y facturación por plan, para no editar precios a ciegas:
+//          el panel mostraba el catálogo sin decir cuánta gente ni cuánta
+//          plata toca cada cambio.
+// @route   GET /api/admin/plans/usage
+// @access  Admin
+// ──────────────────────────────────────────────
+const getPlanUsage = async (_req, res) => {
+  try {
+    const now = new Date();
+    const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+    const revenueWindowStart = new Date(now.getTime() - THIRTY_DAYS_MS);
+
+    const [users, revenueRows] = await Promise.all([
+      User.find({ admin: false }).select("subscription subscriptionExpiresAt active"),
+      PaymentTransaction.aggregate([
+        // Solo plata que efectivamente entró y se acreditó: un pago aprobado
+        // cuyo plan nunca se aplicó no es facturación de ese plan.
+        { $match: { status: "approved", entitlementStatus: "applied" } },
+        {
+          $group: {
+            _id: { $ifNull: ["$appliedPlanId", "$planId"] },
+            // Neto de reembolsos, que es lo que realmente quedó.
+            revenueTotal: {
+              $sum: {
+                $subtract: [
+                  { $ifNull: ["$amount", 0] },
+                  { $ifNull: ["$refundedAmount", 0] },
+                ],
+              },
+            },
+            revenue30d: {
+              $sum: {
+                $cond: [
+                  {
+                    $gte: [
+                      { $ifNull: ["$paymentApprovedAt", "$createdAt"] },
+                      revenueWindowStart,
+                    ],
+                  },
+                  {
+                    $subtract: [
+                      { $ifNull: ["$amount", 0] },
+                      { $ifNull: ["$refundedAmount", 0] },
+                    ],
+                  },
+                  0,
+                ],
+              },
+            },
+            payments: { $sum: 1 },
+          },
+        },
+      ]),
+    ]);
+
+    const revenueByPlan = new Map(revenueRows.map((row) => [row._id, row]));
+
+    // El conteo usa el plan EFECTIVO, no el guardado: una suscripción paga
+    // vencida ya no es una cuenta de ese plan, y contarla infla la cartera
+    // paga. Se reutiliza getEffectivePlan en vez de reescribir la regla de
+    // vencimiento en la query.
+    const accountsByPlan = PLAN_ORDER.reduce((acc, plan) => {
+      acc[plan] = { total: 0, active: 0 };
+      return acc;
+    }, {});
+
+    users.forEach((user) => {
+      const plan = getEffectivePlan(user.subscription, user.subscriptionExpiresAt, now);
+      if (!accountsByPlan[plan]) return;
+      accountsByPlan[plan].total += 1;
+      if (user.active) accountsByPlan[plan].active += 1;
+    });
+
+    res.set("Cache-Control", "no-store");
+    return res.json({
+      usage: PLAN_ORDER.map((plan) => {
+        const revenue = revenueByPlan.get(plan);
+        return {
+          name: plan,
+          accounts: accountsByPlan[plan].total,
+          activeAccounts: accountsByPlan[plan].active,
+          revenueTotal: revenue?.revenueTotal || 0,
+          revenue30d: revenue?.revenue30d || 0,
+          payments: revenue?.payments || 0,
+        };
+      }),
+    });
+  } catch (error) {
+    return handleError(res, error);
   }
 };
 
@@ -62,4 +162,4 @@ const updatePlan = async (req, res) => {
   }
 };
 
-module.exports = { listPlans, updatePlan };
+module.exports = { listPlans, updatePlan, getPlanUsage };
