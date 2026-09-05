@@ -5,6 +5,8 @@ const Menu = require("../src/models/Menu");
 const Item = require("../src/models/Item");
 const CrmProfile = require("../src/models/CrmProfile");
 const PaymentTransaction = require("../src/models/PaymentTransaction");
+const PageView = require("../src/models/PageView");
+const Seller = require("../src/models/Seller");
 const {
   listClients,
   getClient,
@@ -75,6 +77,7 @@ test("listClients arma la vista 360 y resume las alertas sin consultas por clien
     },
     attentionCount: 1,
   }]);
+  t.mock.method(PageView, "aggregate", async () => []);
 
   const res = response();
   await listClients({}, res);
@@ -101,7 +104,107 @@ test("listClients arma la vista 360 y resume las alertas sin consultas por clien
     missingExpirySubscriptions: 0,
     overdueFollowUps: 1,
     incompleteOnboarding: 1,
+    noTraffic: 0,
   });
+});
+
+test("listClients suma el tráfico de la carta y el vendedor que trajo la cuenta", async (t) => {
+  const userID = "64f000000000000000000123";
+  const sellerID = "64f000000000000000000999";
+  const menuID = "64f000000000000000000201";
+
+  t.mock.method(User, "find", () => ({
+    select() { return this; },
+    async sort() {
+      return [{
+        _id: userID,
+        username: "cliente-pro",
+        slug: "cliente-pro",
+        subscription: "pro",
+        subscriptionExpiresAt: new Date(Date.now() + (90 * 24 * 60 * 60 * 1000)),
+        active: true,
+        createdAt: new Date("2026-01-01T00:00:00.000Z"),
+        sellerID,
+        contactInfo: { businessName: "Bar", mail: "a@b.com", number: 1, address: "Calle 1" },
+        media: { pictures: ["foto"], backgroundPicture: "portada" },
+        schedule: { mon: { enabled: true, open: "09:00", close: "18:00" } },
+      }];
+    },
+  }));
+  t.mock.method(CrmProfile, "find", () => ({ select: async () => [] }));
+  t.mock.method(Menu, "find", () => ({
+    select: async () => [{ _id: menuID, userID, section: false }],
+  }));
+  t.mock.method(Item, "aggregate", async () => [{ _id: menuID, count: 4 }]);
+  t.mock.method(PaymentTransaction, "aggregate", async () => []);
+  t.mock.method(PageView, "aggregate", async () => [
+    { _id: userID, last30d: 140, previous30d: 90 },
+  ]);
+  t.mock.method(Seller, "find", () => ({
+    select: async () => [{ _id: sellerID, name: "Ana Vendedora", code: "ANA-001" }],
+  }));
+
+  const res = response();
+  await listClients({}, res);
+
+  assert.equal(res.statusCode, 200);
+  const client = res.body.clients[0];
+  assert.deepEqual(client.views, { last30d: 140, previous30d: 90 });
+  assert.equal(client.seller.name, "Ana Vendedora");
+  assert.equal(client.seller.code, "ANA-001");
+  // Con tráfico real no se marca la alerta de carta sin visitas.
+  assert.equal(client.attention.includes("no_traffic"), false);
+});
+
+test("listClients marca no_traffic solo si la cuenta paga tiene la carta publicada y cero visitas", async (t) => {
+  const menuID = "64f000000000000000000201";
+  const pagoSinVisitas = "64f000000000000000000001";
+  const gratisSinVisitas = "64f000000000000000000002";
+
+  const baseUser = {
+    active: true,
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    subscriptionExpiresAt: new Date(Date.now() + (90 * 24 * 60 * 60 * 1000)),
+    contactInfo: { businessName: "Bar", mail: "a@b.com", number: 1, address: "Calle 1" },
+    media: { pictures: ["foto"], backgroundPicture: "portada" },
+    schedule: { mon: { enabled: true, open: "09:00", close: "18:00" } },
+  };
+
+  t.mock.method(User, "find", () => ({
+    select() { return this; },
+    async sort() {
+      return [
+        { ...baseUser, _id: pagoSinVisitas, username: "paga", slug: "paga", subscription: "pro" },
+        { ...baseUser, _id: gratisSinVisitas, username: "gratis", slug: "gratis", subscription: "free" },
+      ];
+    },
+  }));
+  t.mock.method(CrmProfile, "find", () => ({ select: async () => [] }));
+  t.mock.method(Menu, "find", () => ({
+    select: async () => [
+      { _id: menuID, userID: pagoSinVisitas, section: false },
+      { _id: "64f000000000000000000202", userID: gratisSinVisitas, section: false },
+    ],
+  }));
+  t.mock.method(Item, "aggregate", async () => [
+    { _id: menuID, count: 3 },
+    { _id: "64f000000000000000000202", count: 3 },
+  ]);
+  t.mock.method(PaymentTransaction, "aggregate", async () => []);
+  t.mock.method(PageView, "aggregate", async () => []);
+
+  const res = response();
+  await listClients({}, res);
+
+  const paga = res.body.clients.find((c) => c.username === "paga");
+  const gratis = res.body.clients.find((c) => c.username === "gratis");
+
+  assert.equal(paga.attention.includes("no_traffic"), true);
+  assert.deepEqual(paga.views, { last30d: 0, previous30d: 0 });
+  // Una cuenta gratuita sin visitas no es una señal de baja: no hay plata en
+  // juego y su carta puede ser una prueba.
+  assert.equal(gratis.attention.includes("no_traffic"), false);
+  assert.equal(res.body.attentionSummary.noTraffic, 1);
 });
 
 test("getOverdueCount no considera vencido un seguimiento del día actual", async (t) => {

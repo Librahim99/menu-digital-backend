@@ -6,6 +6,8 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const CrmProfile = require("../models/CrmProfile");
 const PaymentTransaction = require("../models/PaymentTransaction");
+const PageView = require("../models/PageView");
+const Seller = require("../models/Seller");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { getSubscriptionState } = require("../config/plans");
 const { STAGES } = CrmProfile;
@@ -65,14 +67,25 @@ const listClients = async (req, res) => {
   try {
     const users = await User.find({ admin: false })
       .select(
-        "username slug subscription subscriptionExpiresAt active createdAt " +
+        "username slug subscription subscriptionExpiresAt active createdAt sellerID menu " +
         "contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
         "media.pictures media.backgroundPicture schedule"
       )
       .sort({ createdAt: -1 });
 
     const userIDs = users.map((user) => user._id);
-    const [profiles, menus, paymentRows] = await Promise.all([
+
+    // Ventanas de tráfico. PageView.date es "YYYY-MM-DD" en horario de Buenos
+    // Aires, así que se comparan strings (ordenables por construcción) en vez
+    // de rangos de Date: es el formato con el que la colección ya está escrita.
+    // Se piden 60 días para poder contrastar los últimos 30 contra los 30
+    // previos y mostrar tendencia, no solo un número suelto.
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const startedAt = new Date();
+    const currentWindowStart = buenosAiresDateStr(new Date(startedAt.getTime() - (29 * DAY_MS)));
+    const previousWindowStart = buenosAiresDateStr(new Date(startedAt.getTime() - (59 * DAY_MS)));
+
+    const [profiles, menus, paymentRows, viewRows] = await Promise.all([
       CrmProfile.find({ userID: { $in: userIDs } })
         .select("userID stage tags nextFollowUp"),
       Menu.find({ userID: { $in: userIDs } })
@@ -114,7 +127,43 @@ const listClients = async (req, res) => {
           },
         },
       ]),
+      PageView.aggregate([
+        {
+          $match: {
+            userID: { $in: userIDs },
+            date: { $gte: previousWindowStart },
+          },
+        },
+        {
+          $group: {
+            _id: "$userID",
+            last30d: {
+              $sum: {
+                $cond: [{ $gte: ["$date", currentWindowStart] }, "$count", 0],
+              },
+            },
+            previous30d: {
+              $sum: {
+                $cond: [{ $lt: ["$date", currentWindowStart] }, "$count", 0],
+              },
+            },
+          },
+        },
+      ]),
     ]);
+
+    // Vendedor que trajo cada cuenta: `sellerID` vive en User desde siempre,
+    // pero nunca se resolvía acá, así que desde la ficha del cliente no había
+    // forma de saber de quién era la venta.
+    const sellerIDs = [...new Set(
+      users.filter((u) => u.sellerID).map((u) => u.sellerID.toString())
+    )];
+    const sellers = sellerIDs.length
+      ? await Seller.find({ _id: { $in: sellerIDs } }).select("name code")
+      : [];
+    const sellersByID = new Map(
+      sellers.map((seller) => [seller._id.toString(), seller])
+    );
 
     const menuIDs = menus.map((menu) => menu._id);
     const itemRows = menuIDs.length
@@ -150,6 +199,9 @@ const listClients = async (req, res) => {
     const paymentsByUser = new Map(
       paymentRows.map((row) => [row._id.toString(), row])
     );
+    const viewsByUser = new Map(
+      viewRows.map((row) => [row._id.toString(), row])
+    );
 
     const now = new Date();
     const expiringLimit = new Date(now.getTime() + (30 * 24 * 60 * 60 * 1000));
@@ -164,6 +216,7 @@ const listClients = async (req, res) => {
         itemCount: 0,
       };
       const payment = paymentsByUser.get(userKey);
+      const views = viewsByUser.get(userKey);
       const onboarding = buildOnboardingStatus({
         user: u,
         categoryCount: menuStats.categoryCount,
@@ -189,6 +242,20 @@ const listClients = async (req, res) => {
       }
       if (isOperationalClient && !onboarding.completed) attention.push("onboarding_incomplete");
 
+      // Señal temprana de baja: paga, tiene la carta publicada, y aun así
+      // nadie la miró en 30 días. Se exige carta publicada para no marcar a
+      // quien todavía está en onboarding (ese caso ya lo cubre
+      // onboarding_incomplete) y plan pago porque es donde hay plata en juego.
+      const viewsLast30d = views?.last30d || 0;
+      if (
+        isOperationalClient
+        && subscriptionState.effectivePlan !== "free"
+        && onboarding.publicMenu
+        && viewsLast30d === 0
+      ) {
+        attention.push("no_traffic");
+      }
+
       return {
         _id: u._id,
         username: u.username,
@@ -213,6 +280,18 @@ const listClients = async (req, res) => {
         onboarding,
         lastPayment: payment?.latestPayment || null,
         paymentAttentionCount: payment?.attentionCount || 0,
+        views: {
+          last30d: viewsLast30d,
+          previous30d: views?.previous30d || 0,
+        },
+        seller: u.sellerID
+          ? (() => {
+              const seller = sellersByID.get(u.sellerID.toString());
+              return seller
+                ? { _id: seller._id, name: seller.name, code: seller.code }
+                : null;
+            })()
+          : null,
         attention,
       };
     });
@@ -228,6 +307,7 @@ const listClients = async (req, res) => {
         missingExpirySubscriptions: clients.filter((client) => client.attention.includes("subscription_missing_expiry")).length,
         overdueFollowUps: clients.filter((client) => client.attention.includes("follow_up_overdue")).length,
         incompleteOnboarding: clients.filter((client) => client.attention.includes("onboarding_incomplete")).length,
+        noTraffic: clients.filter((client) => client.attention.includes("no_traffic")).length,
       },
     });
   } catch (err) {
