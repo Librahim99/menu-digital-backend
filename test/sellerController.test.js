@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const Seller = require("../src/models/Seller");
 const User = require("../src/models/User");
+const PaymentTransaction = require("../src/models/PaymentTransaction");
 const {
   getSellerMetrics,
   clientToDTO,
@@ -79,7 +80,37 @@ test("getSellerMetrics resume vigencia, vencimientos, planes y actividad recient
     withMenu: 2,
     plans: { basic: 1, pro: 1 },
     lastClientAt: clients[2].createdAt,
+    // Sin facturación asociada, las métricas de plata quedan en cero, no
+    // undefined: el panel las formatea sin chequear existencia.
+    revenueTotal: 0,
+    revenue30d: 0,
+    payments: 0,
+    renewals: 0,
+    payingClients: 0,
   });
+});
+
+test("getSellerMetrics suma la facturación de los clientes atribuidos al vendedor", () => {
+  const now = new Date("2026-09-01T12:00:00.000Z");
+  const clients = [
+    { _id: "u1", active: true, menu: true, subscription: "pro", subscriptionExpiresAt: new Date("2026-12-01T00:00:00.000Z"), createdAt: new Date("2026-08-20T00:00:00.000Z") },
+    { _id: "u2", active: true, menu: true, subscription: "basic", subscriptionExpiresAt: new Date("2026-12-01T00:00:00.000Z"), createdAt: new Date("2026-08-22T00:00:00.000Z") },
+    // Cliente atribuido que nunca pagó: cuenta como alta, no como venta.
+    { _id: "u3", active: true, menu: false, subscription: "free", subscriptionExpiresAt: null, createdAt: new Date("2026-08-25T00:00:00.000Z") },
+  ];
+  const revenueByClient = new Map([
+    ["u1", { revenueTotal: 150000, revenue30d: 25000, payments: 6, renewals: 5 }],
+    ["u2", { revenueTotal: 40000, revenue30d: 8000, payments: 3, renewals: 2 }],
+  ]);
+
+  const metrics = getSellerMetrics(clients, now, revenueByClient);
+
+  assert.equal(metrics.revenueTotal, 190000);
+  assert.equal(metrics.revenue30d, 33000);
+  assert.equal(metrics.payments, 9);
+  assert.equal(metrics.renewals, 7);
+  assert.equal(metrics.payingClients, 2);
+  assert.equal(metrics.clientsTotal, 3);
 });
 
 test("clientToDTO limita los datos del cliente y calcula el plan efectivo", () => {
@@ -197,6 +228,7 @@ test("getSellers agrupa clientes por vendedor y limita la consulta a no administ
       },
     };
   });
+  t.mock.method(PaymentTransaction, "aggregate", async () => []);
 
   const res = response();
   await getSellers({}, res);

@@ -1,5 +1,6 @@
 const Seller = require("../models/Seller");
 const User = require("../models/User");
+const PaymentTransaction = require("../models/PaymentTransaction");
 const { getSubscriptionState } = require("../config/plans");
 const { handleError } = require("../utils/handleError");
 
@@ -14,7 +15,52 @@ const toTime = (value) => {
   return Number.isFinite(time) ? time : null;
 };
 
-const getSellerMetrics = (clients, now = new Date()) => {
+/**
+ * Facturación atribuida a cada cliente, para poder sumarla por vendedor.
+ * Solo cuenta plata que entró Y se acreditó: un pago aprobado cuyo plan nunca
+ * se aplicó no es una venta cerrada. Neto de reembolsos.
+ */
+const getRevenueByClient = async (clientIDs, now = new Date()) => {
+  if (clientIDs.length === 0) return new Map();
+
+  const windowStart = new Date(now.getTime() - 30 * DAY_MS);
+  const net = {
+    $subtract: [{ $ifNull: ["$amount", 0] }, { $ifNull: ["$refundedAmount", 0] }],
+  };
+
+  const rows = await PaymentTransaction.aggregate([
+    {
+      $match: {
+        userID: { $in: clientIDs },
+        status: "approved",
+        entitlementStatus: "applied",
+      },
+    },
+    {
+      $group: {
+        _id: "$userID",
+        revenueTotal: { $sum: net },
+        revenue30d: {
+          $sum: {
+            $cond: [
+              { $gte: [{ $ifNull: ["$paymentApprovedAt", "$createdAt"] }, windowStart] },
+              net,
+              0,
+            ],
+          },
+        },
+        payments: { $sum: 1 },
+        renewals: {
+          $sum: { $cond: [{ $eq: ["$operation", "renewal"] }, 1, 0] },
+        },
+      },
+    },
+  ]);
+
+  return new Map(rows.map((row) => [String(row._id), row]));
+};
+
+const getSellerMetrics = (clients, now = new Date(), revenueByClient = new Map()) => {
   const nowTime = now.getTime();
   const thirtyDaysAgo = nowTime - 30 * DAY_MS;
   const thirtyDaysAhead = nowTime + 30 * DAY_MS;
@@ -28,6 +74,13 @@ const getSellerMetrics = (clients, now = new Date()) => {
     withMenu: 0,
     plans: { basic: 0, pro: 0 },
     lastClientAt: null,
+    revenueTotal: 0,
+    revenue30d: 0,
+    payments: 0,
+    renewals: 0,
+    // Clientes atribuidos que efectivamente pagaron alguna vez. Mide la
+    // calidad de la venta, no solo el volumen de altas.
+    payingClients: 0,
   };
   let latestClientTime = null;
 
@@ -64,14 +117,23 @@ const getSellerMetrics = (clients, now = new Date()) => {
     } else if (subscriptionState.subscriptionStatus === "expired") {
       metrics.expired += 1;
     }
+
+    const revenue = revenueByClient.get(String(client._id));
+    if (revenue) {
+      metrics.revenueTotal += revenue.revenueTotal || 0;
+      metrics.revenue30d += revenue.revenue30d || 0;
+      metrics.payments += revenue.payments || 0;
+      metrics.renewals += revenue.renewals || 0;
+      if ((revenue.payments || 0) > 0) metrics.payingClients += 1;
+    }
   }
 
   return metrics;
 };
 
-const sellerToSummary = (seller, clients, now = new Date()) => ({
+const sellerToSummary = (seller, clients, now = new Date(), revenueByClient = new Map()) => ({
   ...(typeof seller.toObject === "function" ? seller.toObject() : seller),
-  metrics: getSellerMetrics(clients, now),
+  metrics: getSellerMetrics(clients, now, revenueByClient),
 });
 
 const clientToDTO = (client, now = new Date()) => ({
@@ -118,6 +180,12 @@ const getSellers = async (req, res) => {
       .lean();
     const clientsBySeller = groupClientsBySeller(clients);
     const now = new Date();
+    // Una sola agregación para todos los clientes de todos los vendedores, no
+    // una por vendedor: el listado tiene que seguir siendo una sola pasada.
+    const revenueByClient = await getRevenueByClient(
+      clients.map((client) => client._id),
+      now,
+    );
 
     res.status(200).json(
       sellers.map((seller) =>
@@ -125,6 +193,7 @@ const getSellers = async (req, res) => {
           seller,
           clientsBySeller.get(String(seller._id)) || [],
           now,
+          revenueByClient,
         ),
       ),
     );
@@ -152,9 +221,13 @@ const getSellerById = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
     const now = new Date();
+    const revenueByClient = await getRevenueByClient(
+      clients.map((client) => client._id),
+      now,
+    );
 
     res.status(200).json({
-      ...sellerToSummary(seller, clients, now),
+      ...sellerToSummary(seller, clients, now, revenueByClient),
       clients: clients.map((client) => clientToDTO(client, now)),
     });
   } catch (error) {
