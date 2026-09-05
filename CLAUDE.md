@@ -101,12 +101,14 @@ Sin `Dockerfile` ni `.github/workflows` en ninguno de los dos repos. Backend en 
 
 Según `DEVLOG-LUCAS.md` y `docs/README.md` del frontend, estado **NO-GO** por:
 - ~~SSRF/XSS en la generación de PDF del menú~~ **Resuelto**: `Item.image`/`Menu.image` ahora validan que sean una URL de Cloudinary (`src/utils/imageUrl.js`), y `menuPdfTemplate.js` escapa el valor igual antes de insertarlo en el `src` del `<img>` (defensa en profundidad). Tests en `test/imageUrlValidation.test.js`.
-- Validación débil de `acceptedTerms` y de password en el alta paga (`PendingRegistration`).
-- `Item.price` acepta valores negativos.
-- Vulnerabilidades de `npm audit` sin resolver (backend y frontend).
-- Falta de testing automatizado en el frontend.
+- ~~Validación débil de `acceptedTerms` y de password en el alta paga~~ **Resuelto** (ver `PENDIENTES.md`).
+- ~~`Item.price` acepta valores negativos~~ **Resuelto**: validator de schema + chequeos en `itemController`, y la importación masiva pasa `runValidators: true` (era el único camino que se los salteaba).
+- Vulnerabilidades de `npm audit`: quedan 4 en el backend **sin fix upstream disponible** (`qs`/`body-parser` vía `express@4`); se verificó que no son explotables con la configuración actual, que no activa las opciones que las disparan. Frontend en 0.
+- Falta de testing automatizado en el frontend (sigue vigente).
 
-Antes de tocar generación de PDF, alta de usuarios o validación de `Item`, revisar el estado actual de estos puntos en `DEVLOG-LUCAS.md` (puede que ya se hayan resuelto desde que se escribió este doc).
+Antes de tocar generación de PDF, alta de usuarios o validación de `Item`, revisar el estado actual de estos puntos en `PENDIENTES.md`, que se mantiene más al día que este resumen.
+
+**Subida de imágenes**: hay tres endpoints, todos autenticados — `POST /api/items/:itemID/upload-image` (imagen de un producto existente), `POST /api/items/upload-image` (imagen todavía sin producto: el editor la pide antes de crearlo) y los de `/api/users` para galería y portada. El frontend **no** debe subir directo a Cloudinary: hubo un preset sin firmar embebido en el bundle que dejaba escribir en la cuenta sin autenticación, y se eliminó.
 
 ## Convenciones
 
