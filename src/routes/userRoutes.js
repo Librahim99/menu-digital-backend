@@ -17,6 +17,8 @@ const {
   fetchItemStats,
   fetchUser,
   editUser,
+  requestEmailChange,
+  confirmEmailChange,
   uploadImage,
   uploadBackground,
   removeImage,
@@ -46,6 +48,11 @@ router.get("/me/menu", protect, fetchOwnMenu); // Menú completo del user autent
 router.get("/me/stats", protect, requireFeature("estadisticas"), fetchStats); // Estadísticas de visitas (plan pro+)
 router.get("/me/item-stats", protect, requireFeature("estadisticas"), fetchItemStats); // Top de productos más vistos (plan pro+)
 router.put("/me", protect, editUser);
+// authLimiter: mismo criterio que verify-email — el claim ya corta a los 5
+// intentos por código, esto además limita cuántos pedidos/códigos puede
+// probar una cuenta por IP.
+router.post("/me/email-change", protect, authLimiter, requestEmailChange);
+router.post("/me/email-change/confirm", protect, authLimiter, confirmEmailChange);
 router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.post("/upload-background", protect, uploadUser.single("image"), uploadBackground);
 router.delete("/remove-image", protect, removeImage);

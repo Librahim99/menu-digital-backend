@@ -789,20 +789,16 @@ const editUser = async (req, res) => {
       if (!isValidEmail(updates.contactInfo.mail)) {
         return res.status(400).json({ message: "Ingresá un email de contacto válido" });
       }
-    }
 
-    // Si cambia el mail real de la cuenta, la verificación anterior ya no
-    // prueba nada sobre el mail nuevo — sin esto, alguien podía apuntar la
-    // cuenta a un mail que no controla y quedar igual marcado como
-    // "verificado". Se compara contra el valor ya guardado (no contra el
-    // enviado en el body) para no reenviar código en una edición que no
-    // toca "mail" en absoluto.
-    const mailChanged = Boolean(
-      updates.contactInfo
-      && updates.contactInfo.mail !== req.user.contactInfo?.mail
-    );
-    if (mailChanged) {
-      updates.emailVerified = false;
+      // Cambiar el mail real de la cuenta no pasa por acá: sin probar que se
+      // controla la casilla nueva, cualquiera podría apuntar la cuenta a un
+      // mail ajeno. Ver requestEmailChange/confirmEmailChange — este endpoint
+      // solo deja tocar el resto de contactInfo (o dejar "mail" como está).
+      if (updates.contactInfo.mail !== req.user.contactInfo?.mail) {
+        return res.status(400).json({
+          message: "Para cambiar tu email de contacto usá la opción de cambiar email y confirmá el código que te mandamos a la casilla nueva.",
+        });
+      }
     }
 
     // Validación liviana del horario para que la carta pública no reciba datos que rompan
@@ -838,19 +834,100 @@ const editUser = async (req, res) => {
           { new: true, runValidators: true }
         );
 
-    // Best-effort, igual que en newUser: el mail ya cambió y se guardó, un
-    // fallo de SMTP acá no debe tirar la edición del perfil — el dueño
-    // puede reenviar el código desde /users/me/verify-email/resend.
-    if (mailChanged) {
-      await sendEmailVerificationCode(user);
-    }
-
     res.json(user);
   } catch (error) {
     handleError(res, error);
   }
 };
 
+// ──────────────────────────────────────────────
+// @desc    Iniciar el cambio del mail de contacto. No lo guarda todavía —
+//          manda un código al mail NUEVO para probar que el dueño lo
+//          controla; recién se escribe en confirmEmailChange. La cuenta
+//          sigue verificada durante todo el proceso: emailVerified nunca se
+//          toca acá, porque en ningún momento queda un mail sin confirmar
+//          guardado como el de la cuenta.
+// @route   POST /api/users/me/email-change
+// @access  Private
+// ──────────────────────────────────────────────
+const requestEmailChange = async (req, res) => {
+  try {
+    const { mail } = req.body;
+    if (!isValidEmail(mail)) {
+      return res.status(400).json({ message: "Ingresá un email válido." });
+    }
+
+    const cleanMail = String(mail).trim().toLowerCase();
+    if (cleanMail === req.user.contactInfo?.mail) {
+      return res.status(400).json({ message: "Ese ya es el email de tu cuenta." });
+    }
+
+    const takenByAnotherAccount = await User.findOne({
+      "contactInfo.mail": cleanMail,
+      _id: { $ne: req.user._id },
+    }).select("_id");
+    if (takenByAnotherAccount) {
+      return res.status(409).json({ message: "Ese email ya está en uso por otra cuenta." });
+    }
+
+    try {
+      await createPendingServiceAction({
+        action: "cambio_email",
+        userID: req.user._id,
+        email: cleanMail,
+      });
+    } catch (error) {
+      if (error.isMailError) {
+        console.error("No se pudo enviar el email de confirmación de cambio de mail:", error.cause);
+        return res.status(503).json({
+          message: "No pudimos enviar el email. Intentá de nuevo o escribinos a menudigitalappsoporte@gmail.com.",
+        });
+      }
+      throw error;
+    }
+
+    res.json({ ok: true, maskedEmail: maskEmail(cleanMail) });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Confirmar el cambio de mail pendiente con el código mandado a la
+//          casilla nueva (ver requestEmailChange). Recién acá se escribe
+//          contactInfo.mail — antes de esto la cuenta sigue con el mail
+//          viejo, así que un código vencido o nunca confirmado no deja
+//          ningún mail sin verificar guardado.
+// @route   POST /api/users/me/email-change/confirm
+// @access  Private
+// ──────────────────────────────────────────────
+const confirmEmailChange = async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (typeof code !== "string" || !code.trim()) {
+      return res.status(400).json({ message: "Ingresá el código que te enviamos por email." });
+    }
+
+    const { pending, error } = await claimPendingServiceAction({
+      userID: req.user._id,
+      code: code.trim(),
+      action: "cambio_email",
+    });
+    if (error) {
+      return res.status(error.status).json({ message: error.message });
+    }
+
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $set: { "contactInfo.mail": pending.email } },
+      { new: true }
+    );
+
+    res.json({ contactInfo: getContactInfo(user.contactInfo) });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
 
 // ──────────────────────────────────────────────
 // @desc    Subir imagen de perfil/media del local
@@ -1046,6 +1123,8 @@ module.exports = {
   fetchItemStats,
   fetchUser,
   editUser,
+  requestEmailChange,
+  confirmEmailChange,
   uploadImage,
   uploadBackground,
   removeImage,

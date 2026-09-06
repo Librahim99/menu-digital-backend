@@ -186,26 +186,11 @@ test("editUser rechaza actualizar contactInfo con un email inválido", async (t)
   assert.match(res.body.message, /email/i);
 });
 
-test("editUser resetea emailVerified y reenvía el código cuando cambia el mail real de la cuenta", async (t) => {
-  t.mock.method(console, "error", () => {});
-  // activeContact.businessName está seteado, así que editUser pasa por
-  // updateUserWithUniqueSlug (ver editUser en userController.js) — sin este
-  // mock, generateUniqueSlug cuelga 10s en un User.exists() sin conexión.
-  t.mock.method(User, "exists", async () => false);
-  t.mock.method(PendingServiceAction, "deleteMany", async () => ({ deletedCount: 0 }));
-  t.mock.method(PendingServiceAction, "create", async (data) => ({ _id: "pending-1", ...data }));
-  let sentTo = null;
-  let sentAction = null;
-  t.mock.method(mailer, "sendConfirmationCodeEmail", async ({ to, action }) => {
-    sentTo = to;
-    sentAction = action;
-  });
-
-  let saved;
-  t.mock.method(User, "findByIdAndUpdate", async (_id, update) => {
-    saved = update.$set;
-    return { _id: "64f000000000000000000123", ...saved };
-  });
+test("editUser rechaza cambiar contactInfo.mail directamente — hay que confirmarlo con un código (ver email-change)", async (t) => {
+  t.mock.method(mailer, "sendConfirmationCodeEmail", async () => assert.fail("no debe mandar mail"));
+  t.mock.method(PendingServiceAction, "create", async () => assert.fail("no debe crear un pedido de cambio de mail"));
+  t.mock.method(User, "findByIdAndUpdate", async () => assert.fail("no debe guardar un mail sin confirmar"));
+  t.mock.method(User, "exists", async () => assert.fail("no debe siquiera llegar a tocar el slug"));
 
   const res = response();
   await editUser({
@@ -218,14 +203,11 @@ test("editUser resetea emailVerified y reenvía el código cuando cambia el mail
     body: { contactInfo: { mail: "nuevo-mail@example.com" } },
   }, res);
 
-  assert.equal(res.statusCode, 200);
-  assert.equal(saved.contactInfo.mail, "nuevo-mail@example.com");
-  assert.equal(saved.emailVerified, false, "el mail nuevo todavía no está confirmado");
-  assert.equal(sentTo, "nuevo-mail@example.com", "el código nuevo va al mail nuevo, no al viejo");
-  assert.equal(sentAction, "verificacion_email");
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.message, /cambiar email/i);
 });
 
-test("editUser no toca emailVerified ni manda mail si contactInfo se edita sin cambiar el mail", async (t) => {
+test("editUser no toca emailVerified ni el mail si contactInfo se edita sin tocar mail", async (t) => {
   t.mock.method(User, "exists", async () => false);
   t.mock.method(mailer, "sendConfirmationCodeEmail", async () => assert.fail("no debe mandar mail"));
   t.mock.method(PendingServiceAction, "create", async () => assert.fail("no debe crear un pedido de verificación"));

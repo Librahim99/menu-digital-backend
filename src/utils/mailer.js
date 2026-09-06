@@ -41,6 +41,11 @@ const CODE_LABELS = {
     heading: "¡Bienvenido a Menú Digital!",
     body: "Ya casi terminás de crear tu cuenta. Usá este código en la app para verificar tu email:",
   },
+  cambio_email: {
+    subject: "Confirmá tu nuevo email — Menú Digital",
+    heading: "Confirmá tu nuevo email de contacto",
+    body: "Pediste cambiar el email de contacto de tu cuenta a esta casilla. Usá este código en la app para confirmarlo:",
+  },
 };
 
 const sendConfirmationCodeEmail = async ({ to, code, action }) => {
