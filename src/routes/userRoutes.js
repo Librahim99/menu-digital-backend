@@ -6,6 +6,8 @@ const { uploadUser } = require("../config/cloudinary");
 const {
   newUser,
   loginUser,
+  verifyEmail,
+  resendVerificationCode,
   getAuthUser,
   fetchUserWithMenu,
   downloadMenuPdf,
@@ -35,6 +37,11 @@ router.post("/login", authLimiter, loginUser);
 // IMPORTANTE: /me debe ir ANTES de /:slug para que Express no lo interprete como slug
 // ──────────────────────────────────────────────
 router.get("/me", protect, getAuthUser);    // Datos del user autenticado (panel admin)
+// authLimiter: mismo criterio que /register — el claim ya corta a los 5
+// intentos por código (ver claimPendingServiceAction), esto además limita
+// cuántos códigos puede pedir/probar una cuenta por IP.
+router.post("/me/verify-email", protect, authLimiter, verifyEmail);
+router.post("/me/verify-email/resend", protect, authLimiter, resendVerificationCode);
 router.get("/me/menu", protect, fetchOwnMenu); // Menú completo del user autenticado, sin filtrar ocultos
 router.get("/me/stats", protect, requireFeature("estadisticas"), fetchStats); // Estadísticas de visitas (plan pro+)
 router.get("/me/item-stats", protect, requireFeature("estadisticas"), fetchItemStats); // Top de productos más vistos (plan pro+)

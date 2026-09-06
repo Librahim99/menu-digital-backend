@@ -5,10 +5,6 @@ const User = require("../models/User");
 const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
 const PaymentTransaction = require("../models/PaymentTransaction");
-const PendingServiceAction = require("../models/PendingServiceAction");
-// Se accede como `mailer.sendConfirmationCodeEmail` (no destructurado) para
-// que los tests puedan mockear el envío reasignando la propiedad del módulo.
-const mailer = require("../utils/mailer");
 const {
   PLAN_MAP,
   PLAN_ORDER,
@@ -24,6 +20,11 @@ const { escapeRegex } = require("../utils/regex");
 const { generateAuthToken } = require("../utils/authToken");
 const { decryptPendingPassword } = require("../utils/pendingCredentials");
 const { createUserWithUniqueSlug } = require("../utils/slug");
+// generateNumericCode/hashCode/maskEmail/createPendingServiceAction/
+// claimPendingServiceAction viven acá — también las usa userController.js
+// para verificacion_email.
+const { maskEmail, createPendingServiceAction, claimPendingServiceAction } =
+  require("../utils/serviceActionCodes");
 
 
 const client = new MercadoPagoConfig({ accessToken: process.env.MP_ACCESS_TOKEN });
@@ -520,7 +521,7 @@ const getRegistrationStatus = async (req, res) => {
     }
 
     const user = await User.findById(pending.userID)
-      .select("username admin slug subscription subscriptionExpiresAt active");
+      .select("username admin slug subscription subscriptionExpiresAt active emailVerified");
     if (!user) {
       throw new Error("El registro figura completo pero no tiene un usuario asociado");
     }
@@ -546,6 +547,7 @@ const getRegistrationStatus = async (req, res) => {
         previousSubscription: subscriptionState.previousSubscription,
         downgradeReason: subscriptionState.downgradeReason,
         downgradedAt: subscriptionState.downgradedAt,
+        emailVerified: user.emailVerified,
         token: generateAuthToken(user._id),
       },
     });
@@ -1053,6 +1055,21 @@ const processPaymentEvent = async (paymentId) => {
       subscription: mappedPlan,
       subscriptionExpiresAt: entitlementExpiresAt,
       sellerID: pending.sellerID || null,
+      emailVerified: false,
+    });
+
+    // Fire-and-forget, a propósito sin `await`: mpWebhook espera a que esta
+    // función termine antes de responderle 200 a MercadoPago, y ese ack no
+    // puede quedar atado a la latencia (o un cuelgue) del SMTP de Gmail. El
+    // pago ya se acreditó y el User ya existe — un fallo acá no debe demorar
+    // ni tirar el procesamiento del webhook; el dueño puede reenviar el
+    // código desde la app (POST /users/me/verify-email/resend).
+    createPendingServiceAction({
+      action: "verificacion_email",
+      userID: user._id,
+      email: user.contactInfo.mail,
+    }).catch((mailError) => {
+      console.error("No se pudo enviar el email de verificación en el alta paga:", mailError);
     });
 
     const completedPending = await PendingRegistration.findByIdAndUpdate(
@@ -1173,73 +1190,6 @@ const mpWebhook = async (req, res) => {
 // "confirmar..." con ese código ejecuta el downgrade o el reembolso.
 // ──────────────────────────────────────────────
 const DIAS_ARREPENTIMIENTO = 10;
-
-const generateNumericCode = () => String(crypto.randomInt(0, 1000000)).padStart(6, "0");
-const hashCode = (code) => crypto.createHash("sha256").update(String(code)).digest("hex");
-const maskEmail = (mail) => String(mail).replace(/^(.).*(@.*)$/, "$1***$2");
-
-const createPendingServiceAction = async ({ action, userID, email, paymentID = null }) => {
-  // Un pedido nuevo invalida cualquier código anterior sin usar para la misma acción.
-  await PendingServiceAction.deleteMany({ action, userID, consumed: false });
-
-  const code = generateNumericCode();
-  const pending = await PendingServiceAction.create({
-    action,
-    userID,
-    email,
-    paymentID,
-    codeHash: hashCode(code),
-    expiresAt: new Date(Date.now() + PendingServiceAction.CODE_TTL_MS),
-  });
-
-  try {
-    await mailer.sendConfirmationCodeEmail({ to: email, code, action });
-  } catch (mailError) {
-    await PendingServiceAction.deleteOne({ _id: pending._id });
-    throw Object.assign(new Error("No se pudo enviar el email de confirmación"), {
-      cause: mailError,
-      isMailError: true,
-    });
-  }
-
-  return pending;
-};
-
-// Busca el código pendiente, valida vencimiento/intentos y lo marca
-// consumido de forma atómica (evita doble ejecución por doble click/retry).
-const claimPendingServiceAction = async ({ requestId, code, action }) => {
-  const pending = await PendingServiceAction.findOne({
-    _id: requestId,
-    action,
-    consumed: false,
-    expiresAt: { $gt: new Date() },
-  });
-
-  if (!pending) {
-    return { error: { status: 400, message: "El código venció o ya fue usado. Volvé a solicitarlo." } };
-  }
-
-  if (pending.attempts >= PendingServiceAction.MAX_ATTEMPTS) {
-    await PendingServiceAction.updateOne({ _id: pending._id }, { $set: { consumed: true } });
-    return { error: { status: 400, message: "Superaste el límite de intentos. Volvé a solicitarlo." } };
-  }
-
-  if (hashCode(code) !== pending.codeHash) {
-    await PendingServiceAction.updateOne({ _id: pending._id }, { $inc: { attempts: 1 } });
-    return { error: { status: 400, message: "El código ingresado no es correcto." } };
-  }
-
-  const claimed = await PendingServiceAction.findOneAndUpdate(
-    { _id: pending._id, consumed: false },
-    { $set: { consumed: true } },
-    { new: true }
-  );
-  if (!claimed) {
-    return { error: { status: 409, message: "Esta solicitud ya fue confirmada." } };
-  }
-
-  return { pending: claimed };
-};
 
 // ──────────────────────────────────────────────
 // Derecho de arrepentimiento (Ley 24.240 + Disp. 954/2025)

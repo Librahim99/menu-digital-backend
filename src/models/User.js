@@ -33,6 +33,18 @@ const UserSchema = new mongoose.Schema(
       default: true,
     },
 
+    // Verificación de email post-registro (código de 6 dígitos, ver
+    // PendingServiceAction action:"verificacion_email"). Default `true` a
+    // propósito: las cuentas creadas antes de esta funcionalidad no tienen
+    // este campo guardado en Mongo, y Mongoose aplica el default al leerlas
+    // — así quedan verificadas automáticamente en vez de bloqueadas de
+    // golpe. Solo newUser/el alta paga (webhook) lo setean explícitamente
+    // en `false` al crear la cuenta.
+    emailVerified: {
+      type: Boolean,
+      default: true,
+    },
+
     admin: {
       type: Boolean,
       default: false,

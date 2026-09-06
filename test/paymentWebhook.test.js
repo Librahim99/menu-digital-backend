@@ -9,6 +9,8 @@ const PendingRegistration = require("../src/models/PendingRegistration");
 const PaymentCheckout = require("../src/models/PaymentCheckout");
 const PaymentTransaction = require("../src/models/PaymentTransaction");
 const CrmProfile = require("../src/models/CrmProfile");
+const PendingServiceAction = require("../src/models/PendingServiceAction");
+const mailer = require("../src/utils/mailer");
 const { getRegistrationStatus, mpWebhook } = require("../src/controllers/paymentController");
 const { encryptPendingPassword } = require("../src/utils/pendingCredentials");
 const {
@@ -215,6 +217,18 @@ function mockCommon(
       return transaction ? { ...transaction } : null;
     },
   };
+}
+
+// El alta paga dispara el envío del código de verificación de email
+// "fire-and-forget" (ver processPaymentEvent) para no atarle a mpWebhook la
+// latencia del SMTP de Gmail. Sin este mock, esos tests igual pasan (el
+// código no espera esa promesa) pero cada `PendingServiceAction.deleteMany`
+// sin mockear cuelga 10s en el buffer de Mongoose sin conexión — atrasando
+// el cierre del proceso de test y ensuciando la salida con el error tardío.
+function mockEmailVerificationCode(t) {
+  t.mock.method(PendingServiceAction, "deleteMany", async () => ({ deletedCount: 0 }));
+  t.mock.method(PendingServiceAction, "create", async (data) => ({ _id: "pending-verif-mock", ...data }));
+  t.mock.method(mailer, "sendConfirmationCodeEmail", async () => {});
 }
 
 function mockExistingUser(t, previousUser, updates) {
@@ -1632,6 +1646,7 @@ test("un Basic legacy que compra Pro recibe el vencimiento del pago", async (t) 
 });
 
 test("un update crítico nulo del pending no marca el pago como aplicado", async (t) => {
+  mockEmailVerificationCode(t);
   const previousSecret = process.env.PENDING_REGISTRATION_SECRET;
   process.env.PENDING_REGISTRATION_SECRET = "secret-de-prueba-con-mas-de-32-caracteres";
   t.after(() => {
@@ -1676,6 +1691,7 @@ test("un update crítico nulo del pending no marca el pago como aplicado", async
 });
 
 test("el alta encadena pending, aprobación, completed y sesión autenticada", async (t) => {
+  mockEmailVerificationCode(t);
   const previousPendingSecret = process.env.PENDING_REGISTRATION_SECRET;
   const previousJwtSecret = process.env.JWT_SECRET;
   process.env.PENDING_REGISTRATION_SECRET = "secret-de-prueba-con-mas-de-32-caracteres";
@@ -1831,6 +1847,7 @@ test("el alta encadena pending, aprobación, completed y sesión autenticada", a
 });
 
 test("un alta con sellerID crea el usuario y suma los 7 días de vendedor", async (t) => {
+  mockEmailVerificationCode(t);
   const previousSecret = process.env.PENDING_REGISTRATION_SECRET;
   process.env.PENDING_REGISTRATION_SECRET = "secret-de-prueba-con-mas-de-32-caracteres";
   t.after(() => {
@@ -1865,7 +1882,7 @@ test("un alta con sellerID crea el usuario y suma los 7 días de vendedor", asyn
   let created;
   t.mock.method(User, "create", async (data) => {
     created = data;
-    return { _id: NEW_USER_ID };
+    return { _id: NEW_USER_ID, ...data };
   });
 
   const res = response();
@@ -1901,6 +1918,7 @@ test("un alta con sellerID crea el usuario y suma los 7 días de vendedor", asyn
 });
 
 test("un alta completada recupera la finalización sin recrear usuario ni CRM", async (t) => {
+  mockEmailVerificationCode(t);
   const previousSecret = process.env.PENDING_REGISTRATION_SECRET;
   process.env.PENDING_REGISTRATION_SECRET = "secret-de-prueba-con-mas-de-32-caracteres";
   t.after(() => {

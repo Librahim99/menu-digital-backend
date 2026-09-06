@@ -1,15 +1,15 @@
 const mongoose = require("mongoose");
 
-// Código de confirmación de un solo uso para acciones sensibles que hoy no
-// requieren login (baja de servicio, arrepentimiento): quien inicia el
-// pedido debe probar que controla el email de la cuenta antes de que se
-// ejecute cualquier cambio de estado o reembolso real.
+// Código de confirmación de un solo uso para acciones que dependen de probar
+// que se controla un email: baja/arrepentimiento (públicas, sin login) antes
+// de ejecutar un cambio de estado o reembolso real, y verificacion_email
+// (autenticada, ver userController.js) para confirmar la cuenta recién creada.
 const CODE_TTL_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 5;
 
 const pendingServiceActionSchema = new mongoose.Schema(
   {
-    action: { type: String, enum: ["baja", "arrepentimiento"], required: true },
+    action: { type: String, enum: ["baja", "arrepentimiento", "verificacion_email"], required: true },
     userID: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

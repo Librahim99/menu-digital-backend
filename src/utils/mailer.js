@@ -36,6 +36,11 @@ const CODE_LABELS = {
     heading: "Confirmá tu solicitud de arrepentimiento",
     body: "Recibimos un pedido para reembolsar tu compra y bajar tu cuenta al plan Gratis. Si fuiste vos, usá este código para confirmarlo:",
   },
+  verificacion_email: {
+    subject: "Confirmá tu cuenta — Menú Digital",
+    heading: "¡Bienvenido a Menú Digital!",
+    body: "Ya casi terminás de crear tu cuenta. Usá este código en la app para verificar tu email:",
+  },
 };
 
 const sendConfirmationCodeEmail = async ({ to, code, action }) => {

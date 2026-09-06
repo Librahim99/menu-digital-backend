@@ -129,6 +129,28 @@ test("el login encuentra la cuenta sin importar mayúsculas, incluso cuentas vie
   assert.equal(res.body.slug, user.slug);
 });
 
+test("el login informa emailVerified para que el front sepa si debe pedir el código", async (t) => {
+  process.env.JWT_SECRET = process.env.JWT_SECRET || "jwt-secret-de-prueba";
+
+  const user = {
+    _id: "64f000000000000000000126",
+    username: "restaurante-sin-verificar",
+    admin: false,
+    active: true,
+    slug: "restaurante-sin-verificar",
+    subscription: "free",
+    subscriptionExpiresAt: null,
+    emailVerified: false,
+    matchPassword: async (password) => password === "password-seguro",
+  };
+  t.mock.method(User, "findOne", () => ({ select: async () => user }));
+
+  const res = response();
+  await loginUser({ body: { username: user.username, password: "password-seguro" } }, res);
+
+  assert.equal(res.body.emailVerified, false);
+});
+
 test("el login escapa caracteres especiales de regex en el username", async (t) => {
   process.env.JWT_SECRET = process.env.JWT_SECRET || "jwt-secret-de-prueba";
 

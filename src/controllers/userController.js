@@ -25,6 +25,29 @@ const { isScheduleAvailableAt } = require("../utils/itemAvailability");
 const { isOfferActive } = require("../utils/offers");
 const { isValidEmail, isWeakPassword } = require("../utils/validators");
 const { escapeRegex } = require("../utils/regex");
+const {
+  maskEmail,
+  createPendingServiceAction,
+  claimPendingServiceAction,
+} = require("../utils/serviceActionCodes");
+
+// Manda el código de verificación de email: al registrarse (newUser) y cada
+// vez que cambia el mail real de la cuenta (editUser). Best-effort a
+// propósito: la escritura que la dispara (alta o edición de perfil) ya se
+// guardó — si el mail falla acá no queremos revertir ni bloquear esa
+// respuesta, el dueño puede reenviarlo después con
+// POST /users/me/verify-email/resend.
+const sendEmailVerificationCode = async (user) => {
+  try {
+    await createPendingServiceAction({
+      action: "verificacion_email",
+      userID: user._id,
+      email: user.contactInfo.mail,
+    });
+  } catch (error) {
+    console.error("No se pudo enviar el email de verificación al registrarse:", error);
+  }
+};
 
 // ──────────────────────────────────────────────
 // Helper: suma 1 a la visita de hoy del local (upsert, no bloqueante).
@@ -148,7 +171,10 @@ if (acceptedTerms !== true) {
       acceptedTerms: true,
       acceptedTermsAt: new Date(),
       acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
+      emailVerified: false,
     });
+
+    await sendEmailVerificationCode(user);
 
     res.status(201).json({
       _id: user._id,
@@ -212,8 +238,87 @@ const loginUser = async (req, res) => {
       previousSubscription: subscriptionState.previousSubscription,
       downgradeReason: subscriptionState.downgradeReason,
       downgradedAt: subscriptionState.downgradedAt,
+      emailVerified: user.emailVerified,
       token: generateAuthToken(user._id),
     });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Confirmar el código de verificación de email mandado al crear la
+//          cuenta (ver sendEmailVerificationCode en newUser y en el webhook
+//          de pagos, processPaymentEvent). No bloquea el login: la cuenta
+//          entra normal y el frontend redirige a la pantalla de código
+//          mientras emailVerified sea false.
+// @route   POST /api/users/me/verify-email
+// @access  Private
+// ──────────────────────────────────────────────
+const verifyEmail = async (req, res) => {
+  try {
+    if (req.user.emailVerified) {
+      return res.json({ emailVerified: true });
+    }
+
+    const { code } = req.body;
+    if (typeof code !== "string" || !code.trim()) {
+      return res.status(400).json({ message: "Ingresá el código que te enviamos por email." });
+    }
+
+    const { error } = await claimPendingServiceAction({
+      userID: req.user._id,
+      code: code.trim(),
+      action: "verificacion_email",
+    });
+    if (error) {
+      return res.status(error.status).json({ message: error.message });
+    }
+
+    await User.findByIdAndUpdate(req.user._id, { $set: { emailVerified: true } });
+
+    res.json({ emailVerified: true });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Reenviar el código de verificación de email (ej. el primero se
+//          perdió o venció a los 15 min). Invalida cualquier código anterior
+//          sin usar (ver createPendingServiceAction).
+// @route   POST /api/users/me/verify-email/resend
+// @access  Private
+// ──────────────────────────────────────────────
+const resendVerificationCode = async (req, res) => {
+  try {
+    if (req.user.emailVerified) {
+      return res.json({ emailVerified: true });
+    }
+
+    if (!isValidEmail(req.user.contactInfo?.mail)) {
+      return res.status(400).json({
+        message: "El email de contacto de tu cuenta no es válido. Escribinos a menudigitalappsoporte@gmail.com para resolverlo.",
+      });
+    }
+
+    try {
+      await createPendingServiceAction({
+        action: "verificacion_email",
+        userID: req.user._id,
+        email: req.user.contactInfo.mail,
+      });
+    } catch (error) {
+      if (error.isMailError) {
+        console.error("No se pudo reenviar el código de verificación de email:", error.cause);
+        return res.status(503).json({
+          message: "No pudimos enviar el email. Intentá de nuevo o escribinos a menudigitalappsoporte@gmail.com.",
+        });
+      }
+      throw error;
+    }
+
+    res.json({ ok: true, maskedEmail: maskEmail(req.user.contactInfo.mail) });
   } catch (error) {
     handleError(res, error);
   }
@@ -686,6 +791,20 @@ const editUser = async (req, res) => {
       }
     }
 
+    // Si cambia el mail real de la cuenta, la verificación anterior ya no
+    // prueba nada sobre el mail nuevo — sin esto, alguien podía apuntar la
+    // cuenta a un mail que no controla y quedar igual marcado como
+    // "verificado". Se compara contra el valor ya guardado (no contra el
+    // enviado en el body) para no reenviar código en una edición que no
+    // toca "mail" en absoluto.
+    const mailChanged = Boolean(
+      updates.contactInfo
+      && updates.contactInfo.mail !== req.user.contactInfo?.mail
+    );
+    if (mailChanged) {
+      updates.emailVerified = false;
+    }
+
     // Validación liviana del horario para que la carta pública no reciba datos que rompan
     // el cálculo de "abierto ahora" (ver ScheduleSection en UserHome.tsx).
     // El front (UserEditor.tsx) ya valida esto mismo antes de mandar, esto
@@ -718,6 +837,13 @@ const editUser = async (req, res) => {
           { $set: updates },
           { new: true, runValidators: true }
         );
+
+    // Best-effort, igual que en newUser: el mail ya cambió y se guardó, un
+    // fallo de SMTP acá no debe tirar la edición del perfil — el dueño
+    // puede reenviar el código desde /users/me/verify-email/resend.
+    if (mailChanged) {
+      await sendEmailVerificationCode(user);
+    }
 
     res.json(user);
   } catch (error) {
@@ -909,6 +1035,8 @@ const setActive = async (req, res) => {
 module.exports = {
   newUser,
   loginUser,
+  verifyEmail,
+  resendVerificationCode,
   getAuthUser,
   fetchUserWithMenu,
   downloadMenuPdf,

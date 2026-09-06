@@ -6,6 +6,8 @@ const User = require("../src/models/User");
 const Menu = require("../src/models/Menu");
 const Item = require("../src/models/Item");
 const PageView = require("../src/models/PageView");
+const PendingServiceAction = require("../src/models/PendingServiceAction");
+const mailer = require("../src/utils/mailer");
 const { fetchUser, fetchUserWithMenu, getAuthUser, editUser, newUser } = require("../src/controllers/userController");
 
 const activeContact = {
@@ -182,4 +184,70 @@ test("editUser rechaza actualizar contactInfo con un email inválido", async (t)
 
   assert.equal(res.statusCode, 400);
   assert.match(res.body.message, /email/i);
+});
+
+test("editUser resetea emailVerified y reenvía el código cuando cambia el mail real de la cuenta", async (t) => {
+  t.mock.method(console, "error", () => {});
+  // activeContact.businessName está seteado, así que editUser pasa por
+  // updateUserWithUniqueSlug (ver editUser en userController.js) — sin este
+  // mock, generateUniqueSlug cuelga 10s en un User.exists() sin conexión.
+  t.mock.method(User, "exists", async () => false);
+  t.mock.method(PendingServiceAction, "deleteMany", async () => ({ deletedCount: 0 }));
+  t.mock.method(PendingServiceAction, "create", async (data) => ({ _id: "pending-1", ...data }));
+  let sentTo = null;
+  let sentAction = null;
+  t.mock.method(mailer, "sendConfirmationCodeEmail", async ({ to, action }) => {
+    sentTo = to;
+    sentAction = action;
+  });
+
+  let saved;
+  t.mock.method(User, "findByIdAndUpdate", async (_id, update) => {
+    saved = update.$set;
+    return { _id: "64f000000000000000000123", ...saved };
+  });
+
+  const res = response();
+  await editUser({
+    user: {
+      _id: "64f000000000000000000123",
+      subscription: "free",
+      emailVerified: true,
+      contactInfo: activeContact,
+    },
+    body: { contactInfo: { mail: "nuevo-mail@example.com" } },
+  }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(saved.contactInfo.mail, "nuevo-mail@example.com");
+  assert.equal(saved.emailVerified, false, "el mail nuevo todavía no está confirmado");
+  assert.equal(sentTo, "nuevo-mail@example.com", "el código nuevo va al mail nuevo, no al viejo");
+  assert.equal(sentAction, "verificacion_email");
+});
+
+test("editUser no toca emailVerified ni manda mail si contactInfo se edita sin cambiar el mail", async (t) => {
+  t.mock.method(User, "exists", async () => false);
+  t.mock.method(mailer, "sendConfirmationCodeEmail", async () => assert.fail("no debe mandar mail"));
+  t.mock.method(PendingServiceAction, "create", async () => assert.fail("no debe crear un pedido de verificación"));
+
+  let saved;
+  t.mock.method(User, "findByIdAndUpdate", async (_id, update) => {
+    saved = update.$set;
+    return { _id: "64f000000000000000000123", ...saved };
+  });
+
+  const res = response();
+  await editUser({
+    user: {
+      _id: "64f000000000000000000123",
+      subscription: "free",
+      emailVerified: true,
+      contactInfo: activeContact,
+    },
+    body: { contactInfo: { address: "Otra dirección 456" } },
+  }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(saved.contactInfo.mail, activeContact.mail);
+  assert.equal(saved.emailVerified, undefined, "no debe tocar emailVerified si el mail no cambió");
 });
