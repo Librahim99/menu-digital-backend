@@ -8,6 +8,9 @@ const handleError = (res, error, status = 500) => {
   if (error?.code === "PLAN_CATALOG_UNAVAILABLE") {
     return res.status(503).json({ code: error.code, message: "No se pudo consultar el plan. Intentá de nuevo." });
   }
+  if (error?.code === "INVALID_EXCEL_FILE") {
+    return res.status(400).json({ code: error.code, message: error.message });
+  }
   res.status(status).json({ message: "Ocurrió un error interno. Intentá de nuevo." });
 };
 

@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const ExcelJS = require("exceljs");
 const Menu = require("../src/models/Menu");
 const Item = require("../src/models/Item");
-const { confirmMassive } = require("../src/controllers/massiveController");
+const { confirmMassive, previewMassive } = require("../src/controllers/massiveController");
 
 function response() {
   return {
@@ -110,4 +110,34 @@ test("confirmMassive actualiza normalmente un producto con precio válido", asyn
   assert.equal(persistedPrice, 4500);
   assert.equal(res.body.resultado.productos.actualizados.length, 1);
   assert.equal(res.body.resultado.productos.errores.length, 0);
+});
+
+// Reproduce el bug reportado en producción: un archivo que no es un .xlsx
+// real (renombrado, .xls viejo, corrupto) hacía que ExcelJS tirara un
+// TypeError interno ("Cannot read properties of undefined (reading 'sheets')")
+// que se colaba como 500 genérico. Debe responder 400 con un mensaje
+// accionable, no crashear.
+test("previewMassive responde 400 (no 500) si el archivo no es un .xlsx válido", async () => {
+  const res = response();
+  await previewMassive(
+    { file: { buffer: Buffer.from("esto no es un excel, es texto plano") }, user: { _id: "u1" } },
+    res,
+  );
+
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.code, "INVALID_EXCEL_FILE");
+  assert.match(res.body.message, /no pudimos leer el archivo/i);
+});
+
+test("previewMassive responde 400 si el Excel no tiene las hojas correctas", async () => {
+  const workbook = new ExcelJS.Workbook();
+  workbook.addWorksheet("Hoja1").addRow(["codigo", "titulo"]);
+  const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+
+  const res = response();
+  await previewMassive({ file: { buffer }, user: { _id: "u1" } }, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.body.code, "INVALID_EXCEL_FILE");
+  assert.match(res.body.message, /hojas correctas/i);
 });

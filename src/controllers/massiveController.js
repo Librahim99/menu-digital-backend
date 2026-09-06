@@ -177,7 +177,17 @@ const getTemplate = async (req, res) => {
 // ──────────────────────────────────────────────
 const parseExcel = async (buffer) => {
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(buffer);
+  try {
+    await workbook.xlsx.load(buffer);
+  } catch (err) {
+    // Un .xlsx corrupto, un .xls viejo o un CSV/HTML renombrado con extensión
+    // .xlsx hacen que ExcelJS tire un TypeError interno (no un Error prolijo)
+    // al no encontrar la estructura que espera. Se normaliza a un error de
+    // usuario en vez de dejarlo pasar como 500 genérico.
+    const invalidFileError = new Error("No pudimos leer el archivo. Verificá que sea un Excel (.xlsx) válido, generado por la app o por Excel/Sheets, y que no esté dañado.");
+    invalidFileError.code = "INVALID_EXCEL_FILE";
+    throw invalidFileError;
+  }
 
   const parseSheet = (sheet) => {
     const headers = [];
@@ -200,7 +210,11 @@ const parseExcel = async (buffer) => {
   const menuSheet = workbook.getWorksheet("🟦 Categorías");
   const itemSheet = workbook.getWorksheet("🟩 Productos");
 
-  if (!menuSheet || !itemSheet) throw new Error("El archivo no tiene las hojas correctas. Usá la plantilla original.");
+  if (!menuSheet || !itemSheet) {
+    const wrongSheetsError = new Error("El archivo no tiene las hojas correctas. Usá la plantilla original.");
+    wrongSheetsError.code = "INVALID_EXCEL_FILE";
+    throw wrongSheetsError;
+  }
 
   return {
     menusRows: parseSheet(menuSheet),
