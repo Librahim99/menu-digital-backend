@@ -5,6 +5,8 @@
  * sinSeccion: [{...menu, items:[]}] }.
  */
 
+const { PLAYFAIR_REGULAR_WOFF2_BASE64, PLAYFAIR_ITALIC_WOFF2_BASE64 } = require("./menuPdfFonts");
+
 function escapeHTML(str = "") {
   return String(str)
     .replace(/&/g, "&amp;")
@@ -21,6 +23,32 @@ function formatPrice(value) {
     currency: "ARS",
     minimumFractionDigits: 0,
   }).format(value);
+}
+
+// contactInfo.social.instagram puede venir como handle suelto o como URL
+// completa (lo que haya tipeado el dueño en el panel) — lo normalizamos a
+// "@handle" para la portada.
+function formatInstagramHandle(value) {
+  if (!value || typeof value !== "string") return "";
+  const handle = value
+    .trim()
+    .replace(/^https?:\/\/(www\.)?instagram\.com\//i, "")
+    .replace(/^@/, "")
+    .replace(/\/+$/, "");
+  return handle ? `@${handle}` : "";
+}
+
+// Línea opcional de contacto en la portada (dirección · teléfono · IG). Cada
+// dato falta a menudo -- se arma solo con lo que el local haya cargado, y
+// devuelve "" si no hay nada (la portada no muestra el separador vacío).
+function buildCoverContactLine(contactInfo = {}) {
+  const parts = [
+    contactInfo.address,
+    contactInfo.number != null ? String(contactInfo.number) : null,
+    formatInstagramHandle(contactInfo.social?.instagram),
+  ].filter(Boolean);
+
+  return parts.map((p) => escapeHTML(p)).join(' <span class="dot">&middot;</span> ');
 }
 
 function renderPriceBlock(item) {
@@ -118,7 +146,7 @@ function renderChapter(seccion) {
     </section>`;
 }
 
-function buildMenuHTML({ businessName = "Menú", menuArmado }) {
+function buildMenuHTML({ businessName = "Menú", menuArmado, contactInfo = {} }) {
   const secciones  = menuArmado?.secciones ?? [];
   const sinSeccion = menuArmado?.sinSeccion ?? [];
 
@@ -134,12 +162,35 @@ function buildMenuHTML({ businessName = "Menú", menuArmado }) {
     month: "long",
     year: "numeric",
   });
+  const contactLine = buildCoverContactLine(contactInfo);
 
   return `<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8" />
   <style>
+    /*
+     * El Chromium de producción (@sparticuz/chromium, ver src/utils/pdfBrowser.js)
+     * corre en un contenedor Linux mínimo que no trae Georgia ni Times New
+     * Roman -- solo Open Sans -- así que sin embeber la fuente los títulos
+     * serif de acá abajo caen silenciosamente a Open Sans en Koyeb, aunque
+     * en Windows/Mac local se vean con la tipografía serif esperada. Se
+     * embebe en base64 (menuPdfFonts.js) en vez de linkear a Google Fonts
+     * para no depender de una request de red por cada PDF generado.
+     */
+    @font-face {
+      font-family: "Playfair Display";
+      font-style: normal;
+      font-weight: 400;
+      src: url(data:font/woff2;base64,${PLAYFAIR_REGULAR_WOFF2_BASE64}) format("woff2");
+    }
+    @font-face {
+      font-family: "Playfair Display";
+      font-style: italic;
+      font-weight: 400;
+      src: url(data:font/woff2;base64,${PLAYFAIR_ITALIC_WOFF2_BASE64}) format("woff2");
+    }
+
     @page {
       margin: 14mm 12mm 12mm 12mm;
     }
@@ -182,7 +233,7 @@ function buildMenuHTML({ businessName = "Menú", menuArmado }) {
       font-size: 9px;
     }
     .cover h1 {
-      font-family: Georgia, "Times New Roman", serif;
+      font-family: "Playfair Display", Georgia, "Times New Roman", serif;
       font-size: 22px;
       font-weight: 400;
       letter-spacing: 2.5px;
@@ -194,6 +245,15 @@ function buildMenuHTML({ businessName = "Menú", menuArmado }) {
       font-size: 9.5px;
       margin-top: 4px;
       letter-spacing: 0.4px;
+    }
+    .cover-contact {
+      margin-top: 4px;
+      font-size: 8.5px;
+      color: #9a8f83;
+      letter-spacing: 0.3px;
+    }
+    .cover-contact .dot {
+      color: #c4a574;
     }
 
     /* ── Sección ── */
@@ -207,10 +267,12 @@ function buildMenuHTML({ businessName = "Menú", menuArmado }) {
       margin-bottom: 4mm;
       padding-bottom: 3px;
       border-bottom: 1.5px solid #1a1714;
+      page-break-after: avoid;
+      break-after: avoid;
     }
     .chapter-header-text { flex: 1; min-width: 0; }
     .chapter-title {
-      font-family: Georgia, "Times New Roman", serif;
+      font-family: "Playfair Display", Georgia, "Times New Roman", serif;
       font-size: 15px;
       font-weight: 400;
       text-transform: uppercase;
@@ -218,11 +280,11 @@ function buildMenuHTML({ businessName = "Menú", menuArmado }) {
       color: #1a1714;
     }
     .chapter-desc {
+      font-family: "Playfair Display", Georgia, serif;
       font-size: 9.5px;
       color: #7a7068;
       margin-top: 1px;
       font-style: italic;
-      font-family: Georgia, serif;
     }
     .chapter-img {
       width: 28px;
@@ -248,11 +310,13 @@ function buildMenuHTML({ businessName = "Menú", menuArmado }) {
       margin-bottom: 3mm;
       padding-bottom: 2px;
       border-bottom: 1px solid #e8e0d4;
+      page-break-after: avoid;
+      break-after: avoid;
     }
     .category-header-text { flex: 1; min-width: 0; }
     .category-header h2,
     .category-header h3 {
-      font-family: Georgia, "Times New Roman", serif;
+      font-family: "Playfair Display", Georgia, "Times New Roman", serif;
       font-weight: 400;
       text-transform: uppercase;
       letter-spacing: 1.2px;
@@ -261,6 +325,7 @@ function buildMenuHTML({ businessName = "Menú", menuArmado }) {
     .category-header h2 { font-size: 12.5px; }
     .category-header h3 { font-size: 11.5px; color: #3d3731; }
     .category-desc {
+      font-family: "Playfair Display", Georgia, serif;
       font-size: 9px;
       color: #8a7e72;
       margin-top: 1px;
@@ -410,10 +475,22 @@ function buildMenuHTML({ businessName = "Menú", menuArmado }) {
     <div class="cover-ornament"><span>◆</span></div>
     <h1>${escapeHTML(businessName)}</h1>
     <div class="subtitle">${generatedAt}</div>
+    ${contactLine ? `<div class="cover-contact">${contactLine}</div>` : ""}
   </div>
   ${body}
 </body>
 </html>`;
 }
 
-module.exports = { buildMenuHTML };
+// Puppeteer renderiza el footer en un frame aislado, sin acceso a los
+// estilos ni a las fuentes embebidas del documento principal -- por eso acá
+// va con su propia tipografía (sans del sistema) en vez de Playfair Display.
+function buildFooterTemplate({ businessName = "" } = {}) {
+  return `
+    <div style="width: 100%; font-family: Helvetica, Arial, sans-serif; font-size: 8px; color: #9a8f83; padding: 0 12mm; display: flex; justify-content: space-between; align-items: center;">
+      <span>${escapeHTML(businessName)}</span>
+      <span>Página <span class="pageNumber"></span> de <span class="totalPages"></span></span>
+    </div>`;
+}
+
+module.exports = { buildMenuHTML, buildFooterTemplate };

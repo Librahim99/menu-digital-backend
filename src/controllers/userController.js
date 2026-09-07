@@ -14,7 +14,7 @@ const {
 const { getPlanForUser, getRequestPlan } = require("../services/planCatalog");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { logCrmEvent } = require("../utils/crmEvents");
-const { buildMenuHTML } = require("../utils/menuPdfTemplate");
+const { buildMenuHTML, buildFooterTemplate } = require("../utils/menuPdfTemplate");
 const { getBrowser } = require("../utils/pdfBrowser");
 const {
   createUserWithUniqueSlug,
@@ -505,9 +505,11 @@ const downloadMenuPdf = async (req, res) => {
         })),
     };
 
+    const businessName = user.contactInfo?.businessName || "Nuestro Menú";
     const html = buildMenuHTML({
-      businessName: user.contactInfo?.businessName || "Nuestro Menú",
+      businessName,
       menuArmado,
+      contactInfo: user.contactInfo,
     });
 
     const browser = await getBrowser();
@@ -522,7 +524,10 @@ const downloadMenuPdf = async (req, res) => {
     const pdfBuffer = Buffer.from(await page.pdf({
   format: "A4",
   printBackground: true,
-  margin: { top: "0mm", bottom: "10mm", left: "0mm", right: "0mm" },
+  margin: { top: "0mm", bottom: "14mm", left: "0mm", right: "0mm" },
+  displayHeaderFooter: true,
+  headerTemplate: "<span></span>",
+  footerTemplate: buildFooterTemplate({ businessName }),
 }));
 
 res.set({
