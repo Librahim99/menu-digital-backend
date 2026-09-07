@@ -137,7 +137,7 @@ test("newUser rechaza un email de contacto ausente o inválido antes de tocar la
     const res = response();
     await newUser({
       body: {
-        username: "nuevo-local",
+        username: "nuevolocal",
         password: "password-seguro",
         acceptedTerms: true,
         contactInfo: { ...activeContact, mail },

@@ -23,13 +23,14 @@ const {
 } = require("../utils/slug");
 const { isScheduleAvailableAt } = require("../utils/itemAvailability");
 const { isOfferActive } = require("../utils/offers");
-const { isValidEmail, isWeakPassword } = require("../utils/validators");
+const { isValidEmail, isWeakPassword, isValidUsername } = require("../utils/validators");
 const { escapeRegex } = require("../utils/regex");
 const {
   maskEmail,
   createPendingServiceAction,
   claimPendingServiceAction,
 } = require("../utils/serviceActionCodes");
+const Seller = require("../models/Seller");
 
 // Manda el código de verificación de email: al registrarse (newUser) y cada
 // vez que cambia el mail real de la cuenta (editUser). Best-effort a
@@ -132,6 +133,10 @@ const newUser = async (req, res) => {
     // donde se crea el username, en vez de en cada lugar que lo consulta.
     const cleanUsername = username.trim().toLowerCase();
 
+    if (!isValidUsername(cleanUsername)) {
+      return res.status(400).json({ message: "El usuario no puede contener guiones" });
+    }
+
     // El email de contacto no es solo un dato de perfil: baja y arrepentimiento
     // (Ley 24.240) dependen de poder mandarle un código de confirmación a esta
     // cuenta. Sin este chequeo, una cuenta con contactInfo.mail vacío o
@@ -201,6 +206,31 @@ const loginUser = async (req, res) => {
     if (typeof username !== "string" || typeof password !== "string") {
       return res.status(401).json({ message: "Credenciales inválidas" });
     }
+
+    //verificar primero si es un vendedor para no hacer todo el proceso para los usuarios normales
+    if(username.includes("-")) {
+      const seller = await Seller.findOne({ code: username }).select("+password");
+      if (!seller || !(await seller.matchPassword(password))) {
+        return res.status(401).json({ message: "Credenciales inválidas" });
+      }
+      if (!seller.active) {
+      return res.status(403).json({ message: "Cuenta desactivada" });
+      } 
+      let activeAndAuthenticated = true
+      if(seller != null && activeAndAuthenticated) {
+       return res.json({
+      _id: seller._id,
+      username: seller.name,
+      code: seller.code,
+      admin: seller.admin,
+      role: "seller",
+      profilePicture: seller.profilePicture,
+      token: generateAuthToken(seller._id, "seller"),
+    });
+      }
+      
+    }
+
 
     // Las cuentas nuevas se guardan en minúsculas (ver newUser), pero las
     // creadas antes de ese fix pueden tener mayúsculas guardadas tal cual

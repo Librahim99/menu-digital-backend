@@ -27,4 +27,12 @@ const isWeakPassword = (password) =>
   || password.length < 8
   || COMMON_WEAK_PASSWORDS.has(password.toLowerCase());
 
-module.exports = { isValidEmail, isWeakPassword };
+// El código de un vendedor (formato AAA-999, ver Seller.js) siempre tiene un
+// guion, y loginUser (userController.js) usa justamente eso para decidir si
+// busca la cuenta en Seller o en User. Un username de restaurante con guion
+// haría esa detección ambigua y lo dejaría sin poder loguearse — se bloquea
+// acá, única fuente de verdad para las dos altas (gratuita y paga).
+const isValidUsername = (username) =>
+  typeof username === "string" && !username.includes("-");
+
+module.exports = { isValidEmail, isWeakPassword, isValidUsername };

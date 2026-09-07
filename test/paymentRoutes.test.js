@@ -52,7 +52,7 @@ const createResponse = () => ({
 });
 
 const createRegistrationBody = (overrides = {}) => ({
-  username: "nuevo-local",
+  username: "nuevolocal",
   password: "password-seguro",
   acceptedTerms: true,
   contactInfo: {
@@ -69,7 +69,7 @@ const createPending = () => {
   let saveCalls = 0;
   const pending = {
     _id: PENDING_ID,
-    username: "nuevo-local",
+    username: "nuevolocal",
     password: "password-seguro",
     contactInfo: {
       mail: "dueno@example.com",
