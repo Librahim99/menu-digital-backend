@@ -238,28 +238,28 @@ const getSellerById = async (req, res) => {
 // Crear seller
 const createSeller = async (req, res) => {
   try {
-    const { name, dni } = req.body;
-
+    const { name, password, dni, mail, number, startDate  } = req.body;
+    let response = ""
     // Validar datos obligatorios
     if (!name || !dni) {
-      return res.status(400).json({
-        message: "El nombre y el DNI son obligatorios",
-      });
+      response = "El nombre y DNI son obligatorios";
     }
-
-    // Verificar si ya existe un seller con ese nombre
-    const existingName = await Seller.findOne({ name });
-
-    if (existingName) {
-      return res.status(409).json({
-        message: "Ya existe un vendedor con ese nombre",
+    if( !password || password.length < 8) {
+      response = response + "\nLa contraseña es obligatoria y debe tener al menos 8 caracteres";
+    }
+    if (!mail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
+      response = response + "\nEl correo electrónico es obligatorio y debe ser válido";
+    }
+    if(response != "") {
+      return res.status(400).json({
+        message: response,
       });
     }
 
     // Verificar si ya existe un seller con ese DNI
-    const existingDni = await Seller.findOne({ dni });
+    const existingDNI = await Seller.findOne({ dni });
 
-    if (existingDni) {
+    if (existingDNI) {
       return res.status(409).json({
         message: "Ya existe un vendedor con ese DNI",
       });
@@ -296,11 +296,20 @@ const createSeller = async (req, res) => {
     // Crear seller
     const seller = await Seller.create({
       name,
+      password,
+      mail,
+      number,
+      startDate,
       dni,
       code,
+      admin: false,
+      active: true
     });
 
-    res.status(201).json(seller);
+    res.status(201).json({
+      message: "Vendedor creado correctamente",
+      seller,
+    });
   } catch (error) {
     // Manejar duplicados de MongoDB
     if (error.code === 11000) {
@@ -316,7 +325,7 @@ const createSeller = async (req, res) => {
 // Modificar seller
 const updateSeller = async (req, res) => {
   try {
-    const { name, dni } = req.body;
+    const { name, password, dni, mail, number, startDate  } = req.body;
 
     const seller = await Seller.findById(req.params.id);
 
@@ -356,6 +365,22 @@ const updateSeller = async (req, res) => {
       }
 
       seller.dni = dni;
+    }
+
+    if (password && password !== seller.password) {
+      seller.password = password;
+    }
+
+    if (mail && mail !== seller.mail) {
+      seller.mail = mail;
+    }
+
+    if (number !== undefined && number !== seller.number) {
+      seller.number = number;
+    }
+
+    if (startDate !== undefined && startDate !== seller.startDate) {
+      seller.startDate = startDate;
     }
 
     await seller.save();

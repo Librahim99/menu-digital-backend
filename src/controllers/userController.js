@@ -30,6 +30,7 @@ const {
   createPendingServiceAction,
   claimPendingServiceAction,
 } = require("../utils/serviceActionCodes");
+const Seller = require("../models/Seller");
 
 // Manda el código de verificación de email: al registrarse (newUser) y cada
 // vez que cambia el mail real de la cuenta (editUser). Best-effort a
@@ -201,6 +202,31 @@ const loginUser = async (req, res) => {
     if (typeof username !== "string" || typeof password !== "string") {
       return res.status(401).json({ message: "Credenciales inválidas" });
     }
+
+    //verificar primero si es un vendedor para no hacer todo el proceso para los usuarios normales
+    if(username.includes("-")) {
+      const seller = await Seller.findOne({ code: username }).select("+password");
+      if (!seller || !(await seller.matchPassword(password))) {
+        return res.status(401).json({ message: "Credenciales inválidas" });
+      }
+      if (!seller.active) {
+      return res.status(403).json({ message: "Cuenta desactivada" });
+      } 
+      let activeAndAuthenticated = true
+      if(seller != null && activeAndAuthenticated) {
+       return res.json({
+      _id: seller._id,
+      username: seller.name,
+      code: seller.code,
+      admin: seller.admin,
+      role: "seller",
+      profilePicture: seller.profilePicture,
+      token: generateAuthToken(seller._id),
+    });
+      }
+      
+    }
+
 
     // Las cuentas nuevas se guardan en minúsculas (ver newUser), pero las
     // creadas antes de ese fix pueden tener mayúsculas guardadas tal cual
