@@ -225,7 +225,7 @@ const loginUser = async (req, res) => {
       admin: seller.admin,
       role: "seller",
       profilePicture: seller.profilePicture,
-      token: generateAuthToken(seller._id),
+      token: generateAuthToken(seller._id, "seller"),
     });
       }
       
