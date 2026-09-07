@@ -23,7 +23,7 @@ const {
 } = require("../utils/slug");
 const { isScheduleAvailableAt } = require("../utils/itemAvailability");
 const { isOfferActive } = require("../utils/offers");
-const { isValidEmail, isWeakPassword } = require("../utils/validators");
+const { isValidEmail, isWeakPassword, isValidUsername } = require("../utils/validators");
 const { escapeRegex } = require("../utils/regex");
 const {
   maskEmail,
@@ -132,6 +132,10 @@ const newUser = async (req, res) => {
     // cuenta creada con mayúsculas. Se normaliza acá, en el único lugar
     // donde se crea el username, en vez de en cada lugar que lo consulta.
     const cleanUsername = username.trim().toLowerCase();
+
+    if (!isValidUsername(cleanUsername)) {
+      return res.status(400).json({ message: "El usuario no puede contener guiones" });
+    }
 
     // El email de contacto no es solo un dato de perfil: baja y arrepentimiento
     // (Ley 24.240) dependen de poder mandarle un código de confirmación a esta

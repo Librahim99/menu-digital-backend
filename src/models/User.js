@@ -8,6 +8,15 @@ const UserSchema = new mongoose.Schema(
       required: [true, "El username es obligatorio"],
       unique: true,
       trim: true,
+      // loginUser (userController.js) decide por el guion si una cuenta es
+      // un vendedor (Seller.code, formato AAA-999) o un restaurante. La
+      // validación "de verdad" vive en newUser y en crear-preferencia-registro
+      // (src/utils/validators.js), esto es una red de contención por si algún
+      // día se crea un User por otro camino.
+      validate: {
+        validator: (v) => typeof v !== "string" || !v.includes("-"),
+        message: "El username no puede contener guiones",
+      },
     },
 
     slug: {

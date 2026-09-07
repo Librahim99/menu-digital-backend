@@ -27,7 +27,7 @@ const {
   decryptPendingPassword,
   encryptPendingPassword,
 } = require("../utils/pendingCredentials");
-const { isValidEmail, isWeakPassword } = require("../utils/validators");
+const { isValidEmail, isWeakPassword, isValidUsername } = require("../utils/validators");
 const Seller = require("../models/Seller");
 
 // Cada operación recibe su propia configuración: el SDK muta `options`
@@ -339,6 +339,10 @@ router.post("/crear-preferencia-registro", async (req, res) => {
   const cleanUsername = String(username).trim().toLowerCase();
   const cleanMail = String(contactInfo.mail).trim().toLowerCase();
   const cleanBusinessName = String(contactInfo.businessName).trim();
+
+  if (!isValidUsername(cleanUsername)) {
+    return res.status(400).json({ error: "El usuario no puede contener guiones" });
+  }
 
   if (
     registrationToken !== undefined &&

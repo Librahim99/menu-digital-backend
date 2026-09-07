@@ -29,10 +29,10 @@ test("el login manual devuelve el slug requerido por AuthProvider", async (t) =>
 
   const user = {
     _id: "64f000000000000000000123",
-    username: "restaurante-test",
+    username: "restaurantetest",
     admin: false,
     active: true,
-    slug: "restaurante-test",
+    slug: "restaurantetest",
     subscription: "basic",
     subscriptionExpiresAt: new Date("2099-09-21T15:00:00.000Z"),
     matchPassword: async (password) => password === "password-seguro",
@@ -71,10 +71,10 @@ test("el login informa el downgrade efectivo cuando venció un plan pago", async
 
   const user = {
     _id: "64f000000000000000000124",
-    username: "restaurante-vencido",
+    username: "restaurantevencido",
     admin: false,
     active: true,
-    slug: "restaurante-vencido",
+    slug: "restaurantevencido",
     subscription: "pro",
     subscriptionExpiresAt: new Date(0),
     matchPassword: async (password) => password === "password-seguro",
@@ -134,10 +134,10 @@ test("el login informa emailVerified para que el front sepa si debe pedir el có
 
   const user = {
     _id: "64f000000000000000000126",
-    username: "restaurante-sin-verificar",
+    username: "restaurantesinverificar",
     admin: false,
     active: true,
-    slug: "restaurante-sin-verificar",
+    slug: "restaurantesinverificar",
     subscription: "free",
     subscriptionExpiresAt: null,
     emailVerified: false,

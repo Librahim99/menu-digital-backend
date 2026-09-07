@@ -308,7 +308,18 @@ const createSeller = async (req, res) => {
 
     res.status(201).json({
       message: "Vendedor creado correctamente",
-      seller,
+      seller: {
+        name: seller.name,
+        mail: seller.mail,
+        number: seller.number,
+        startDate: seller.startDate,
+        dni: seller.dni,
+        code: seller.code,
+        active: seller.active,
+        admin: seller.admin,
+        createdAt: seller.createdAt,
+        updatedAt: seller.updatedAt
+      },
     });
   } catch (error) {
     // Manejar duplicados de MongoDB
@@ -325,7 +336,7 @@ const createSeller = async (req, res) => {
 // Modificar seller
 const updateSeller = async (req, res) => {
   try {
-    const { name, password, dni, mail, number, startDate  } = req.body;
+    const { name, dni, mail, number, startDate  } = req.body;
 
     const seller = await Seller.findById(req.params.id);
 
@@ -367,10 +378,6 @@ const updateSeller = async (req, res) => {
       seller.dni = dni;
     }
 
-    if (password && password !== seller.password) {
-      seller.password = password;
-    }
-
     if (mail && mail !== seller.mail) {
       seller.mail = mail;
     }
@@ -385,7 +392,18 @@ const updateSeller = async (req, res) => {
 
     await seller.save();
 
-    res.status(200).json(seller);
+    res.status(200).json({seller: {
+      name: seller.name,
+      mail: seller.mail,
+      number: seller.number,
+      startDate: seller.startDate,
+      dni: seller.dni,
+      code: seller.code,
+      active: seller.active,
+      admin: seller.admin,
+      createdAt: seller.createdAt,
+      updatedAt: seller.updatedAt
+    }});
   } catch (error) {
     if (error.code === 11000) {
       return res.status(409).json({

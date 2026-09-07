@@ -25,10 +25,10 @@ const SellerSchema = new mongoose.Schema(
     },
     mail: {
         type: String,
-        required: [true, "contactInfo.mail es obligatorio"],
+        required: [true, "El mail es obligatorio"],
         validate: {
           validator: (v) => typeof v === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v),
-          message: "contactInfo.mail debe ser un email válido",
+          message: "Debe ser un email válido",
         },
       },
     number: { 
