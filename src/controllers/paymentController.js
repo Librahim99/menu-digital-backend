@@ -249,12 +249,13 @@ const recordSellerSale = async ({
   plan,
   amount,
   subscriptionDate,
+  months
 }) => {
   if (!sellerID) return;
   try {
     await SellerSale.findOneAndUpdate(
       { paymentID },
-      { $setOnInsert: { userID, sellerID, plan, amount, subscriptionDate } },
+      { $setOnInsert: { userID, sellerID, plan, amount, subscriptionDate, months } },
       { upsert: true, setDefaultsOnInsert: true }
     );
   } catch (err) {
@@ -922,6 +923,7 @@ const processPaymentEvent = async (paymentId) => {
           userID: completedUser._id || pending.userID,
           sellerID: pending.sellerID,
           plan: mappedPlan,
+          months: completedMonths,
           amount: paymentTransaction.amount,
           subscriptionDate: approvedAt,
         });
@@ -1061,6 +1063,7 @@ const processPaymentEvent = async (paymentId) => {
           userID: alreadyExists._id,
           sellerID: pending.sellerID,
           plan: mappedPlan,
+          months: recoveredMonths,
           amount: paymentTransaction.amount,
           subscriptionDate: approvedAt,
         });
@@ -1154,6 +1157,7 @@ const processPaymentEvent = async (paymentId) => {
         userID: user._id,
         sellerID: pending.sellerID,
         plan: mappedPlan,
+        months: entitlementMonths,
         amount: paymentTransaction.amount,
         subscriptionDate: approvedAt,
       });
@@ -1199,6 +1203,7 @@ const processPaymentEvent = async (paymentId) => {
       userID: associatedID,
       sellerID: entitlementResult.sellerID,
       plan: mappedPlan,
+      months: metadataMonths,
       amount: entitlementResult.amount,
       subscriptionDate: approvedAt,
     });

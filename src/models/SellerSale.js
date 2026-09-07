@@ -17,6 +17,7 @@ const sellerSaleSchema = new mongoose.Schema(
     sellerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", required: true },
     plan: { type: String, enum: ["basic", "pro"], required: true },
     amount: { type: Number, required: true, min: 0 },
+    months: { type: Number, enum: [1, 3, 6, 12], required: true },
     subscriptionDate: { type: Date, required: true },
   },
   { timestamps: true }

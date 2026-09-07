@@ -583,6 +583,7 @@ test("upgrade aprobado con sellerID registra la venta del vendedor", async (t) =
         userID: USER_ID,
         sellerID: "64f000000000000000000321",
         plan: "basic",
+        months: 3,
         amount: 5400,
         subscriptionDate: new Date("2026-08-21T15:00:00.000Z"),
       },
@@ -1595,6 +1596,36 @@ test("un alta aprobada tarde acredita un checkout vencido y superseded", async (
   assert.equal(transaction.entitlementStatus, "applied");
 });
 
+test("un alta con usuario ya existente y sellerID registra la venta del vendedor", async (t) => {
+  const { paymentContext, pending } = mockExistingRegistrationUser(t, {
+    purchasedPlan: "basic",
+    months: 3,
+    approvedAt: "2026-08-21T15:00:00.000Z",
+    currentPlan: "free",
+    currentExpiresAt: null,
+  });
+  pending.sellerID = "64f000000000000000000321";
+
+  const res = response();
+  await mpWebhook(request(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(paymentContext.sellerSaleWrites.length, 1);
+  assert.deepEqual(paymentContext.sellerSaleWrites[0], {
+    filter: { paymentID: "payment-123" },
+    update: {
+      $setOnInsert: {
+        userID: USER_ID,
+        sellerID: pending.sellerID,
+        plan: "basic",
+        months: 3,
+        amount: 5400,
+        subscriptionDate: new Date("2026-08-21T15:00:00.000Z"),
+      },
+    },
+  });
+});
+
 test("un alta Basic no degrada un Pro activo ni acorta su vencimiento", async (t) => {
   const currentExpiry = new Date("2099-02-10T15:00:00.000Z");
   const purchasedExpiry = "2098-11-21T15:00:00.000Z";
@@ -1959,6 +1990,53 @@ test("un alta con sellerID crea el usuario y suma los 7 días de vendedor", asyn
         userID: NEW_USER_ID,
         sellerID: pending.sellerID,
         plan: "pro",
+        months: 12,
+        amount: 5400,
+        subscriptionDate: new Date("2026-08-21T15:00:00.000Z"),
+      },
+    },
+  });
+});
+
+test("un alta ya completada con sellerID registra la venta del vendedor al recuperarse", async (t) => {
+  const paymentContext = mockCommon(t, approvedPayment({
+    external_reference: PENDING_REGISTRATION_ID,
+    metadata: { plan_id: "basic", months: 3, type: "registration" },
+  }));
+  const pending = {
+    _id: PENDING_REGISTRATION_ID,
+    status: "completed",
+    userID: NEW_USER_ID,
+    username: "restaurante-recovery-seller",
+    months: 3,
+    preferenceId: PREFERENCE_ID,
+    sellerID: "64f000000000000000000321",
+  };
+  t.mock.method(PendingRegistration, "findById", () => ({
+    select: async () => pending,
+  }));
+  const completedUser = {
+    _id: NEW_USER_ID,
+    subscription: "basic",
+    subscriptionExpiresAt: null,
+  };
+  t.mock.method(User, "findById", () => ({
+    select: async () => completedUser,
+  }));
+
+  const res = response();
+  await mpWebhook(request(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(paymentContext.sellerSaleWrites.length, 1);
+  assert.deepEqual(paymentContext.sellerSaleWrites[0], {
+    filter: { paymentID: "payment-123" },
+    update: {
+      $setOnInsert: {
+        userID: NEW_USER_ID,
+        sellerID: pending.sellerID,
+        plan: "basic",
+        months: 3,
         amount: 5400,
         subscriptionDate: new Date("2026-08-21T15:00:00.000Z"),
       },
