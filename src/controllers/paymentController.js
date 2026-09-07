@@ -5,6 +5,7 @@ const User = require("../models/User");
 const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
 const PaymentTransaction = require("../models/PaymentTransaction");
+const SellerSale = require("../models/SellerSale");
 const {
   PLAN_MAP,
   PLAN_ORDER,
@@ -237,6 +238,30 @@ const linkPendingRegistration = (paymentID, pending) => {
   );
 };
 
+// Registra la venta a comisionar cuando un pago recién se aplica. No es la
+// fuente de verdad (PaymentTransaction lo es): si falla, no debe frenar ni
+// hacer fallar la acreditación del pago, solo faltar ese registro en el
+// panel de vendedores. Sin vendedor asociado no hay nada que registrar acá.
+const recordSellerSale = async ({
+  paymentID,
+  userID,
+  sellerID,
+  plan,
+  amount,
+  subscriptionDate,
+}) => {
+  if (!sellerID) return;
+  try {
+    await SellerSale.findOneAndUpdate(
+      { paymentID },
+      { $setOnInsert: { userID, sellerID, plan, amount, subscriptionDate } },
+      { upsert: true, setDefaultsOnInsert: true }
+    );
+  } catch (err) {
+    console.error("No se pudo registrar la venta del vendedor:", err);
+  }
+};
+
 const applyExistingUserEntitlement = async ({
   paymentID,
   associatedID,
@@ -382,6 +407,8 @@ const applyExistingUserEntitlement = async ({
     previousPlan: effectiveCurrentPlan,
     isRenewal: targetRank === currentRank,
     subscriptionExpiresAt: durableExpiry,
+    sellerID: updatedUser.sellerID,
+    amount: lockedTransaction.amount,
   };
 });
 
@@ -890,6 +917,14 @@ const processPaymentEvent = async (paymentId) => {
           completedUser._id || pending.userID,
           `Alta por pago MP — plan ${mappedPlan} × ${completedMonths} mes(es), vigente hasta ${completedExpiry.toISOString()}`
         );
+        await recordSellerSale({
+          paymentID: paymentSnapshot.paymentID,
+          userID: completedUser._id || pending.userID,
+          sellerID: pending.sellerID,
+          plan: mappedPlan,
+          amount: paymentTransaction.amount,
+          subscriptionDate: approvedAt,
+        });
       }
       return;
     }
@@ -1021,6 +1056,14 @@ const processPaymentEvent = async (paymentId) => {
           alreadyExists._id,
           `Alta por pago MP — plan ${mappedPlan} × ${recoveredMonths} mes(es), vigente hasta ${recoveredExpiry.toISOString()}`
         );
+        await recordSellerSale({
+          paymentID: paymentSnapshot.paymentID,
+          userID: alreadyExists._id,
+          sellerID: pending.sellerID,
+          plan: mappedPlan,
+          amount: paymentTransaction.amount,
+          subscriptionDate: approvedAt,
+        });
       }
       return;
     }
@@ -1106,6 +1149,14 @@ const processPaymentEvent = async (paymentId) => {
         user._id,
         `Alta por pago MP — plan ${mappedPlan} × ${entitlementMonths} mes(es)${pending.sellerID ? " · ref. vendedor" : ""}, vigente hasta ${entitlementExpiresAt.toISOString()}`
       );
+      await recordSellerSale({
+        paymentID: paymentSnapshot.paymentID,
+        userID: user._id,
+        sellerID: pending.sellerID,
+        plan: mappedPlan,
+        amount: paymentTransaction.amount,
+        subscriptionDate: approvedAt,
+      });
     }
 
     return;
@@ -1143,6 +1194,14 @@ const processPaymentEvent = async (paymentId) => {
       associatedID,
       `Pago MP aprobado — ${entitlementResult.isRenewal ? `renovación ${mappedPlan}` : `plan ${entitlementResult.previousPlan} → ${mappedPlan}`} × ${metadataMonths} mes(es), vigente hasta ${entitlementResult.subscriptionExpiresAt.toISOString()}`
     );
+    await recordSellerSale({
+      paymentID: paymentSnapshot.paymentID,
+      userID: associatedID,
+      sellerID: entitlementResult.sellerID,
+      plan: mappedPlan,
+      amount: entitlementResult.amount,
+      subscriptionDate: approvedAt,
+    });
   }
 };
 

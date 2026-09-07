@@ -8,6 +8,7 @@ const User = require("../src/models/User");
 const PendingRegistration = require("../src/models/PendingRegistration");
 const PaymentCheckout = require("../src/models/PaymentCheckout");
 const PaymentTransaction = require("../src/models/PaymentTransaction");
+const SellerSale = require("../src/models/SellerSale");
 const CrmProfile = require("../src/models/CrmProfile");
 const PendingServiceAction = require("../src/models/PendingServiceAction");
 const mailer = require("../src/utils/mailer");
@@ -209,9 +210,15 @@ function mockCommon(
     crmUpdates.push(args);
     return {};
   });
+  const sellerSaleWrites = [];
+  t.mock.method(SellerSale, "findOneAndUpdate", async (filter, update) => {
+    sellerSaleWrites.push({ filter, update });
+    return null;
+  });
   return {
     transactionWrites,
     crmUpdates,
+    sellerSaleWrites,
     getTransaction: (paymentID = defaultPaymentID) => {
       const transaction = transactions.get(String(paymentID));
       return transaction ? { ...transaction } : null;
@@ -552,6 +559,35 @@ test("upgrade aprobado actualiza plan y vencimiento según los meses pagados", a
     "2026-11-21T15:00:00.000Z"
   );
   assert.equal(paymentContext.crmUpdates.length, 1);
+  assert.equal(paymentContext.sellerSaleWrites.length, 0);
+});
+
+test("upgrade aprobado con sellerID registra la venta del vendedor", async (t) => {
+  const paymentContext = mockCommon(t, approvedPayment());
+  const updates = [];
+  mockExistingUser(
+    t,
+    { subscription: "free", subscriptionExpiresAt: null, sellerID: "64f000000000000000000321" },
+    updates
+  );
+
+  const res = response();
+  await mpWebhook(request(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(paymentContext.sellerSaleWrites.length, 1);
+  assert.deepEqual(paymentContext.sellerSaleWrites[0], {
+    filter: { paymentID: "payment-123" },
+    update: {
+      $setOnInsert: {
+        userID: USER_ID,
+        sellerID: "64f000000000000000000321",
+        plan: "basic",
+        amount: 5400,
+        subscriptionDate: new Date("2026-08-21T15:00:00.000Z"),
+      },
+    },
+  });
 });
 
 test("un pago live acredita beneficios en el ambiente productivo", async (t) => {
@@ -1915,6 +1951,19 @@ test("un alta con sellerID crea el usuario y suma los 7 días de vendedor", asyn
     "2027-08-28T15:00:00.000Z"
   );
   assert.equal(paymentContext.crmUpdates.length, 1);
+  assert.equal(paymentContext.sellerSaleWrites.length, 1);
+  assert.deepEqual(paymentContext.sellerSaleWrites[0], {
+    filter: { paymentID: "payment-123" },
+    update: {
+      $setOnInsert: {
+        userID: NEW_USER_ID,
+        sellerID: pending.sellerID,
+        plan: "pro",
+        amount: 5400,
+        subscriptionDate: new Date("2026-08-21T15:00:00.000Z"),
+      },
+    },
+  });
 });
 
 test("un alta completada recupera la finalización sin recrear usuario ni CRM", async (t) => {
