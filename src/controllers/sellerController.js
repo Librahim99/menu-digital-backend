@@ -168,7 +168,12 @@ const groupClientsBySeller = (clients) => {
 // Obtener todos los sellers
 const getSellers = async (req, res) => {
   try {
-    const sellers = await Seller.find().sort({ createdAt: -1 }).lean();
+    // Por default no se listan los vendedores dados de baja (active:false) —
+    // el ABM sigue mostrando solo al equipo vigente salvo que se pida lo
+    // contrario explícitamente.
+    const includeInactive = req.query?.includeInactive === "true";
+    const sellerFilter = includeInactive ? {} : { active: true };
+    const sellers = await Seller.find(sellerFilter).sort({ createdAt: -1 }).lean();
     if (sellers.length === 0) return res.status(200).json([]);
 
     const clients = await User.find({
@@ -238,7 +243,7 @@ const getSellerById = async (req, res) => {
 // Crear seller
 const createSeller = async (req, res) => {
   try {
-    const { name, password, dni, mail, number, startDate  } = req.body;
+    const { name, password, dni, mail, number, startDate, active, admin } = req.body;
     let response = ""
     // Validar datos obligatorios
     if (!name || !dni) {
@@ -302,13 +307,14 @@ const createSeller = async (req, res) => {
       startDate,
       dni,
       code,
-      admin: false,
-      active: true
+      admin: typeof admin === "boolean" ? admin : false,
+      active: typeof active === "boolean" ? active : true,
     });
 
     res.status(201).json({
       message: "Vendedor creado correctamente",
       seller: {
+        _id: seller._id,
         name: seller.name,
         mail: seller.mail,
         number: seller.number,
@@ -317,6 +323,7 @@ const createSeller = async (req, res) => {
         code: seller.code,
         active: seller.active,
         admin: seller.admin,
+        profilePicture: seller.profilePicture,
         createdAt: seller.createdAt,
         updatedAt: seller.updatedAt
       },
@@ -336,7 +343,7 @@ const createSeller = async (req, res) => {
 // Modificar seller
 const updateSeller = async (req, res) => {
   try {
-    const { name, dni, mail, number, startDate  } = req.body;
+    const { name, dni, mail, number, startDate, active, admin } = req.body;
 
     const seller = await Seller.findById(req.params.id);
 
@@ -390,9 +397,18 @@ const updateSeller = async (req, res) => {
       seller.startDate = startDate;
     }
 
+    if (typeof active === "boolean" && active !== seller.active) {
+      seller.active = active;
+    }
+
+    if (typeof admin === "boolean" && admin !== seller.admin) {
+      seller.admin = admin;
+    }
+
     await seller.save();
 
     res.status(200).json({seller: {
+      _id: seller._id,
       name: seller.name,
       mail: seller.mail,
       number: seller.number,
@@ -401,6 +417,7 @@ const updateSeller = async (req, res) => {
       code: seller.code,
       active: seller.active,
       admin: seller.admin,
+      profilePicture: seller.profilePicture,
       createdAt: seller.createdAt,
       updatedAt: seller.updatedAt
     }});
@@ -415,10 +432,16 @@ const updateSeller = async (req, res) => {
   }
 };
 
-// Eliminar seller
+// Dar de baja a un seller. Baja lógica (active:false), no borrado físico: si
+// más adelante ese vendedor tiene ventas históricas en SellerSale, el
+// ranking/panel general siguen pudiendo resolver su nombre y código.
 const deleteSeller = async (req, res) => {
   try {
-    const seller = await Seller.findByIdAndDelete(req.params.id);
+    const seller = await Seller.findByIdAndUpdate(
+      req.params.id,
+      { active: false },
+      { new: true },
+    );
 
     if (!seller) {
       return res.status(404).json({
@@ -427,9 +450,34 @@ const deleteSeller = async (req, res) => {
     }
 
     res.status(200).json({
-      message: "Vendedor eliminado correctamente",
+      message: "Vendedor dado de baja correctamente",
       seller,
     });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// Admin resetea la contraseña de un vendedor sin pedir la actual (a
+// diferencia de PATCH /api/sellers/me/password, de autoservicio).
+const resetSellerPassword = async (req, res) => {
+  try {
+    const { newPassword } = req.body;
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({
+        message: "La nueva contraseña debe tener al menos 8 caracteres",
+      });
+    }
+
+    const seller = await Seller.findById(req.params.id);
+    if (!seller) {
+      return res.status(404).json({ message: "Vendedor no encontrado" });
+    }
+
+    seller.password = newPassword;
+    await seller.save(); // el hook pre("save") la rehashea
+
+    res.status(200).json({ message: "Contraseña restablecida correctamente" });
   } catch (error) {
     handleError(res, error);
   }
@@ -441,6 +489,7 @@ module.exports = {
   createSeller,
   updateSeller,
   deleteSeller,
+  resetSellerPassword,
   getSellerMetrics,
   clientToDTO,
 };

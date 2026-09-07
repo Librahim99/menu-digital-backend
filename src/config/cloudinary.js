@@ -58,6 +58,15 @@ const itemStorage = new CloudinaryStorage({
   },
 });
 
+const sellerStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: "menu-digital/sellers",
+    allowed_formats: ["jpg", "jpeg", "png", "webp"],
+    transformation: [{ width: 1200, crop: "limit" }],
+  },
+});
+
 // ──────────────────────────────────────────────
 // Exports
 // ──────────────────────────────────────────────
@@ -75,6 +84,11 @@ module.exports = {
   }),
   uploadItem: multer({
     storage: itemStorage,
+    limits: IMAGE_SIZE_LIMIT,
+    fileFilter: imageFilter,
+  }),
+  uploadSeller: multer({
+    storage: sellerStorage,
     limits: IMAGE_SIZE_LIMIT,
     fileFilter: imageFilter,
   }),

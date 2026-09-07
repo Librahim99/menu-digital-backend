@@ -60,7 +60,7 @@ app.use(express.urlencoded({ extended: true }));
 // paymentId en un query param literal "data.id" (con punto) — el sanitizer
 // también saca claves con puntos (mismo criterio que las de $) y nos
 // rompía el webhook entero.
-app.use(["/api/users", "/api/menus", "/api/items", "/api/admin", "/api/massive"], mongoSanitize());
+app.use(["/api/users", "/api/menus", "/api/items", "/api/admin", "/api/massive", "/api/sellers"], mongoSanitize());
 // Red de contención general contra abuso/scraping — los límites más
 // estrictos de login/registro (authLimiter) se suman a este en sus rutas.
 app.use("/api", apiLimiter);
@@ -71,12 +71,16 @@ app.use("/api", apiLimiter);
 // ──────────────────────────────────────────────
 // Las rutas admin específicas van ANTES de /api/admin para que no las
 // intercepte el GET /:userID de adminRoutes.
-app.use("/api/admin/crm", require("./routes/crmRoutes"));
 app.use("/api/admin/payments", require("./routes/adminPaymentRoutes"));
 app.use("/api/admin/plans", require("./routes/adminPlanRoutes"));
 app.use("/api/admin/sellers", require("./routes/sellerRoutes"));
 app.use("/api/plans", require("./routes/planRoutes"));
 app.use("/api/admin", require("./routes/adminRoutes"))
+// El CRM lo maneja tanto un admin como cada vendedor sobre sus propios
+// clientes (ver crmRoutes) — vive bajo /api/sellers, no /api/admin, montado
+// ANTES de /api/sellers a secas por el mismo motivo que el bloque de arriba.
+app.use("/api/sellers/crm", require("./routes/crmRoutes"));
+app.use("/api/sellers", require("./routes/sellerPanelRoutes"));
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/menus", require("./routes/menuRoutes"));
 app.use("/api/items", require("./routes/itemRoutes"));

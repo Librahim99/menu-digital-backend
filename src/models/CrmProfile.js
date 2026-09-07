@@ -23,6 +23,11 @@ const NoteSchema = new mongoose.Schema(
     text: { type: String, required: true, trim: true },
     kind: { type: String, enum: ["note", "event"], default: "note" },
     author: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+    // Para notas escritas por un vendedor: author no puede apuntar a Seller
+    // (el ref del schema es User), así que la autoría queda como texto plano
+    // acá en vez de forzar un ref cruzado a otra colección. Aditivo: notas
+    // viejas simplemente no lo tienen.
+    authorLabel: { type: String, default: null },
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );

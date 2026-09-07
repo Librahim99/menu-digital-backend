@@ -23,8 +23,18 @@ const STAGE_LABEL = {
 const PLAN_LABEL = { free: "Gratis", basic: "Básico", pro: "Pro" };
 const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
-// Todas las rutas de este controller ya pasan por protect + isAdmin (ver
-// crmRoutes), así que acá no re-chequeamos permisos.
+// Todas las rutas de este controller ya pasan por protectSellerOrAdminAny
+// (ver crmRoutes): req.user está seteado para un admin (ve todo), req.seller
+// para un vendedor (solo sus propios clientes atribuidos — cada función que
+// toca un cliente puntual filtra por eso).
+
+// Cuando la request es de un vendedor, filtra la query inicial por su propio
+// sellerID en vez de post-filtrar el array ya resuelto: así un scoping que se
+// olvide agregar en un path nuevo el día de mañana falla cerrado (lista
+// vacía), no abierto (todos los clientes de todos los vendedores).
+const scopedUserMatch = (req, extra = {}) => (
+  req.seller ? { ...extra, sellerID: req.seller._id } : extra
+);
 
 // Perfil "por defecto" que devolvemos cuando un cliente todavía no tiene CRM
 // creado — así el front siempre recibe la misma forma sin tener que crear la
@@ -65,7 +75,7 @@ const buildOnboardingStatus = ({ user, categoryCount, itemCount }) => {
 // ──────────────────────────────────────────────
 const listClients = async (req, res) => {
   try {
-    const users = await User.find({ admin: false })
+    const users = await User.find(scopedUserMatch(req, { admin: false }))
       .select(
         "username slug subscription subscriptionExpiresAt active createdAt sellerID menu " +
         "contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
@@ -328,11 +338,13 @@ const getClient = async (req, res) => {
 
     // El detalle CRM expone un DTO acotado: no entrega el documento User
     // completo ni campos sensibles que el panel no necesita.
-    const user = await User.findOne({ _id: userID, admin: false }).select(
+    const user = await User.findOne(scopedUserMatch(req, { _id: userID, admin: false })).select(
       "username slug subscription subscriptionExpiresAt active hasDelivery createdAt " +
       "contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
       "media.pictures media.backgroundPicture schedule"
     );
+    // 404 en vez de 403 para un cliente que existe pero es de otro vendedor —
+    // mismo criterio que el resto de la app: no confirmar existencia cross-tenant.
     if (!user) return res.status(404).json({ message: "Cliente no encontrado" });
 
     const [profile, menus] = await Promise.all([
@@ -386,8 +398,9 @@ const updateProfile = async (req, res) => {
     const { userID } = req.params;
     if (!isValidId(userID)) return res.status(400).json({ message: "ID inválido" });
 
-    // No creamos un CRM para un userID que no existe (evita perfiles huérfanos).
-    const exists = await User.exists({ _id: userID, admin: false });
+    // No creamos un CRM para un userID que no existe (evita perfiles huérfanos),
+    // ni para el cliente de otro vendedor.
+    const exists = await User.exists(scopedUserMatch(req, { _id: userID, admin: false }));
     if (!exists) return res.status(404).json({ message: "Cliente no encontrado" });
 
     const { stage, tags, nextFollowUp } = req.body;
@@ -443,12 +456,19 @@ const addNote = async (req, res) => {
       return res.status(400).json({ message: "La nota no puede estar vacía" });
     }
 
-    const exists = await User.exists({ _id: userID, admin: false });
+    const exists = await User.exists(scopedUserMatch(req, { _id: userID, admin: false }));
     if (!exists) return res.status(404).json({ message: "Cliente no encontrado" });
+
+    // author solo se puede resolver contra User (el ref del schema) — para
+    // una nota de vendedor, en cambio, se guarda authorLabel como texto
+    // plano, para no forzar un ref cruzado a la colección Seller.
+    const noteEntry = req.user
+      ? { text: text.trim(), author: req.user._id }
+      : { text: text.trim(), authorLabel: `${req.seller.name} (vendedor)` };
 
     const profile = await CrmProfile.findOneAndUpdate(
       { userID },
-      { $push: { notes: { $each: [{ text: text.trim(), author: req.user._id }], $position: 0 } } },
+      { $push: { notes: { $each: [noteEntry], $position: 0 } } },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     ).populate("notes.author", "username");
 
@@ -469,6 +489,9 @@ const deleteNote = async (req, res) => {
     if (!isValidId(userID) || !isValidId(noteID)) {
       return res.status(400).json({ message: "ID inválido" });
     }
+
+    const exists = await User.exists(scopedUserMatch(req, { _id: userID }));
+    if (!exists) return res.status(404).json({ message: "Cliente no encontrado" });
 
     const profile = await CrmProfile.findOneAndUpdate(
       { userID },
@@ -492,9 +515,14 @@ const deleteNote = async (req, res) => {
 const getOverdueCount = async (req, res) => {
   try {
     const todayCalendarCutoff = new Date(`${buenosAiresDateStr()}T00:00:00.000Z`);
-    const count = await CrmProfile.countDocuments({
-      nextFollowUp: { $ne: null, $lt: todayCalendarCutoff },
-    });
+    const match = { nextFollowUp: { $ne: null, $lt: todayCalendarCutoff } };
+
+    if (req.seller) {
+      const clientIDs = await User.find({ sellerID: req.seller._id }).distinct("_id");
+      match.userID = { $in: clientIDs };
+    }
+
+    const count = await CrmProfile.countDocuments(match);
     res.json({ count });
   } catch (err) {
     handleError(res, err);

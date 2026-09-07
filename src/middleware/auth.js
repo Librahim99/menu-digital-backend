@@ -153,4 +153,108 @@ const protectSellerOrAdmin = async (req, res, next) => {
   }
 };
 
-module.exports = { protect, isAdmin, requireFeature, protectSellerOrAdmin };
+/**
+ * Variante de protectSellerOrAdmin para rutas SIN :id (ej. /api/sellers/*):
+ * deja pasar a un admin (adjunta req.user) o a cualquier vendedor autenticado
+ * (adjunta req.seller), sin comparar contra ningún param — el scoping "solo
+ * puede ver lo suyo" queda a cargo de cada controller usando req.seller._id.
+ *
+ * Uso: router.get("/overview", protectSellerOrAdminAny, getOverview)
+ */
+const protectSellerOrAdminAny = async (req, res, next) => {
+  let token;
+
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith("Bearer")
+  ) {
+    token = req.headers.authorization.split(" ")[1];
+  }
+
+  if (!token) {
+    return res.status(401).json({ message: "No autorizado, token requerido" });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
+
+    if (decoded.role === "seller") {
+      const seller = await Seller.findById(decoded.id);
+      if (!seller) {
+        return res.status(401).json({ message: "Vendedor no encontrado" });
+      }
+      if (!seller.active) {
+        return res.status(403).json({ message: "Cuenta desactivada" });
+      }
+
+      req.seller = seller;
+      return next();
+    }
+
+    req.user = await User.findById(decoded.id).select("-password");
+
+    if (!req.user) {
+      return res.status(401).json({ message: "Usuario no encontrado" });
+    }
+    if (!req.user.admin) {
+      return res.status(403).json({ message: "Acceso restringido a administradores" });
+    }
+
+    next();
+  } catch (error) {
+    return res.status(401).json({ message: "Token inválido o expirado" });
+  }
+};
+
+/**
+ * Solo deja pasar a un vendedor autenticado (adjunta req.seller); bloquea a
+ * un admin con 403 — para rutas de autoservicio (/me, cambio de contraseña,
+ * subida de foto) que no tienen sentido para un admin, que no es un
+ * documento Seller.
+ *
+ * Uso: router.get("/me", protectSeller, getMyProfile)
+ */
+const protectSeller = async (req, res, next) => {
+  let token;
+
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith("Bearer")
+  ) {
+    token = req.headers.authorization.split(" ")[1];
+  }
+
+  if (!token) {
+    return res.status(401).json({ message: "No autorizado, token requerido" });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
+
+    if (decoded.role !== "seller") {
+      return res.status(403).json({ message: "Acceso restringido a vendedores" });
+    }
+
+    const seller = await Seller.findById(decoded.id);
+    if (!seller) {
+      return res.status(401).json({ message: "Vendedor no encontrado" });
+    }
+    if (!seller.active) {
+      return res.status(403).json({ message: "Cuenta desactivada" });
+    }
+
+    req.seller = seller;
+    next();
+  } catch (error) {
+    return res.status(401).json({ message: "Token inválido o expirado" });
+  }
+};
+
+module.exports = {
+  protect,
+  isAdmin,
+  requireFeature,
+  protectSellerOrAdmin,
+  protectSellerOrAdminAny,
+  protectSeller,
+};

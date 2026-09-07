@@ -8,6 +8,7 @@ const  {
   createSeller,
   updateSeller,
   deleteSeller,
+  resetSellerPassword,
 } = require("../controllers/sellerController.js");
 // Obtener todos
 router.get("/", protect, isAdmin, getSellers);
@@ -21,7 +22,10 @@ router.post("/", protect, isAdmin, createSeller);
 // Modificar
 router.put("/:id", protect, isAdmin, updateSeller);
 
-// Eliminar
+// Restablecer contraseña (admin, sin pedir la actual)
+router.patch("/:id/password", protect, isAdmin, resetSellerPassword);
+
+// Dar de baja (baja lógica: active:false)
 router.delete("/:id", protect, isAdmin, deleteSeller);
 
 
