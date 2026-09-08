@@ -15,6 +15,7 @@ const PLAN_ORDER = ["free", "basic", "pro"];
 const BOOLEAN_FEATURES = [
   "menu_editor", "qr", "pedido_whatsapp", "landing_page", "sin_publicidad",
   "carga_masiva_excel", "programacion_productos", "menu_pdf", "estadisticas",
+  "image_manager",
 ];
 const TEMPLATE_IDS = Array.from({ length: 15 }, (_, index) => index + 1);
 const hasSubscriptionExpiry = (value) => value !== null && value !== undefined && value !== "";

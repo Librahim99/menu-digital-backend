@@ -1,10 +1,12 @@
 const express = require("express");
 const router = express.Router();
 const { protect, requireFeature } = require("../middleware/auth");
-const { uploadItem } = require("../config/cloudinary");
+const { imageUploadLimiter } = require("../middleware/rateLimiters");
+const { uploadItem, uploadItemLibrary } = require("../config/cloudinary");
 const {
   newItem, editItem, moveItem, uploadImage, uploadDraftImage, setHidden, setAvailable, deleteItem,
-  setAvailableBulk, setHiddenBulk, deleteItemsBulk
+  setAvailableBulk, setHiddenBulk, deleteItemsBulk,
+  getLiteItems, getPendingImages, checkImageQuota, uploadLibraryImage, assignImages
 } = require("../controllers/itemController");
 
 router.post("/", protect, requireFeature("menu_editor"), newItem);
@@ -17,6 +19,16 @@ router.post("/upload-image", protect, requireFeature("menu_editor"), uploadItem.
 router.patch("/bulk/available", protect, requireFeature("menu_editor"), setAvailableBulk);
 router.patch("/bulk/hidden", protect, requireFeature("menu_editor"), setHiddenBulk);
 router.post("/bulk/delete", protect, requireFeature("menu_editor"), deleteItemsBulk);
+// Gestor de imágenes — mismo motivo, van antes de /:itemID/*. Gateadas por
+// la feature "image_manager" (no "menu_editor": es su propio feature de
+// plan, configurable aparte desde el catálogo).
+router.get("/lite", protect, requireFeature("image_manager"), getLiteItems);
+router.get("/images/pending", protect, requireFeature("image_manager"), getPendingImages);
+router.post(
+  "/images/upload", protect, requireFeature("image_manager"), imageUploadLimiter, checkImageQuota,
+  uploadItemLibrary.single("image"), uploadLibraryImage
+);
+router.post("/images/assign", protect, requireFeature("image_manager"), assignImages);
 router.put("/:itemID", protect, requireFeature("menu_editor"), editItem);
 router.patch("/:itemID/move", protect, requireFeature("menu_editor"), moveItem);
 router.patch("/:itemID/hidden", protect, requireFeature("menu_editor"), setHidden);

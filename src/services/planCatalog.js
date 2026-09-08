@@ -1,6 +1,6 @@
 const Plan = require("../models/Plan");
 const {
-  PLAN_ORDER, getSubscriptionState, isValidFeatures,
+  PLAN_ORDER, BOOLEAN_FEATURES, getSubscriptionState, isValidFeatures,
 } = require("../config/plans");
 const { PAYMENT_PLANS, MONTH_MULTIPLIERS } = require("../config/paymentPlans");
 
@@ -20,6 +20,9 @@ const INITIAL_PLANS = [
     programacion_productos: plan.name !== "free",
     menu_pdf: plan.name !== "free",
     estadisticas: plan.name === "pro",
+    // Arranca exclusivo de Pro (decisión de negocio al lanzarlo) — el admin
+    // puede habilitarlo en otros planes desde el panel en cualquier momento.
+    image_manager: plan.name === "pro",
     item_limit: plan.name === "free" ? 15 : plan.name === "basic" ? 50 : null,
     templateIds: Array.from({ length: plan.name === "free" ? 1 : plan.name === "basic" ? 5 : 15 }, (_, i) => i + 1),
   },
@@ -49,6 +52,18 @@ const initializePlans = async () => {
     await Plan.updateOne({ name: initial.name, features: { $exists: false } }, {
       $set: { features: initial.features }, $inc: { __v: 1 },
     });
+  }
+  // Completar claves de `features` agregadas después de que el plan ya
+  // existiera en Mongo (ej: image_manager) — un catálogo guardado antes de
+  // sumar una feature nueva no la tiene, y featuresSchema la exige (strict +
+  // required). Se completa con el default de INITIAL_PLANS para ESE plan,
+  // sin tocar ninguna otra clave que el admin ya haya configurado.
+  for (const initial of INITIAL_PLANS) {
+    for (const key of BOOLEAN_FEATURES) {
+      await Plan.updateOne({ name: initial.name, [`features.${key}`]: { $exists: false } }, {
+        $set: { [`features.${key}`]: initial.features[key] }, $inc: { __v: 1 },
+      });
+    }
   }
   const plans = await Plan.find({ name: { $in: PLAN_ORDER } });
   if (plans.length !== PLAN_ORDER.length) throw new Error("Catálogo de planes incompleto");

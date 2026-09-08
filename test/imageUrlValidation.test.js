@@ -11,6 +11,7 @@ process.env.CLOUDINARY_CLOUD_NAME = "test-cloud";
 const { isValidImageUrl } = require("../src/utils/imageUrl");
 const Item = require("../src/models/Item");
 const Menu = require("../src/models/Menu");
+const User = require("../src/models/User");
 const { buildMenuHTML } = require("../src/utils/menuPdfTemplate");
 
 test.after(() => {
@@ -73,6 +74,18 @@ test("Menu rechaza una imagen que no sea de Cloudinary", () => {
   });
   const err = menu.validateSync();
   assert.ok(err?.errors?.image, "debe rechazar la imagen");
+});
+
+test("User rechaza pendingMenuImages con una URL que no sea de Cloudinary", () => {
+  const user = new User({ pendingMenuImages: ["https://evil.example.com/x.jpg"] });
+  const err = user.validateSync(["pendingMenuImages"]);
+  assert.ok(err?.errors?.pendingMenuImages, "debe rechazar el array");
+});
+
+test("User acepta pendingMenuImages con URLs de Cloudinary", () => {
+  const user = new User({ pendingMenuImages: [VALID_URL, VALID_URL.replace("foo.jpg", "bar.jpg")] });
+  const err = user.validateSync(["pendingMenuImages"]);
+  assert.equal(err?.errors?.pendingMenuImages, undefined);
 });
 
 test("buildMenuHTML escapa una imagen maliciosa en vez de inyectarla cruda en el HTML", () => {

@@ -626,6 +626,7 @@ const fetchOwnMenu = async (req, res) => {
       canExportPdf: features.menu_pdf,
       canScheduleItems: features.programacion_productos,
       canScheduleOffers: features.programacion_productos,
+      canUseImageManager: features.image_manager,
     };
 
     res.json({ menu: menuArmado, limits });

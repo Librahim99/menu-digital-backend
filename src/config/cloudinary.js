@@ -4,6 +4,7 @@
 const cloudinary = require("cloudinary").v2;
 const { CloudinaryStorage } = require("./cloudinaryStorage");
 const multer = require("multer");
+const crypto = require("crypto");
 
 // ──────────────────────────────────────────────
 // Configuración
@@ -67,6 +68,24 @@ const sellerStorage = new CloudinaryStorage({
   },
 });
 
+// Storage del Gestor de imágenes: mismo folder que itemStorage, pero con
+// public_id propio (userID + número) para no depender del auto-generado de
+// Cloudinary — así se puede reconocer de quién es cada imagen si algún día
+// hace falta listarlas por prefijo. `params` como función async: necesita
+// `req.user`, que ya está poblado acá porque `protect` corre antes que
+// multer en toda la cadena de rutas (ver itemRoutes.js).
+const itemLibraryStorage = new CloudinaryStorage({
+  cloudinary,
+  params: async (req) => ({
+    folder: "menu-digital/items",
+    allowed_formats: ["jpg", "jpeg", "png", "webp"],
+    transformation: [{ width: 800, crop: "limit" }],
+    // crypto.randomInt (no Math.random): dos subidas casi simultáneas no
+    // pueden generar el mismo public_id y pisarse una a la otra en Cloudinary.
+    public_id: `${req.user._id}_${Date.now()}${crypto.randomInt(100000, 999999)}`,
+  }),
+});
+
 // ──────────────────────────────────────────────
 // Exports
 // ──────────────────────────────────────────────
@@ -89,6 +108,11 @@ module.exports = {
   }),
   uploadSeller: multer({
     storage: sellerStorage,
+    limits: IMAGE_SIZE_LIMIT,
+    fileFilter: imageFilter,
+  }),
+  uploadItemLibrary: multer({
+    storage: itemLibraryStorage,
     limits: IMAGE_SIZE_LIMIT,
     fileFilter: imageFilter,
   }),

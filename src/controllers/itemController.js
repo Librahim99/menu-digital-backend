@@ -1,6 +1,7 @@
 const { handleError } = require("../utils/handleError");
 const Item = require("../models/Item");
 const Menu = require("../models/Menu");
+const User = require("../models/User");
 const { getRequestPlan } = require("../services/planCatalog");
 const { validateAvailabilitySchedule } = require("../utils/itemAvailability");
 const { normalizeOffer } = require("../utils/offers");
@@ -68,6 +69,35 @@ const resolveOwnedItemIds = async (itemIds, userID) => {
 
   const failedIds = itemIds.filter((id) => !ownedIdSet.has(id));
   return { ownedIds: [...ownedIdSet], failedIds };
+};
+
+// ──────────────────────────────────────────────
+// Helper: cuando se borra un item con imagen, esa imagen vuelve al Gestor
+// de imágenes (User.pendingMenuImages) en vez de perderse — salvo que otro
+// item del mismo usuario siga usando exactamente esa misma URL (imagen
+// legacy compartida entre dos productos desde antes del Gestor); en ese
+// caso no se toca pendingMenuImages, para no dejarla ahí Y asignada a la vez.
+// ──────────────────────────────────────────────
+const recycleDeletedItemImages = async (deletedItems, userID) => {
+  const urls = [...new Set(deletedItems.map((item) => item.image).filter(Boolean))];
+  if (urls.length === 0) return;
+
+  const deletedIds = deletedItems.map((item) => item._id);
+  const userMenuIDs = (await Menu.find({ userID }).select("_id")).map((m) => m._id);
+  const stillUsedUrls = new Set(
+    (
+      await Item.find({
+        image: { $in: urls },
+        menuID: { $in: userMenuIDs },
+        _id: { $nin: deletedIds },
+      }).select("image")
+    ).map((item) => item.image)
+  );
+
+  const toRecycle = urls.filter((url) => !stillUsedUrls.has(url));
+  if (toRecycle.length > 0) {
+    await User.findByIdAndUpdate(userID, { $addToSet: { pendingMenuImages: { $each: toRecycle } } });
+  }
 };
 
 // ──────────────────────────────────────────────
@@ -399,11 +429,12 @@ const deleteItem = async (req, res) => {
   try {
     const item = await Item.findById(req.params.itemID);
     if (!item) return res.status(404).json({ message: "Item no encontrado" });
-      
+
       const { error, status } = await verifyMenuOwnership(item.menuID, req.user._id);
       if (error) return res.status(status).json({ message: error });
 
     await Item.findByIdAndDelete(req.params.itemID);
+    await recycleDeletedItemImages([item], req.user._id);
     res.json({ message: "Item eliminado" });
   } catch (err) {
     handleError(res, err);
@@ -473,9 +504,272 @@ const deleteItemsBulk = async (req, res) => {
 
     const { ownedIds, failedIds } = await resolveOwnedItemIds(itemIds, req.user._id);
     if (ownedIds.length > 0) {
+      const itemsToDelete = await Item.find({ _id: { $in: ownedIds } }).select("_id image");
       await Item.deleteMany({ _id: { $in: ownedIds } });
+      await recycleDeletedItemImages(itemsToDelete, req.user._id);
     }
     res.json({ deletedCount: ownedIds.length, failedIds });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Gestor de imágenes: productos del usuario con solo los campos
+//          que necesita el buscador (nombre/código) y para saber si ya
+//          tienen imagen — no la ficha completa del item.
+// @route   GET /api/items/lite
+// @access  Private
+// ──────────────────────────────────────────────
+const getLiteItems = async (req, res) => {
+  try {
+    const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
+    const items = await Item.find({ menuID: { $in: userMenuIDs } }).select("_id title code image");
+    res.json(items);
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Gestor de imágenes: imágenes ya subidas a Cloudinary que todavía
+//          no fueron asignadas a ningún producto.
+// @route   GET /api/items/images/pending
+// @access  Private
+// ──────────────────────────────────────────────
+const getPendingImages = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select("pendingMenuImages");
+    res.json({ pendingImages: user?.pendingMenuImages || [] });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// Helper: tope de imágenes vigente para el usuario, y cuántas ya tiene
+// asignadas a productos (la cantidad de pendientes se lee aparte, cambia
+// con cada subida).
+//   - Planes con item_limit (Free/Basic): el tope es ese número fijo.
+//   - Planes sin item_limit (Pro): no hay un número fijo, así que el tope
+//     pasa a ser la cantidad de productos que el usuario YA creó — no
+//     tiene sentido acumular más imágenes que productos que algún día las
+//     puedan usar. Con 0 productos creados, el tope efectivo es 0.
+// ──────────────────────────────────────────────
+const getImageQuotaLimit = async (req) => {
+  const { features } = await getRequestPlan(req);
+  const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
+  const [assignedCount, totalItemCount] = await Promise.all([
+    Item.countDocuments({ menuID: { $in: userMenuIDs }, image: { $ne: "" } }),
+    features.item_limit === null ? Item.countDocuments({ menuID: { $in: userMenuIDs } }) : Promise.resolve(null),
+  ]);
+  const effectiveLimit = features.item_limit === null ? totalItemCount : features.item_limit;
+  return { effectiveLimit, assignedCount, isDynamic: features.item_limit === null };
+};
+
+const imageQuotaMessage = (effectiveLimit, isDynamic) => (isDynamic
+  ? `No podés tener más imágenes cargadas que productos creados (tenés ${effectiveLimit}). Creá otro producto o asigná las imágenes pendientes antes de subir una nueva.`
+  : `Alcanzaste el límite de ${effectiveLimit} imágenes de tu plan (contando las pendientes y las ya asignadas a productos). Asigná las que ya subiste o mejorá tu plan para subir más.`);
+
+// ──────────────────────────────────────────────
+// Middleware: corta ANTES de subir a Cloudinary si el usuario ya alcanzó el
+// tope de imágenes. Va antes del multer de subida a propósito: así no se
+// gasta una subida real a Cloudinary para una imagen que de todos modos se
+// rechaza. No es la única barrera — ver el update atómico en
+// uploadLibraryImage, que cierra la carrera entre dos subidas concurrentes
+// que pasan este chequeo casi al mismo tiempo.
+// ──────────────────────────────────────────────
+const checkImageQuota = async (req, res, next) => {
+  try {
+    const { effectiveLimit, assignedCount, isDynamic } = await getImageQuotaLimit(req);
+    const user = await User.findById(req.user._id).select("pendingMenuImages");
+    const totalImages = (user?.pendingMenuImages?.length || 0) + assignedCount;
+
+    if (totalImages >= effectiveLimit) {
+      return res.status(403).json({ message: imageQuotaMessage(effectiveLimit, isDynamic) });
+    }
+    next();
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Gestor de imágenes: sube una imagen a Cloudinary sin asociarla
+//          todavía a ningún producto — queda en pendingMenuImages hasta
+//          que se asigne desde /images/assign. El public_id lo arma
+//          uploadItemLibrary (config/cloudinary.js) con el id del user.
+// @route   POST /api/items/images/upload
+// @access  Private
+// ──────────────────────────────────────────────
+const uploadLibraryImage = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: "No se recibió ningún archivo" });
+    const imageUrl = req.file.path;
+
+    // Recalcula el cupo acá (no solo confía en checkImageQuota) y agrega
+    // con un update condicional: el frontend sube varias imágenes en
+    // paralelo, así que dos requests pueden pasar checkImageQuota casi
+    // simultáneamente, antes de que cualquiera de las dos haya escrito
+    // todavía. $expr compara contra el tamaño del array en el mismo
+    // instante del write, así que solo una de las dos gana si el cupo
+    // alcanza para una sola.
+    const { effectiveLimit, assignedCount } = await getImageQuotaLimit(req);
+    const remainingSlots = Math.max(0, effectiveLimit - assignedCount);
+
+    const updated = await User.findOneAndUpdate(
+      { _id: req.user._id, $expr: { $lt: [{ $size: "$pendingMenuImages" }, remainingSlots] } },
+      { $push: { pendingMenuImages: imageUrl } },
+      { new: true }
+    );
+
+    if (!updated) {
+      // La imagen ya está en Cloudinary (subida antes de este chequeo) y
+      // queda huérfana — mismo tradeoff aceptado que ya existe en el resto
+      // del repo para reemplazos/borrados de imagen (ver removeImage en
+      // userController.js). Es el caso raro de la carrera, no el camino
+      // normal (ese lo corta checkImageQuota antes de llegar a Cloudinary).
+      return res.status(403).json({
+        message: "Alcanzaste el límite de imágenes de tu plan mientras se subían otras imágenes en simultáneo. Esperá a que terminen y volvé a intentar.",
+      });
+    }
+
+    res.json({ imageUrl });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Gestor de imágenes: guarda de una vez las asignaciones imagen→
+//          producto(s) hechas en el gestor. El estado "actual" de cada
+//          imagen (quién la tiene hoy) se recalcula acá, no se confía en lo
+//          que mande el cliente, para no pisar datos por una condición de
+//          carrera entre dos pestañas/sesiones del mismo usuario.
+// @route   POST /api/items/images/assign
+// @access  Private
+// @body    { changes: [{ imageUrl: string, itemIDs: string[] }, ...] }
+//          Solo hace falta mandar las imágenes que cambiaron, no todo el
+//          estado del gestor.
+// ──────────────────────────────────────────────
+const assignImages = async (req, res) => {
+  try {
+    const { changes } = req.body;
+    if (!Array.isArray(changes) || changes.length === 0) {
+      return res.status(400).json({ message: "changes debe ser un array con al menos un elemento." });
+    }
+    if (changes.length > MAX_BULK_ITEMS) {
+      return res.status(400).json({ message: `No se pueden procesar más de ${MAX_BULK_ITEMS} imágenes a la vez.` });
+    }
+
+    // Validación de forma + sin repetidos entre entradas. El frontend ya
+    // evita elegir el mismo producto en dos imágenes a la vez (mapa único
+    // itemID→imageUrl), esto es la segunda barrera por si un bug de cliente
+    // o dos pestañas mandan un payload inconsistente.
+    const seenUrls = new Set();
+    const seenItemIds = new Set();
+    let totalItemIds = 0;
+    for (const change of changes) {
+      if (!change || typeof change.imageUrl !== "string" || !Array.isArray(change.itemIDs)) {
+        return res.status(400).json({ message: "Cada cambio necesita imageUrl (string) e itemIDs (array)." });
+      }
+      if (seenUrls.has(change.imageUrl)) {
+        return res.status(400).json({ message: "No se puede repetir la misma imagen en dos cambios." });
+      }
+      seenUrls.add(change.imageUrl);
+      for (const itemID of change.itemIDs) {
+        if (seenItemIds.has(itemID)) {
+          return res.status(400).json({
+            message: "No se puede asignar el mismo producto a dos imágenes distintas en un solo guardado.",
+          });
+        }
+        seenItemIds.add(itemID);
+      }
+      totalItemIds += change.itemIDs.length;
+    }
+    if (totalItemIds > MAX_BULK_ITEMS) {
+      return res.status(400).json({ message: `No se pueden procesar más de ${MAX_BULK_ITEMS} productos a la vez.` });
+    }
+
+    const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id.toString());
+    const userMenuIDSet = new Set(userMenuIDs);
+
+    const user = await User.findById(req.user._id).select("pendingMenuImages");
+    const pendingSet = new Set(user?.pendingMenuImages || []);
+
+    // Ownership de todos los productos mencionados, en una sola consulta.
+    const allItemIds = [...seenItemIds];
+    const itemsByID = new Map(
+      (await Item.find({ _id: { $in: allItemIds } }).select("_id menuID")).map((it) => [it._id.toString(), it])
+    );
+    for (const itemID of allItemIds) {
+      const item = itemsByID.get(itemID);
+      if (!item || !userMenuIDSet.has(item.menuID.toString())) {
+        return res.status(403).json({ message: "No autorizado sobre uno de los productos enviados." });
+      }
+    }
+
+    // Quién tiene hoy cada imagen (para el diff toAdd/toRemove), también en
+    // una sola consulta para todas las entradas.
+    const allUrls = [...seenUrls];
+    const currentHoldersByUrl = new Map(allUrls.map((url) => [url, []]));
+    (await Item.find({ image: { $in: allUrls }, menuID: { $in: userMenuIDs } }).select("_id image")).forEach(
+      (it) => {
+        currentHoldersByUrl.get(it.image).push(it._id.toString());
+      }
+    );
+
+    const bulkOps = [];
+    const urlsToPull = [];
+    const urlsToAdd = [];
+    let updatedItemCount = 0;
+
+    for (const { imageUrl, itemIDs } of changes) {
+      const uniqueItemIDs = [...new Set(itemIDs)];
+
+      // La imagen tiene que ser del usuario: o está en sus pendientes, o ya
+      // es la imagen de algún producto suyo. Si no, alguien está tratando
+      // de asignarse una imagen ajena (pendiente de otro usuario, nunca
+      // asignada a nada) como si fuera propia.
+      const currentHolders = currentHoldersByUrl.get(imageUrl) || [];
+      if (!pendingSet.has(imageUrl) && currentHolders.length === 0) {
+        return res.status(403).json({ message: "No autorizado sobre una de las imágenes enviadas." });
+      }
+
+      const currentSet = new Set(currentHolders);
+      const nextSet = new Set(uniqueItemIDs);
+      const toAdd = uniqueItemIDs.filter((id) => !currentSet.has(id));
+      const toRemove = currentHolders.filter((id) => !nextSet.has(id));
+
+      if (toAdd.length > 0) {
+        bulkOps.push({ updateMany: { filter: { _id: { $in: toAdd } }, update: { $set: { image: imageUrl } } } });
+      }
+      if (toRemove.length > 0) {
+        bulkOps.push({ updateMany: { filter: { _id: { $in: toRemove } }, update: { $set: { image: "" } } } });
+      }
+      updatedItemCount += toAdd.length + toRemove.length;
+
+      if (uniqueItemIDs.length > 0) {
+        urlsToPull.push(imageUrl);
+      } else {
+        urlsToAdd.push(imageUrl);
+      }
+    }
+
+    if (bulkOps.length > 0) {
+      await Item.bulkWrite(bulkOps);
+    }
+    // $pull y $addToSet no se pueden combinar sobre el mismo campo en un
+    // solo update de Mongo — van en dos llamadas separadas.
+    if (urlsToPull.length > 0) {
+      await User.findByIdAndUpdate(req.user._id, { $pull: { pendingMenuImages: { $in: urlsToPull } } });
+    }
+    if (urlsToAdd.length > 0) {
+      await User.findByIdAndUpdate(req.user._id, { $addToSet: { pendingMenuImages: { $each: urlsToAdd } } });
+    }
+
+    const updatedUser = await User.findById(req.user._id).select("pendingMenuImages");
+    res.json({ updatedCount: updatedItemCount, pendingImages: updatedUser?.pendingMenuImages || [] });
   } catch (err) {
     handleError(res, err);
   }
@@ -493,5 +787,10 @@ module.exports = {
   setAvailableBulk,
   setHiddenBulk,
   deleteItemsBulk,
+  getLiteItems,
+  getPendingImages,
+  checkImageQuota,
+  uploadLibraryImage,
+  assignImages,
   MAX_BULK_ITEMS
 };

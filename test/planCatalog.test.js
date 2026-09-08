@@ -115,6 +115,11 @@ test("inicializar dos veces no sobrescribe una promoción administrada ni la ver
       if (!existing.features) { existing.features = update.$set.features; existing.__v += 1; }
       return;
     }
+    // Backfill de una clave puntual de features (ej: image_manager) en un
+    // catálogo que ya la tiene desde que se crea (INITIAL_PLANS ya la
+    // incluye acá) — siempre no-op en este test, cubierto aparte.
+    const dottedKey = Object.keys(filter).find(key => key.startsWith("features."));
+    if (dottedKey) return;
     assert.deepEqual(Object.keys(update), ["$setOnInsert"]);
     assert.equal(options.timestamps, false);
     assert.equal(options.upsert, true);
@@ -313,4 +318,33 @@ test("inicializar completa features legadas sin tocar precios ni configuraciones
   assert.equal(custom.features.estadisticas, false);
   assert.equal(custom.features.item_limit, 99);
   assert.deepEqual([...custom.features.templateIds], [2, 8]);
+});
+
+test("inicializar completa una clave de feature nueva (ej: image_manager) en catálogos que ya tenían features, sin tocar el resto", async (t) => {
+  // Simula un plan guardado ANTES de agregar image_manager a BOOLEAN_FEATURES:
+  // ya tiene features, pero le falta justo esta clave.
+  const legacyFeatures = { ...catalog.INITIAL_PLANS[1].features };
+  delete legacyFeatures.image_manager;
+  const legacyBasic = document("basic", { features: legacyFeatures, price: 55000, __v: 3 });
+  const stored = [document("free"), legacyBasic, document("pro")];
+  t.mock.method(Plan, "init", async () => {});
+  t.mock.method(Plan, "updateOne", async (filter, update) => {
+    if (filter.features) return; // backfill de features entero, cubierto en el test anterior
+    const dottedKey = Object.keys(filter).find(key => key.startsWith("features."));
+    if (!dottedKey) return;
+    const featureKey = dottedKey.split(".")[1];
+    const existing = stored.find(plan => plan.name === filter.name);
+    if (existing.features[featureKey] === undefined) {
+      existing.features[featureKey] = update.$set[dottedKey];
+      existing.__v += update.$inc.__v;
+    }
+  });
+  t.mock.method(Plan, "find", async () => stored);
+  await catalog.initializePlans();
+  await catalog.initializePlans(); // repetir no debe volver a incrementar __v
+
+  assert.equal(legacyBasic.features.image_manager, false); // default de INITIAL_PLANS para basic
+  assert.equal(legacyBasic.price, 55000); // el resto del documento no se toca
+  assert.equal(legacyBasic.__v, 4);
+  assert.equal(stored.find(plan => plan.name === "pro").features.image_manager, true);
 });

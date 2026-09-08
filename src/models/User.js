@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const { isValidImageUrl } = require("../utils/imageUrl");
 
 const UserSchema = new mongoose.Schema(
   {
@@ -136,6 +137,19 @@ const UserSchema = new mongoose.Schema(
     media: {
       pictures: { type: [String], default: [] }, // Array de URLs
       backgroundPicture: { type: String, default: "" },
+    },
+
+    // Imágenes subidas desde el Gestor de imágenes del editor de menú que
+    // todavía no fueron asignadas a ningún producto. Al asignarse, la URL
+    // se saca de acá y pasa a Item.image (nunca en los dos lados a la vez)
+    // — así no se duplica el dato ni hace falta listar Cloudinary en vivo.
+    pendingMenuImages: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: (arr) => Array.isArray(arr) && arr.every(isValidImageUrl),
+        message: "pendingMenuImages solo puede tener URLs de Cloudinary válidas",
+      },
     },
 
     // Horario de atención, un DayHours por día de la semana. Sin `default`
