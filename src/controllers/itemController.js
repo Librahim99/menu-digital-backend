@@ -26,6 +26,51 @@ const verifyMenuOwnership = async (menuID, userID) => {
 };
 
 // ──────────────────────────────────────────────
+// Helpers para las acciones en lote (setAvailableBulk/setHiddenBulk/
+// deleteItemsBulk): a diferencia de verifyMenuOwnership (una consulta por
+// item), acá se resuelve la ownership de TODO el lote en dos consultas
+// (Item.find + Menu.find), sin importar cuántos items se seleccionen.
+// ──────────────────────────────────────────────
+const MAX_BULK_ITEMS = 200;
+
+const validateBulkItemIds = (req, res) => {
+  const { itemIds } = req.body;
+  if (!Array.isArray(itemIds) || itemIds.length === 0) {
+    res.status(400).json({ message: "itemIds debe ser un array con al menos un id." });
+    return null;
+  }
+  const uniqueIds = [...new Set(itemIds)];
+  if (uniqueIds.length > MAX_BULK_ITEMS) {
+    res.status(400).json({ message: `No se pueden procesar más de ${MAX_BULK_ITEMS} productos a la vez.` });
+    return null;
+  }
+  return uniqueIds;
+};
+
+// Separa itemIds en los que existen y pertenecen al usuario autenticado
+// (ownedIds) de los que no (failedIds: no existen o son de otro usuario).
+// No distingue esos dos casos en la respuesta a propósito — mismo criterio
+// que verifyMenuOwnership, que tampoco filtra qué tan "no autorizado" es
+// cada caso, para no revelar la existencia de items ajenos.
+const resolveOwnedItemIds = async (itemIds, userID) => {
+  const items = await Item.find({ _id: { $in: itemIds } }).select("_id menuID");
+  if (items.length === 0) return { ownedIds: [], failedIds: itemIds };
+
+  const menuIDs = [...new Set(items.map((item) => item.menuID.toString()))];
+  const ownedMenuIDs = new Set(
+    (await Menu.find({ _id: { $in: menuIDs }, userID }).select("_id")).map((menu) => menu._id.toString())
+  );
+
+  const ownedIdSet = new Set();
+  items.forEach((item) => {
+    if (ownedMenuIDs.has(item.menuID.toString())) ownedIdSet.add(item._id.toString());
+  });
+
+  const failedIds = itemIds.filter((id) => !ownedIdSet.has(id));
+  return { ownedIds: [...ownedIdSet], failedIds };
+};
+
+// ──────────────────────────────────────────────
 // @desc    Crear un nuevo item en una categoría
 // @route   POST /api/items
 // @access  Private
@@ -363,7 +408,78 @@ const deleteItem = async (req, res) => {
   } catch (err) {
     handleError(res, err);
   }
-};  
+};
+
+// ──────────────────────────────────────────────
+// @desc    Marcar varios items como disponibles/no disponibles a la vez
+//          (selección múltiple del editor). Los ids que no existan o no
+//          pertenezcan al usuario se ignoran y se listan en failedIds, en
+//          vez de hacer fallar todo el lote.
+// @route   PATCH /api/items/bulk/available
+// @access  Private
+// ──────────────────────────────────────────────
+const setAvailableBulk = async (req, res) => {
+  try {
+    const { available } = req.body;
+    if (typeof available !== "boolean") return res.status(400).json({ message: "available debe ser un booleano" });
+
+    const itemIds = validateBulkItemIds(req, res);
+    if (!itemIds) return;
+
+    const { ownedIds, failedIds } = await resolveOwnedItemIds(itemIds, req.user._id);
+    if (ownedIds.length > 0) {
+      await Item.updateMany({ _id: { $in: ownedIds } }, { $set: { available } });
+    }
+    res.json({ available, updatedCount: ownedIds.length, failedIds });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Ocultar/mostrar varios items del menú público a la vez
+// @route   PATCH /api/items/bulk/hidden
+// @access  Private
+// ──────────────────────────────────────────────
+const setHiddenBulk = async (req, res) => {
+  try {
+    const { hidden } = req.body;
+    if (typeof hidden !== "boolean") return res.status(400).json({ message: "hidden debe ser un booleano" });
+
+    const itemIds = validateBulkItemIds(req, res);
+    if (!itemIds) return;
+
+    const { ownedIds, failedIds } = await resolveOwnedItemIds(itemIds, req.user._id);
+    if (ownedIds.length > 0) {
+      await Item.updateMany({ _id: { $in: ownedIds } }, { $set: { hidden } });
+    }
+    res.json({ hidden, updatedCount: ownedIds.length, failedIds });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Eliminar varios items del menú a la vez. POST en vez de DELETE
+//          porque el lote de ids viaja en el body, y no todos los proxies/
+//          middlewares intermedios preservan el body de un DELETE.
+// @route   POST /api/items/bulk/delete
+// @access  Private
+// ──────────────────────────────────────────────
+const deleteItemsBulk = async (req, res) => {
+  try {
+    const itemIds = validateBulkItemIds(req, res);
+    if (!itemIds) return;
+
+    const { ownedIds, failedIds } = await resolveOwnedItemIds(itemIds, req.user._id);
+    if (ownedIds.length > 0) {
+      await Item.deleteMany({ _id: { $in: ownedIds } });
+    }
+    res.json({ deletedCount: ownedIds.length, failedIds });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
 
 module.exports = {
   newItem,
@@ -373,5 +489,9 @@ module.exports = {
   uploadDraftImage,
   setHidden,
   setAvailable,
-  deleteItem
+  deleteItem,
+  setAvailableBulk,
+  setHiddenBulk,
+  deleteItemsBulk,
+  MAX_BULK_ITEMS
 };
