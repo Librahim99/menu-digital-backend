@@ -386,6 +386,9 @@ const applyExistingUserEntitlement = async ({
     {
       subscription: mappedPlan,
       subscriptionExpiresAt: durableExpiry,
+      // Pagó un plan real: si venía de la prueba gratis, deja de contar como
+      // "en trial" en CRM/admin. No-op para el resto de usuarios.
+      trialActive: false,
     },
     withSession({ new: true, runValidators: true }, session)
   );
@@ -936,12 +939,11 @@ const processPaymentEvent = async (paymentId) => {
       ? metadataMonths
       : pending.months;
 
-    let subscriptionExpiresAt = addCalendarMonths(approvedAt, paidMonths);
-    if (pending.sellerID) {
-      subscriptionExpiresAt = new Date(
-        subscriptionExpiresAt.getTime() + 7 * 24 * 60 * 60 * 1000
-      );
-    }
+    // Ya no se suma un bono de 7 días por venir con código de promoción: ese
+    // mecanismo lo reemplaza la prueba gratis (registerTrial en
+    // userController.js) — un alta nueva con código de promoción pasa por
+    // ahí, no por acá (crear-preferencia-registro rechaza sellerCode).
+    const subscriptionExpiresAt = addCalendarMonths(approvedAt, paidMonths);
 
     const pendingPassword = decryptPendingPassword(pending);
 

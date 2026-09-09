@@ -27,6 +27,7 @@ const pendingRegistrationSchema = new mongoose.Schema(
     contactInfo: {
       mail: { type: String, required: true },
       businessName: { type: String, required: true },
+      number: { type: Number, required: true },
     },
     acceptedTerms: { type: Boolean, required: true },
     planId: { type: String, enum: ["basic", "pro"], required: true },

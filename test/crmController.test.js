@@ -207,6 +207,82 @@ test("listClients marca no_traffic solo si la cuenta paga tiene la carta publica
   assert.equal(res.body.attentionSummary.noTraffic, 1);
 });
 
+test("listClients expone trialActive/isTrialActive — vigente, vencido y nunca-trial", async (t) => {
+  const enTrial = "64f000000000000000000301";
+  const trialVencido = "64f000000000000000000302";
+  const nuncaTrial = "64f000000000000000000303";
+
+  const baseUser = {
+    active: true,
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    contactInfo: { businessName: "Bar", mail: "a@b.com", number: 1, address: "Calle 1" },
+    media: { pictures: ["foto"], backgroundPicture: "portada" },
+    schedule: {},
+  };
+
+  t.mock.method(User, "find", () => ({
+    select() { return this; },
+    async sort() {
+      return [
+        {
+          ...baseUser,
+          _id: enTrial,
+          username: "en-trial",
+          slug: "en-trial",
+          subscription: "pro",
+          subscriptionExpiresAt: new Date(Date.now() + (5 * 24 * 60 * 60 * 1000)),
+          trialActive: true,
+        },
+        {
+          ...baseUser,
+          _id: trialVencido,
+          username: "trial-vencido",
+          slug: "trial-vencido",
+          subscription: "pro",
+          subscriptionExpiresAt: new Date(Date.now() - (24 * 60 * 60 * 1000)),
+          trialActive: true,
+        },
+        {
+          ...baseUser,
+          _id: nuncaTrial,
+          username: "pago-normal",
+          slug: "pago-normal",
+          subscription: "pro",
+          subscriptionExpiresAt: new Date(Date.now() + (90 * 24 * 60 * 60 * 1000)),
+          trialActive: false,
+        },
+      ];
+    },
+  }));
+  t.mock.method(CrmProfile, "find", () => ({ select: async () => [] }));
+  t.mock.method(Menu, "find", () => ({ select: async () => [] }));
+  t.mock.method(Item, "aggregate", async () => []);
+  t.mock.method(PaymentTransaction, "aggregate", async () => []);
+  t.mock.method(PageView, "aggregate", async () => []);
+
+  const res = response();
+  await listClients({}, res);
+
+  const byUsername = Object.fromEntries(
+    res.body.clients.map((c) => [c.username, c])
+  );
+
+  // En trial vigente: la marca histórica y el estado "ahora" coinciden.
+  assert.equal(byUsername["en-trial"].trialActive, true);
+  assert.equal(byUsername["en-trial"].isTrialActive, true);
+
+  // Trial vencido: la marca histórica sobrevive (no se resetea por tiempo,
+  // solo al pagar), pero el estado "ahora" ya es false — mismo criterio lazy
+  // que el downgrade de subscriptionStatus a "expired".
+  assert.equal(byUsername["trial-vencido"].trialActive, true);
+  assert.equal(byUsername["trial-vencido"].isTrialActive, false);
+  assert.equal(byUsername["trial-vencido"].subscriptionStatus, "expired");
+
+  // Cuenta pro pagada normal, nunca pasó por trial.
+  assert.equal(byUsername["pago-normal"].trialActive, false);
+  assert.equal(byUsername["pago-normal"].isTrialActive, false);
+});
+
 test("getOverdueCount no considera vencido un seguimiento del día actual", async (t) => {
   let filter;
   t.mock.method(CrmProfile, "countDocuments", async (receivedFilter) => {
@@ -294,11 +370,15 @@ test("getClient limita el detalle a clientes no admin y calcula el onboarding", 
     "contactInfo",
     "createdAt",
     "hasDelivery",
+    "isTrialActive",
     "slug",
     "subscription",
     "subscriptionExpiresAt",
+    "trialActive",
     "username",
   ]);
+  assert.equal(res.body.user.trialActive, false);
+  assert.equal(res.body.user.isTrialActive, false);
   assert.equal(res.body.user.password, undefined);
   assert.equal(res.body.user.acceptedTerms, undefined);
   assert.deepEqual(res.body.activity, { categoryCount: 1, sectionCount: 1, itemCount: 3 });

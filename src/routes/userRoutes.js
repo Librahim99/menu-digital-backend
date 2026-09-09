@@ -5,6 +5,7 @@ const { authLimiter } = require("../middleware/rateLimiters");
 const { uploadUser } = require("../config/cloudinary");
 const {
   newUser,
+  registerTrial,
   loginUser,
   verifyEmail,
   resendVerificationCode,
@@ -31,6 +32,7 @@ const {
 // Rutas públicas
 // ──────────────────────────────────────────────
 router.post("/register", authLimiter, newUser);
+router.post("/register-trial", authLimiter, registerTrial);
 router.post("/login", authLimiter, loginUser);
 // Acá va la ruta para cuando se olvidan la contraseña
 

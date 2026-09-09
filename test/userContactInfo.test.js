@@ -148,6 +148,22 @@ test("newUser rechaza un email de contacto ausente o inválido antes de tocar la
   }
 });
 
+test("newUser rechaza un teléfono de contacto ausente o inválido", async () => {
+  for (const number of [undefined, null, "abc", "123"]) {
+    const res = response();
+    await newUser({
+      body: {
+        username: "nuevolocal",
+        password: "password-seguro",
+        acceptedTerms: true,
+        contactInfo: { ...activeContact, number },
+      },
+    }, res);
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body.message, /teléfono/i);
+  }
+});
+
 test("editUser no bloquea una edición que no toca contactInfo, aunque la cuenta ya tenga un mail inválido guardado", async (t) => {
   let saved;
   t.mock.method(User, "findByIdAndUpdate", async (_id, update) => {

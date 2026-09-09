@@ -9,7 +9,7 @@ const PaymentTransaction = require("../models/PaymentTransaction");
 const PageView = require("../models/PageView");
 const Seller = require("../models/Seller");
 const { buenosAiresDateStr } = require("../utils/dates");
-const { getSubscriptionState } = require("../config/plans");
+const { getSubscriptionState, isTrialCurrentlyActive } = require("../config/plans");
 const { STAGES } = CrmProfile;
 
 const STAGE_LABEL = {
@@ -78,7 +78,7 @@ const listClients = async (req, res) => {
     const users = await User.find(scopedUserMatch(req, { admin: false }))
       .select(
         "username slug subscription subscriptionExpiresAt active createdAt sellerID menu " +
-        "contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
+        "trialActive contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
         "media.pictures media.backgroundPicture schedule"
       )
       .sort({ createdAt: -1 });
@@ -280,6 +280,8 @@ const listClients = async (req, res) => {
         subscriptionExpiresAt,
         active: u.active,
         createdAt: u.createdAt,
+        trialActive: u.trialActive === true,
+        isTrialActive: isTrialCurrentlyActive(u.trialActive, subscriptionExpiresAt, now),
         contactInfo: {
           mail: u.contactInfo?.mail || "",
           number: u.contactInfo?.number ?? null,
@@ -339,7 +341,7 @@ const getClient = async (req, res) => {
     // El detalle CRM expone un DTO acotado: no entrega el documento User
     // completo ni campos sensibles que el panel no necesita.
     const user = await User.findOne(scopedUserMatch(req, { _id: userID, admin: false })).select(
-      "username slug subscription subscriptionExpiresAt active hasDelivery createdAt " +
+      "username slug subscription subscriptionExpiresAt active hasDelivery createdAt trialActive " +
       "contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
       "media.pictures media.backgroundPicture schedule"
     );
@@ -371,6 +373,8 @@ const getClient = async (req, res) => {
         active: user.active,
         hasDelivery: user.hasDelivery,
         createdAt: user.createdAt,
+        trialActive: user.trialActive === true,
+        isTrialActive: isTrialCurrentlyActive(user.trialActive, user.subscriptionExpiresAt, new Date()),
         contactInfo: {
           businessName,
           mail: user.contactInfo?.mail || "",

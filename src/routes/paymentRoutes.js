@@ -27,7 +27,7 @@ const {
   decryptPendingPassword,
   encryptPendingPassword,
 } = require("../utils/pendingCredentials");
-const { isValidEmail, isWeakPassword, isValidUsername } = require("../utils/validators");
+const { isValidEmail, isWeakPassword, isValidUsername, isValidPhone } = require("../utils/validators");
 const Seller = require("../models/Seller");
 
 // Cada operación recibe su propia configuración: el SDK muta `options`
@@ -138,7 +138,14 @@ router.post("/crear-preferencia", protect, async (req, res) => {
 
   let checkout = null;
   try {
-    const plan = await catalog.getCheckoutQuote(planId, months);
+    // El precio con descuento por código de promoción no es un beneficio de
+    // una sola vez: mientras la cuenta tenga sellerID (se asigna en
+    // registerTrial y nunca se borra), paga discountPrice en cada pago real
+    // — primera conversión, upgrade o renovación — sin importar qué plan
+    // elija.
+    const plan = await catalog.getCheckoutQuote(planId, months, {
+      withSellerDiscount: Boolean(req.user.sellerID),
+    });
     if (
       !Number.isSafeInteger(req.body.planVersion) ||
       req.body.planVersion !== plan.version
@@ -311,6 +318,13 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     return res.status(400).json({ error: "Ingresá un email de contacto válido" });
   }
 
+  // Le da a los vendedores una forma real de contactar al cliente antes de
+  // que pague — se exige acá también aunque este alta no venga con código de
+  // vendedor (ver registerTrial en userController.js para el flujo con código).
+  if (!isValidPhone(contactInfo.number)) {
+    return res.status(400).json({ error: "Ingresá un teléfono de contacto válido" });
+  }
+
   // Antes solo chequeaba longitud >= 8 acá — más débil que el alta gratuita
   // (isWeakPassword también descarta las más comunes/filtradas), a pesar de
   // que esta es la que efectivamente cobra dinero. Misma fuente de verdad
@@ -362,32 +376,24 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     hasRegistrationToken: Boolean(registrationToken),
   });
 
-  let seller = null;
+  // Un código de promoción ya no da un precio con descuento acá — da acceso
+  // a la prueba gratis de 7 días del plan Pro (POST /users/register-trial),
+  // que reemplaza pagar de una. Se rechaza temprano, antes de tocar el
+  // catálogo, para no crear ninguna preferencia con un código que no aplica.
+  if (
+    sellerCode !== undefined &&
+    sellerCode !== null &&
+    String(sellerCode).trim() !== ""
+  ) {
+    return res.status(400).json({
+      error: "Los códigos de promoción ahora dan una prueba gratuita de 7 días del plan Pro, no un descuento al pagar. Volvé atrás y elegí \"Probar Pro gratis\".",
+    });
+  }
 
   try {
     paymentDebugStage = "checking_plan_catalog";
 
-    // Código de vendedor (opcional). Inválido → 400, no se crea preferencia.
-    if (
-      sellerCode !== undefined &&
-      sellerCode !== null &&
-      String(sellerCode).trim() !== ""
-    ) {
-      const code = String(sellerCode).trim().toUpperCase();
-      if (!/^[A-Z]{3}-\d{3}$/.test(code)) {
-        return res.status(400).json({ error: "Código de vendedor inválido" });
-      }
-      seller = await Seller.findOne({ code });
-      if (!seller) {
-        return res
-          .status(400)
-          .json({ error: "Código de vendedor no encontrado" });
-      }
-    }
-
-    const plan = await catalog.getCheckoutQuote(planId, monthsNum, {
-      withSellerDiscount: Boolean(seller),
-    });
+    const plan = await catalog.getCheckoutQuote(planId, monthsNum);
     if (
       !Number.isSafeInteger(req.body.planVersion) ||
       req.body.planVersion !== plan.version
@@ -478,12 +484,16 @@ router.post("/crear-preferencia-registro", async (req, res) => {
         contactInfo: {
           mail: cleanMail,
           businessName: cleanBusinessName,
+          number: contactInfo.number,
         },
         acceptedTerms: true,
         planId,
         months: monthsNum,
         activationTokenHash: hashRegistrationToken(activationToken),
-        sellerID: seller ? seller._id : null,
+        // Ya no se resuelve un vendedor acá (ver rechazo de sellerCode más
+        // arriba) — queda en null salvo que un PendingRegistration legado
+        // (creado antes de este cambio) siga en pending y se reintente.
+        sellerID: null,
       });
 
       paymentDebugStage = "saving_new_pending";
@@ -502,8 +512,9 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       hasPreferenceID: Boolean(pending.preferenceId),
       hasInitPoint: Boolean(pending.initPoint),
     });
-    const previousSellerID = pending.sellerID;
-    pending.sellerID = seller ? seller._id : null;
+    // pending.sellerID ya no se reasigna acá (ver rechazo de sellerCode más
+    // arriba) — solo puede venir de la creación (siempre null ahora) o de un
+    // PendingRegistration legado ya creado con uno antes de este cambio.
     paymentDebugStage = "preparing_checkout";
 
     const newPreferenceStartsAt = new Date();
@@ -514,8 +525,6 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     const previousCheckout = pending.checkoutID
       ? await PaymentCheckout.findById(pending.checkoutID)
       : null;
-    const sameSeller =
-      String(previousSellerID || "") === String(seller?._id || "");
     const previousPreferenceStartsAt = toValidDate(
       previousCheckout?.preferenceStartsAt,
     );
@@ -539,7 +548,6 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       previousCheckout.planVersion === plan.version &&
       previousCheckout.expectedAmount === unitPrice &&
       previousCheckout.currency === PAYMENT_CURRENCY &&
-      sameSeller &&
       pending.preferenceId &&
       pending.initPoint &&
       previousCheckout.preferenceId === pending.preferenceId &&

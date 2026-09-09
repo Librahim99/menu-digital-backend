@@ -85,6 +85,16 @@ const UserSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Marca histórica: la cuenta se originó vía prueba gratuita de 7 días
+    // (código de promoción). No se resetea al vencer el trial por tiempo —
+    // solo cuando el cliente paga un plan real (ver paymentController.js).
+    // El estado "¿está en trial ahora?" se calcula lazy combinando esto con
+    // subscriptionExpiresAt (ver isTrialCurrentlyActive en config/plans.js).
+    trialActive: {
+      type: Boolean,
+      default: false,
+    },
+
     hasDelivery: {
       type: Boolean,
       default: false,
