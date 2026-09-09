@@ -9,6 +9,7 @@ const connectDB = require("./config/db");
 const { validateEnvironment } = require("./config/environment");
 const { handleError } = require("./utils/handleError");
 const { apiLimiter } = require("./middleware/rateLimiters");
+const { getSitemap } = require("./controllers/sitemapController");
 
 // ──────────────────────────────────────────────
 // Validación de configuración y conexión a la base de datos
@@ -93,6 +94,12 @@ app.use("/api/massive", require("./routes/massiveRoutes"));
 // o acá si queremos un SSR / redirect.
 // ──────────────────────────────────────────────
 
+
+// ──────────────────────────────────────────────
+// Sitemap dinámico
+// ──────────────────────────────────────────────
+
+app.get("/sitemap.xml", getSitemap);
 
 app.get('/ping', (req, res) => {
   console.log(`running... ${new Date().toLocaleString()}`)
