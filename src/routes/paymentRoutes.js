@@ -138,7 +138,14 @@ router.post("/crear-preferencia", protect, async (req, res) => {
 
   let checkout = null;
   try {
-    const plan = await catalog.getCheckoutQuote(planId, months);
+    // El precio con descuento por código de promoción no es un beneficio de
+    // una sola vez: mientras la cuenta tenga sellerID (se asigna en
+    // registerTrial y nunca se borra), paga discountPrice en cada pago real
+    // — primera conversión, upgrade o renovación — sin importar qué plan
+    // elija.
+    const plan = await catalog.getCheckoutQuote(planId, months, {
+      withSellerDiscount: Boolean(req.user.sellerID),
+    });
     if (
       !Number.isSafeInteger(req.body.planVersion) ||
       req.body.planVersion !== plan.version

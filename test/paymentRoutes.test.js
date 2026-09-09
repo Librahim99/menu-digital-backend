@@ -218,6 +218,35 @@ test("upgrade y renovación usan precio regular aunque exista descuento por cód
   }
 });
 
+test("/crear-preferencia usa discountPrice cuando el usuario tiene sellerID (código de promoción), para siempre y en cualquier plan", async (t) => {
+  silencePaymentLogs(t);
+  let saved, sent;
+  t.mock.method(Plan, "findOne", async ({ name }) => new Plan({
+    ...catalog.INITIAL_PLANS.find(plan => plan.name === name), price: 61000, discountPrice: 45000,
+    periodMultipliers: { 1: 1, 3: 2.5, 6: 4.5, 12: 8 }, __v: 7,
+  }));
+  t.mock.method(PaymentCheckout, "create", async snapshot => { saved = snapshot; return { ...snapshot, _id: AUTH_CHECKOUT_ID }; });
+  t.mock.method(PaymentCheckout, "findByIdAndUpdate", async () => ({ _id: AUTH_CHECKOUT_ID }));
+  t.mock.method(RestClient, "fetch", async (_url, config) => {
+    sent = JSON.parse(config.body);
+    return { id: "preference", init_point: "https://mercadopago.test/preference" };
+  });
+  for (const planId of ["basic", "pro"]) {
+    for (const [months, multiplier] of [[1, 1], [3, 2.5], [6, 4.5], [12, 8]]) {
+      for (const subscription of ["free", planId]) {
+        const res = createResponse();
+        await getHandler("/crear-preferencia")({
+          user: { _id: "owner", subscription, sellerID: "64f000000000000000000777" },
+          body: { planId, months, planVersion: 7, amount: 1 },
+        }, res);
+        assert.equal(res.statusCode, 200);
+        assert.equal(saved.expectedAmount, Math.round(45000 * multiplier));
+        assert.equal(sent.items[0].unit_price, saved.expectedAmount);
+      }
+    }
+  }
+});
+
 test(
   "/crear-preferencia-registro rechaza sellerCode — un código de promoción ahora da la prueba gratis, no un pago con descuento",
   { concurrency: false },

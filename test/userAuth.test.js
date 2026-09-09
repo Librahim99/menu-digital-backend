@@ -35,6 +35,7 @@ test("el login manual devuelve el slug requerido por AuthProvider", async (t) =>
     slug: "restaurantetest",
     subscription: "basic",
     subscriptionExpiresAt: new Date("2099-09-21T15:00:00.000Z"),
+    sellerID: "64f000000000000000000999",
     matchPassword: async (password) => password === "password-seguro",
   };
   t.mock.method(User, "findOne", () => ({
@@ -55,6 +56,9 @@ test("el login manual devuelve el slug requerido por AuthProvider", async (t) =>
   assert.equal(res.body.slug, user.slug);
   assert.equal(res.body.subscription, "basic");
   assert.equal(res.body.subscriptionStatus, "active");
+  // El front lo usa para saber si la cuenta tiene precio con descuento por
+  // código de promoción (ver /crear-preferencia).
+  assert.equal(res.body.sellerID, user.sellerID);
   assert.equal(
     jwt.verify(res.body.token, process.env.JWT_SECRET).id,
     user._id

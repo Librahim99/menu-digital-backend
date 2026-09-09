@@ -377,6 +377,9 @@ const loginUser = async (req, res) => {
       downgradeReason: subscriptionState.downgradeReason,
       downgradedAt: subscriptionState.downgradedAt,
       emailVerified: user.emailVerified,
+      // El front lo usa para saber si la cuenta tiene un precio con
+      // descuento por código de promoción (ver /crear-preferencia).
+      sellerID: user.sellerID,
       token: generateAuthToken(user._id),
     });
   } catch (error) {
