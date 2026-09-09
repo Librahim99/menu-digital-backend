@@ -145,6 +145,13 @@ const newUser = async (req, res) => {
       return res.status(400).json({ message: "Ingresá un email de contacto válido" });
     }
 
+    // Le da a los vendedores una forma real de contactar al cliente antes de
+    // que pague (ver registerTrial) — se exige acá también para que todo
+    // alta nueva, con o sin código de vendedor, tenga el dato.
+    if (!isValidPhone(contactInfo?.number)) {
+      return res.status(400).json({ message: "Ingresá un teléfono de contacto válido" });
+    }
+
     if (isWeakPassword(password)) {
       return res.status(400).json({
         message: "La contraseña debe tener al menos 8 caracteres y no puede ser una demasiado común.",

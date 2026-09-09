@@ -58,6 +58,7 @@ const createRegistrationBody = (overrides = {}) => ({
   contactInfo: {
     mail: "dueno@example.com",
     businessName: "Nuevo Local",
+    number: 1123456789,
   },
   planId: "pro",
   months: 3,
@@ -74,6 +75,7 @@ const createPending = () => {
     contactInfo: {
       mail: "dueno@example.com",
       businessName: "Nuevo Local",
+      number: 1123456789,
     },
     acceptedTerms: true,
     planId: "basic",
@@ -217,70 +219,39 @@ test("upgrade y renovación usan precio regular aunque exista descuento para ven
 });
 
 test(
-  "el alta aplica discountPrice únicamente cuando el código resuelve un sellerID",
+  "/crear-preferencia-registro rechaza sellerCode — un código de vendedor ahora da la prueba gratis, no un pago con descuento",
   { concurrency: false },
   async (t) => {
-    silencePaymentLogs(t, {
-      price: 61000,
-      discountPrice: 45000,
-      periodMultipliers: { 1: 1, 3: 2.5, 6: 4.5, 12: 8 },
-      __v: 7,
-    });
-    const sellerID = "64f000000000000000000777";
-    let sellerLookups = 0;
-    const pendingDocuments = new Set();
-    const checkoutSnapshots = [];
-    const sentAmounts = [];
+    t.mock.method(Seller, "findOne", () => assert.fail("no debe resolver ningún vendedor acá"));
+    t.mock.method(PendingRegistration.prototype, "save", () => assert.fail("no debe crear un PendingRegistration"));
+    t.mock.method(PaymentCheckout, "create", () => assert.fail("no debe crear checkout"));
+    t.mock.method(RestClient, "fetch", () => assert.fail("no debe llamar a MercadoPago"));
 
-    t.mock.method(Seller, "findOne", async ({ code }) => {
-      sellerLookups += 1;
-      assert.equal(code, "ABC-123");
-      return { _id: sellerID, code };
-    });
-    t.mock.method(User, "findOne", async () => null);
-    t.mock.method(PendingRegistration, "findOne", () => ({
-      select() { return this; },
-      async sort() { return null; },
-    }));
-    t.mock.method(PendingRegistration.prototype, "save", async function () {
-      pendingDocuments.add(this);
-      return this;
-    });
-    t.mock.method(PaymentCheckout, "create", async (snapshot) => {
-      checkoutSnapshots.push(structuredClone(snapshot));
-      return { ...snapshot, _id: `registration-checkout-${checkoutSnapshots.length}` };
-    });
-    t.mock.method(PaymentCheckout, "findByIdAndUpdate", async (id, update) => ({
-      _id: id,
-      status: update.$set.status,
-    }));
-    t.mock.method(RestClient, "fetch", async (_url, config) => {
-      const body = JSON.parse(config.body);
-      sentAmounts.push(body.items[0].unit_price);
-      return {
-        id: `preference-${sentAmounts.length}`,
-        init_point: `https://mercadopago.test/preference-${sentAmounts.length}`,
-      };
-    });
-
-    for (const overrides of [{}, { sellerCode: "abc-123" }]) {
+    for (const sellerCode of ["abc-123", "LZD-264", "  ABC-123  "]) {
       const res = createResponse();
       await getHandler("/crear-preferencia-registro")({
-        body: createRegistrationBody({ planVersion: 7, ...overrides }),
+        body: createRegistrationBody({ sellerCode }),
       }, res);
-      assert.equal(res.statusCode, 200);
+      assert.equal(res.statusCode, 400);
+      assert.match(res.body.error, /prueba gratuita/i);
     }
+  },
+);
 
-    assert.deepEqual(
-      checkoutSnapshots.map(({ expectedAmount }) => expectedAmount),
-      [152500, 112500],
-    );
-    assert.deepEqual(sentAmounts, [152500, 112500]);
-    assert.deepEqual(
-      [...pendingDocuments].map(pending => String(pending.sellerID || "")),
-      ["", sellerID],
-    );
-    assert.equal(sellerLookups, 1);
+test(
+  "/crear-preferencia-registro exige teléfono de contacto válido",
+  { concurrency: false },
+  async (t) => {
+    t.mock.method(User, "findOne", () => assert.fail("no debe consultar duplicados sin teléfono válido"));
+
+    for (const number of [undefined, null, "abc", "123"]) {
+      const res = createResponse();
+      await getHandler("/crear-preferencia-registro")({
+        body: createRegistrationBody({ contactInfo: { mail: "dueno@example.com", businessName: "Nuevo Local", number } }),
+      }, res);
+      assert.equal(res.statusCode, 400);
+      assert.match(res.body.error, /teléfono/i);
+    }
   },
 );
 
