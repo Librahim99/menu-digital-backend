@@ -592,6 +592,41 @@ test("upgrade aprobado con sellerID registra la venta del vendedor", async (t) =
   });
 });
 
+test("upgrade aprobado resetea trialActive: un cliente que pagó de verdad ya no cuenta como 'en prueba'", async (t) => {
+  // plan_id "pro" — mismo rank que la cuenta ya tiene (viene de la prueba
+  // gratis): es una renovación, no un downgrade bloqueado.
+  mockCommon(t, approvedPayment({
+    metadata: { plan_id: "pro", months: 3, type: "upgrade", payment_mode: "upgrade" },
+  }));
+  const updates = [];
+  // Simula un cliente que venía de la prueba gratis (trialActive:true) y
+  // ahora paga un plan real por primera vez.
+  mockExistingUser(
+    t,
+    { subscription: "pro", subscriptionExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000), trialActive: true },
+    updates
+  );
+
+  const res = response();
+  await mpWebhook(request(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].update.trialActive, false);
+});
+
+test("upgrade aprobado resetea trialActive:false también para un usuario que nunca estuvo en trial (no-op)", async (t) => {
+  mockCommon(t, approvedPayment());
+  const updates = [];
+  mockExistingUser(t, { subscription: "free", subscriptionExpiresAt: null }, updates);
+
+  const res = response();
+  await mpWebhook(request(), res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(updates[0].update.trialActive, false);
+});
+
 test("un pago live acredita beneficios en el ambiente productivo", async (t) => {
   const paymentContext = mockCommon(t, approvedPayment({ live_mode: true }));
   process.env.MP_ENV = "production";
@@ -1914,7 +1949,7 @@ test("el alta encadena pending, aprobación, completed y sesión autenticada", a
   assert.equal(paymentContext.crmUpdates.length, 1);
 });
 
-test("un alta con sellerID crea el usuario y suma los 7 días de vendedor", async (t) => {
+test("un alta con sellerID crea el usuario atribuido al vendedor, sin bono de días (lo reemplaza la prueba gratis)", async (t) => {
   mockEmailVerificationCode(t);
   const previousSecret = process.env.PENDING_REGISTRATION_SECRET;
   process.env.PENDING_REGISTRATION_SECRET = "secret-de-prueba-con-mas-de-32-caracteres";
@@ -1960,7 +1995,7 @@ test("un alta con sellerID crea el usuario y suma los 7 días de vendedor", asyn
   assert.equal(created.password, "password-seguro");
   assert.equal(created.subscription, "pro");
   assert.equal(created.sellerID, pending.sellerID);
-  assert.equal(created.subscriptionExpiresAt.toISOString(), "2027-08-28T15:00:00.000Z");
+  assert.equal(created.subscriptionExpiresAt.toISOString(), "2027-08-21T15:00:00.000Z");
   assert.equal(pendingUpdate.id, PENDING_REGISTRATION_ID);
   assert.deepEqual(pendingUpdate.update.$unset, {
     password: 1,
@@ -1980,7 +2015,7 @@ test("un alta con sellerID crea el usuario y suma los 7 días de vendedor", asyn
   assert.equal(transaction.subscriptionExpiresAtBefore, null);
   assert.equal(
     transaction.subscriptionExpiresAtAfter.toISOString(),
-    "2027-08-28T15:00:00.000Z"
+    "2027-08-21T15:00:00.000Z"
   );
   assert.equal(paymentContext.crmUpdates.length, 1);
   assert.equal(paymentContext.sellerSaleWrites.length, 1);
