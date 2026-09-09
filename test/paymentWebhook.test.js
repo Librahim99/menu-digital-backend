@@ -393,6 +393,7 @@ test("un PendingRegistration nuevo genera un expiresAt válido por defecto", () 
     contactInfo: {
       mail: "registro-default@example.com",
       businessName: "Registro Default",
+      number: 1123456789,
     },
     acceptedTerms: true,
     planId: "basic",

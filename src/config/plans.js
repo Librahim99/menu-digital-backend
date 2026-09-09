@@ -107,8 +107,19 @@ function getSubscriptionState(userPlan, subscriptionExpiresAt, now = new Date())
   };
 }
 
+// Mismo criterio lazy que getEffectivePlan: trialActive queda en true en la
+// cuenta como marca histórica incluso después de vencer (o de convertir a un
+// pago real, momento en el que se resetea a false — ver paymentController.js).
+// Esta función es la única fuente de verdad de "¿está en el período de
+// prueba ahora mismo?", combinando esa marca con subscriptionExpiresAt.
+function isTrialCurrentlyActive(trialActive, subscriptionExpiresAt, now = new Date()) {
+  return trialActive === true
+    && hasSubscriptionExpiry(subscriptionExpiresAt)
+    && new Date(subscriptionExpiresAt).getTime() > now.getTime();
+}
+
 module.exports = {
   PLAN_MAP, PLAN_ORDER, BOOLEAN_FEATURES, TEMPLATE_IDS,
   isValidFeatures, isValidPeriodMultipliers, getTemplateForFeatures,
-  getEffectivePlan, getSubscriptionState,
+  getEffectivePlan, getSubscriptionState, isTrialCurrentlyActive,
 };

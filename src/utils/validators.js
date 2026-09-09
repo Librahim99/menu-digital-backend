@@ -35,4 +35,14 @@ const isWeakPassword = (password) =>
 const isValidUsername = (username) =>
   typeof username === "string" && !username.includes("-");
 
-module.exports = { isValidEmail, isWeakPassword, isValidUsername };
+// Mismo criterio laxo que ya usa UserEditor.tsx en el frontend: no exigimos
+// formato de país ni cantidad exacta de dígitos, solo que haya suficientes
+// como para ser un teléfono real (y no, por ejemplo, un DNI de 7-8 dígitos
+// pegado por error o un único dígito suelto).
+const isValidPhone = (value) => {
+  if (typeof value !== "number" && typeof value !== "string") return false;
+  const digits = String(value).trim().replace(/\D/g, "");
+  return digits.length >= 6 && digits.length <= 15;
+};
+
+module.exports = { isValidEmail, isWeakPassword, isValidUsername, isValidPhone };
