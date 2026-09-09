@@ -23,7 +23,7 @@ const {
 } = require("../utils/slug");
 const { isScheduleAvailableAt } = require("../utils/itemAvailability");
 const { isOfferActive } = require("../utils/offers");
-const { isValidEmail, isWeakPassword, isValidUsername } = require("../utils/validators");
+const { isValidEmail, isWeakPassword, isValidUsername, isValidPhone } = require("../utils/validators");
 const { escapeRegex } = require("../utils/regex");
 const {
   maskEmail,
@@ -177,6 +177,107 @@ if (acceptedTerms !== true) {
       acceptedTermsAt: new Date(),
       acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
       emailVerified: false,
+    });
+
+    await sendEmailVerificationCode(user);
+
+    res.status(201).json({
+      _id: user._id,
+      username: user.username,
+      token: generateAuthToken(user._id),
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Registrar cuenta con prueba gratis de 7 días del plan Pro. Solo se
+//          accede con un código de vendedor válido — es lo único que la
+//          dispara. Crea el User definitivo de una (como newUser), sin pasar
+//          por PendingRegistration ni Mercado Pago: no hay pago que esperar.
+// @route   POST /api/users/register-trial
+// @access  Public
+// ──────────────────────────────────────────────
+const registerTrial = async (req, res) => {
+  try {
+    const { username, password, contactInfo, acceptedTerms, sellerCode } = req.body;
+
+    if (typeof username !== "string" || typeof password !== "string") {
+      return res.status(400).json({ message: "Usuario y contraseña son obligatorios" });
+    }
+
+    const cleanUsername = username.trim().toLowerCase();
+    if (!isValidUsername(cleanUsername)) {
+      return res.status(400).json({ message: "El usuario no puede contener guiones" });
+    }
+
+    if (!isValidEmail(contactInfo?.mail)) {
+      return res.status(400).json({ message: "Ingresá un email de contacto válido" });
+    }
+
+    if (!isValidPhone(contactInfo?.number)) {
+      return res.status(400).json({ message: "Ingresá un teléfono de contacto válido" });
+    }
+
+    if (isWeakPassword(password)) {
+      return res.status(400).json({
+        message: "La contraseña debe tener al menos 8 caracteres y no puede ser una demasiado común.",
+      });
+    }
+
+    if (acceptedTerms !== true) {
+      return res.status(400).json({ message: "Debes aceptar los términos y condiciones" });
+    }
+
+    // El código de vendedor es obligatorio acá: es lo único que dispara la
+    // prueba gratis (a diferencia de crear-preferencia-registro, donde era
+    // opcional porque solo daba un descuento sobre un pago real).
+    if (typeof sellerCode !== "string" || !sellerCode.trim()) {
+      return res.status(400).json({
+        message: "Ingresá un código de vendedor válido para activar la prueba gratuita",
+      });
+    }
+    const code = sellerCode.trim().toUpperCase();
+    if (!/^[A-Z]{3}-\d{3}$/.test(code)) {
+      return res.status(400).json({ message: "Código de vendedor inválido" });
+    }
+    const seller = await Seller.findOne({ code });
+    if (!seller) {
+      return res.status(400).json({ message: "Código de vendedor no encontrado" });
+    }
+
+    // Chequeo de duplicados fuerte (username O email) — más estricto que el
+    // de newUser (solo username) a propósito: la prueba gratis reparte un
+    // recurso real (7 días de Pro sin pagar), así que no puede repetirse con
+    // el mismo email usando un username distinto.
+    const cleanMail = String(contactInfo.mail).trim().toLowerCase();
+    const existingUser = await User.findOne({
+      $or: [{ username: cleanUsername }, { "contactInfo.mail": cleanMail }],
+    });
+    if (existingUser) {
+      return res.status(409).json({ message: "Usuario o email ya registrado" });
+    }
+
+    // Aborta temprano si el catálogo del plan Pro no está disponible/inválido,
+    // antes de crear ninguna cuenta.
+    await getPlanForUser({ subscription: "pro" });
+
+    const now = new Date();
+    const trialExpiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    const user = await createUserWithUniqueSlug({
+      username: cleanUsername,
+      password,
+      contactInfo: { ...contactInfo, mail: cleanMail },
+      acceptedTerms: true,
+      acceptedTermsAt: now,
+      acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
+      emailVerified: false,
+      subscription: "pro",
+      subscriptionExpiresAt: trialExpiresAt,
+      sellerID: seller._id,
+      trialActive: true,
     });
 
     await sendEmailVerificationCode(user);
@@ -1147,6 +1248,7 @@ const setActive = async (req, res) => {
 
 module.exports = {
   newUser,
+  registerTrial,
   loginUser,
   verifyEmail,
   resendVerificationCode,
