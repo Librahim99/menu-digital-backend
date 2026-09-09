@@ -172,7 +172,7 @@ test("/crear-preferencia-registro: rechaza contraseñas débiles/comunes, no sol
   }
 });
 
-test("upgrade y renovación usan precio regular aunque exista descuento para vendedor", async (t) => {
+test("upgrade y renovación usan precio regular aunque exista descuento por código de promoción", async (t) => {
   silencePaymentLogs(t);
   let saved, sent;
   t.mock.method(Plan, "findOne", async ({ name }) => new Plan({
@@ -219,7 +219,7 @@ test("upgrade y renovación usan precio regular aunque exista descuento para ven
 });
 
 test(
-  "/crear-preferencia-registro rechaza sellerCode — un código de vendedor ahora da la prueba gratis, no un pago con descuento",
+  "/crear-preferencia-registro rechaza sellerCode — un código de promoción ahora da la prueba gratis, no un pago con descuento",
   { concurrency: false },
   async (t) => {
     t.mock.method(Seller, "findOne", () => assert.fail("no debe resolver ningún vendedor acá"));

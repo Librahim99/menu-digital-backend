@@ -939,10 +939,10 @@ const processPaymentEvent = async (paymentId) => {
       ? metadataMonths
       : pending.months;
 
-    // Ya no se suma un bono de 7 días por venir con código de vendedor: ese
+    // Ya no se suma un bono de 7 días por venir con código de promoción: ese
     // mecanismo lo reemplaza la prueba gratis (registerTrial en
-    // userController.js) — un alta nueva con código de vendedor pasa por ahí,
-    // no por acá (crear-preferencia-registro rechaza sellerCode).
+    // userController.js) — un alta nueva con código de promoción pasa por
+    // ahí, no por acá (crear-preferencia-registro rechaza sellerCode).
     const subscriptionExpiresAt = addCalendarMonths(approvedAt, paidMonths);
 
     const pendingPassword = decryptPendingPassword(pending);

@@ -369,8 +369,8 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     hasRegistrationToken: Boolean(registrationToken),
   });
 
-  // Un código de vendedor ya no da un precio con descuento acá — da acceso a
-  // la prueba gratis de 7 días del plan Pro (POST /users/register-trial),
+  // Un código de promoción ya no da un precio con descuento acá — da acceso
+  // a la prueba gratis de 7 días del plan Pro (POST /users/register-trial),
   // que reemplaza pagar de una. Se rechaza temprano, antes de tocar el
   // catálogo, para no crear ninguna preferencia con un código que no aplica.
   if (
@@ -379,7 +379,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
     String(sellerCode).trim() !== ""
   ) {
     return res.status(400).json({
-      error: "Los códigos de vendedor ahora dan una prueba gratuita de 7 días del plan Pro, no un descuento al pagar. Volvé atrás y elegí \"Probar Pro gratis\".",
+      error: "Los códigos de promoción ahora dan una prueba gratuita de 7 días del plan Pro, no un descuento al pagar. Volvé atrás y elegí \"Probar Pro gratis\".",
     });
   }
 

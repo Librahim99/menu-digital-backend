@@ -101,29 +101,29 @@ test("registerTrial exige aceptar términos y condiciones", async () => {
   assert.match(res.body.message, /términos/i);
 });
 
-test("registerTrial rechaza sin código de vendedor — es lo único que dispara la prueba gratis", async () => {
+test("registerTrial rechaza sin código de promoción — es lo único que dispara la prueba gratis", async () => {
   for (const sellerCode of [undefined, "", "   "]) {
     const res = response();
     await registerTrial({ body: baseBody({ sellerCode }) }, res);
     assert.equal(res.statusCode, 400);
-    assert.match(res.body.message, /código de vendedor/i);
+    assert.match(res.body.message, /código de promoción/i);
   }
 });
 
-test("registerTrial rechaza un código de vendedor con formato inválido", async (t) => {
+test("registerTrial rechaza un código de promoción con formato inválido", async (t) => {
   t.mock.method(Seller, "findOne", () => assert.fail("no debe consultar Seller con formato inválido"));
   const res = response();
   await registerTrial({ body: baseBody({ sellerCode: "no-es-un-codigo" }) }, res);
   assert.equal(res.statusCode, 400);
-  assert.equal(res.body.message, "Código de vendedor inválido");
+  assert.equal(res.body.message, "Código de promoción inválido");
 });
 
-test("registerTrial rechaza un código de vendedor con formato válido pero inexistente", async (t) => {
+test("registerTrial rechaza un código de promoción con formato válido pero inexistente", async (t) => {
   t.mock.method(Seller, "findOne", async () => null);
   const res = response();
   await registerTrial({ body: baseBody({ sellerCode: "zzz-999" }) }, res);
   assert.equal(res.statusCode, 400);
-  assert.equal(res.body.message, "Código de vendedor no encontrado");
+  assert.equal(res.body.message, "Código de promoción no encontrado");
 });
 
 test("registerTrial rechaza si el username o el email ya están registrados (chequeo fuerte, no solo username)", async (t) => {

@@ -147,7 +147,7 @@ const newUser = async (req, res) => {
 
     // Le da a los vendedores una forma real de contactar al cliente antes de
     // que pague (ver registerTrial) — se exige acá también para que todo
-    // alta nueva, con o sin código de vendedor, tenga el dato.
+    // alta nueva, con o sin código de promoción, tenga el dato.
     if (!isValidPhone(contactInfo?.number)) {
       return res.status(400).json({ message: "Ingresá un teléfono de contacto válido" });
     }
@@ -200,7 +200,7 @@ if (acceptedTerms !== true) {
 
 // ──────────────────────────────────────────────
 // @desc    Registrar cuenta con prueba gratis de 7 días del plan Pro. Solo se
-//          accede con un código de vendedor válido — es lo único que la
+//          accede con un código de promoción válido — es lo único que la
 //          dispara. Crea el User definitivo de una (como newUser), sin pasar
 //          por PendingRegistration ni Mercado Pago: no hay pago que esperar.
 // @route   POST /api/users/register-trial
@@ -237,21 +237,21 @@ const registerTrial = async (req, res) => {
       return res.status(400).json({ message: "Debes aceptar los términos y condiciones" });
     }
 
-    // El código de vendedor es obligatorio acá: es lo único que dispara la
+    // El código de promoción es obligatorio acá: es lo único que dispara la
     // prueba gratis (a diferencia de crear-preferencia-registro, donde era
     // opcional porque solo daba un descuento sobre un pago real).
     if (typeof sellerCode !== "string" || !sellerCode.trim()) {
       return res.status(400).json({
-        message: "Ingresá un código de vendedor válido para activar la prueba gratuita",
+        message: "Ingresá un código de promoción válido para activar la prueba gratuita",
       });
     }
     const code = sellerCode.trim().toUpperCase();
     if (!/^[A-Z]{3}-\d{3}$/.test(code)) {
-      return res.status(400).json({ message: "Código de vendedor inválido" });
+      return res.status(400).json({ message: "Código de promoción inválido" });
     }
     const seller = await Seller.findOne({ code });
     if (!seller) {
-      return res.status(400).json({ message: "Código de vendedor no encontrado" });
+      return res.status(400).json({ message: "Código de promoción no encontrado" });
     }
 
     // Chequeo de duplicados fuerte (username O email) — más estricto que el
