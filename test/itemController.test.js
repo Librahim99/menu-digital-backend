@@ -39,7 +39,7 @@ const mockOwnedItem = () => {
     offerPrice: null,
     offerRange: { from: null, to: null },
   });
-  Menu.findById = async () => ({ userID });
+  Menu.findById = () => ({ select: async () => ({ userID }) });
 
   return userID;
 };

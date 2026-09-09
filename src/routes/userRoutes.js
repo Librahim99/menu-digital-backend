@@ -10,6 +10,7 @@ const {
   verifyEmail,
   resendVerificationCode,
   getAuthUser,
+  getAuthUserSummary,
   fetchUserWithMenu,
   downloadMenuPdf,
   fetchOwnMenu,
@@ -41,6 +42,7 @@ router.post("/login", authLimiter, loginUser);
 // IMPORTANTE: /me debe ir ANTES de /:slug para que Express no lo interprete como slug
 // ──────────────────────────────────────────────
 router.get("/me", protect, getAuthUser);    // Datos del user autenticado (panel admin)
+router.get("/me/summary", protect, getAuthUserSummary); // Versión liviana de /me para el dashboard
 // authLimiter: mismo criterio que /register — el claim ya corta a los 5
 // intentos por código (ver claimPendingServiceAction), esto además limita
 // cuántos códigos puede pedir/probar una cuenta por IP.

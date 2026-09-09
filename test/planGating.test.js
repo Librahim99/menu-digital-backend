@@ -111,7 +111,7 @@ test("el límite de productos y los permisos del editor se leen desde MongoDB", 
     query.select = async () => rows;
     return query;
   });
-  t.mock.method(Menu, "findById", async () => ({ userID: "owner" }));
+  t.mock.method(Menu, "findById", () => ({ select: async () => ({ userID: "owner" }) }));
   t.mock.method(Item, "countDocuments", async () => 2);
   t.mock.method(Item, "create", async () => assert.fail("No debe crear sobre el límite"));
   const req = { user: { _id: "owner", subscription: "pro" }, body: { menuID: "menu", title: "Café", price: 100 } };
@@ -133,7 +133,7 @@ test("retirar programación en Pro bloquea nuevas ofertas programadas y oculta l
     offerPrice: 80, offerRange: { from: "2020-01-01", to: "2099-01-01" }, available: true,
     toObject() { return { ...this }; } };
   t.mock.method(Item, "findById", async () => item);
-  t.mock.method(Menu, "findById", async () => ({ userID: "owner" }));
+  t.mock.method(Menu, "findById", () => ({ select: async () => ({ userID: "owner" }) }));
   t.mock.method(Item, "findByIdAndUpdate", async () => assert.fail("No debe guardar la programación"));
   const blocked = response();
   await editItem({ user: { _id: "owner", subscription: "pro" }, params: { itemID: "item" }, body: { offerPrice: 70, offerRange: item.offerRange } }, blocked);

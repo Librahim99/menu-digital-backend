@@ -7,7 +7,9 @@ const User = require("../models/User");
 // Helper: verifica ownership del menú
 // ──────────────────────────────────────────────
 const verifyOwnership = async (menuID, userID) => {
-  const menu = await Menu.findById(menuID);
+  // select cubre la unión de lo que leen todos los callers: userID (el
+  // check de ownership acá abajo), code (editMenu) y section (deleteMenu).
+  const menu = await Menu.findById(menuID).select("userID code section");
   if (!menu) return { error: "Menú no encontrado", status: 404 };
   if (menu.userID.toString() !== userID.toString())
     return { error: "No autorizado", status: 403 };

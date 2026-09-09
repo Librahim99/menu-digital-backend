@@ -126,7 +126,10 @@ const protectSellerOrAdmin = async (req, res, next) => {
         return res.status(403).json({ message: "Acceso restringido a administradores" });
       }
 
-      const seller = await Seller.findById(decoded.id);
+      // Nadie lee req.seller después de esta rama (getSellerById resuelve su
+      // propia consulta contra :id, no contra req.seller) — solo hace falta
+      // "active" para la propia validación de esta función.
+      const seller = await Seller.findById(decoded.id).select("active");
       if (!seller) {
         return res.status(401).json({ message: "Vendedor no encontrado" });
       }
@@ -179,7 +182,12 @@ const protectSellerOrAdminAny = async (req, res, next) => {
     const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ["HS256"] });
 
     if (decoded.role === "seller") {
-      const seller = await Seller.findById(decoded.id);
+      // Downstream (crmController, getOverview) lee name/active/code de
+      // req.seller además de _id. getOverview además pasa req.seller a
+      // getOverviewForSellers cuando scope="self", que llama a cycleAnchor()
+      // (utils/sellerCycle.js), y esa función necesita startDate/createdAt
+      // para anclar el ciclo de comisión — sin ellos devuelve Invalid Date.
+      const seller = await Seller.findById(decoded.id).select("name active code startDate createdAt");
       if (!seller) {
         return res.status(401).json({ message: "Vendedor no encontrado" });
       }
@@ -235,7 +243,12 @@ const protectSeller = async (req, res, next) => {
       return res.status(403).json({ message: "Acceso restringido a vendedores" });
     }
 
-    const seller = await Seller.findById(decoded.id);
+    // getMyProfile expone casi todo el documento (name/mail/number/code/
+    // active/startDate/profilePicture/admin/createdAt) — se listan explícitos
+    // para dejar afuera dni (sensible) y updatedAt (no se usa).
+    const seller = await Seller.findById(decoded.id).select(
+      "name mail number code active startDate profilePicture admin createdAt"
+    );
     if (!seller) {
       return res.status(401).json({ message: "Vendedor no encontrado" });
     }

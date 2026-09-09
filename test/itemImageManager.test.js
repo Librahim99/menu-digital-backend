@@ -296,13 +296,15 @@ test("assignImages devuelve la imagen a pendientes si se la desasigna sin darle 
 // ──────────────────────────────────────────────
 
 test("deleteItem devuelve la imagen del item borrado a pendingMenuImages", async () => {
-  Item.findById = async () => ({
-    _id: "item-1",
-    image: "url-1",
-    menuID: { toString: () => "menu-A" },
+  Item.findById = () => ({
+    select: async () => ({
+      _id: "item-1",
+      image: "url-1",
+      menuID: { toString: () => "menu-A" },
+    }),
   });
   Item.findByIdAndDelete = async () => ({});
-  Menu.findById = async () => ({ userID: { toString: () => "user-1" } });
+  Menu.findById = () => ({ select: async () => ({ userID: { toString: () => "user-1" } }) });
   Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
   Item.find = () => ({ select: async () => [] }); // nadie más usa esa imagen
 
@@ -321,13 +323,15 @@ test("deleteItem devuelve la imagen del item borrado a pendingMenuImages", async
 });
 
 test("deleteItem NO devuelve la imagen a pendientes si otro item del usuario todavía la usa (imagen legacy compartida)", async () => {
-  Item.findById = async () => ({
-    _id: "item-1",
-    image: "url-compartida",
-    menuID: { toString: () => "menu-A" },
+  Item.findById = () => ({
+    select: async () => ({
+      _id: "item-1",
+      image: "url-compartida",
+      menuID: { toString: () => "menu-A" },
+    }),
   });
   Item.findByIdAndDelete = async () => ({});
-  Menu.findById = async () => ({ userID: { toString: () => "user-1" } });
+  Menu.findById = () => ({ select: async () => ({ userID: { toString: () => "user-1" } }) });
   Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
   // item-2 (distinto del borrado) todavía tiene esa misma URL.
   Item.find = () => ({ select: async () => [{ image: "url-compartida" }] });

@@ -12,6 +12,7 @@ const {
   getClient,
   updateProfile,
   getOverdueCount,
+  getCrmSummary,
 } = require("../src/controllers/crmController");
 
 function response() {
@@ -281,6 +282,84 @@ test("listClients expone trialActive/isTrialActive — vigente, vencido y nunca-
   // Cuenta pro pagada normal, nunca pasó por trial.
   assert.equal(byUsername["pago-normal"].trialActive, false);
   assert.equal(byUsername["pago-normal"].isTrialActive, false);
+});
+
+test("getCrmSummary calcula totales livianos y reusa el mismo attentionSummary que listClients", async (t) => {
+  const now = new Date();
+  const thisMonth = new Date(now.getFullYear(), now.getMonth(), 15);
+  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 15);
+  const futureExpiry = new Date(now.getTime() + (90 * 24 * 60 * 60 * 1000));
+
+  const users = [
+    {
+      _id: "1", username: "u1", slug: "u1", subscription: "pro",
+      subscriptionExpiresAt: futureExpiry, active: true, createdAt: thisMonth,
+      contactInfo: { businessName: "Bar Uno" }, media: {}, schedule: {},
+    },
+    {
+      _id: "2", username: "u2", slug: "u2", subscription: "basic",
+      subscriptionExpiresAt: futureExpiry, active: true, createdAt: thisMonth,
+      contactInfo: { businessName: "Bar Dos" }, media: {}, schedule: {},
+    },
+    {
+      _id: "3", username: "u3", slug: "u3", subscription: "free",
+      subscriptionExpiresAt: null, active: true, createdAt: lastMonth,
+      contactInfo: { businessName: "Bar Tres" }, media: {}, schedule: {},
+    },
+    {
+      _id: "4", username: "u4", slug: "u4", subscription: "free",
+      subscriptionExpiresAt: null, active: true, createdAt: lastMonth,
+      contactInfo: { businessName: "Bar Cuatro" }, media: {}, schedule: {},
+    },
+    {
+      _id: "5", username: "u5", slug: "u5", subscription: "basic",
+      subscriptionExpiresAt: futureExpiry, active: false, createdAt: lastMonth,
+      contactInfo: { businessName: "Bar Cinco" }, media: {}, schedule: {},
+    },
+    {
+      _id: "6", username: "u6", slug: "u6", subscription: "free",
+      subscriptionExpiresAt: null, active: true, createdAt: lastMonth,
+      contactInfo: { businessName: "Bar Seis" }, media: {}, schedule: {},
+    },
+  ];
+
+  t.mock.method(User, "find", () => ({
+    select() { return this; },
+    async sort() { return users; },
+  }));
+  t.mock.method(CrmProfile, "find", () => ({ select: async () => [] }));
+  t.mock.method(Menu, "find", () => ({ select: async () => [] }));
+  t.mock.method(Item, "aggregate", async () => []);
+  t.mock.method(PaymentTransaction, "aggregate", async () => []);
+  t.mock.method(PageView, "aggregate", async () => []);
+
+  const summaryRes = response();
+  await getCrmSummary({}, summaryRes);
+  const listRes = response();
+  await listClients({}, listRes);
+
+  assert.equal(summaryRes.statusCode, 200);
+  assert.equal(summaryRes.body.totalClients, 6);
+  // Solo u1 y u2 se crearon este mes.
+  assert.equal(summaryRes.body.newThisMonth, 2);
+  assert.deepEqual(summaryRes.body.planBreakdown, { free: 3, basic: 2, pro: 1 });
+  assert.equal(summaryRes.body.recentClients.length, 5);
+  assert.deepEqual(summaryRes.body.recentClients[0], {
+    _id: "1",
+    businessName: "Bar Uno",
+    username: "u1",
+    slug: "u1",
+    active: true,
+    createdAt: thisMonth,
+    isTrialActive: false,
+    effectiveSubscription: "pro",
+  });
+  // u6 queda afuera: la consulta ya viene ordenada por createdAt desc y solo
+  // se toman los primeros 5.
+  assert.equal(summaryRes.body.recentClients.some((c) => c._id === "6"), false);
+  // attentionSummary no se recalcula distinto: es el mismo cálculo pesado que
+  // ya usa listClients, solo reusado.
+  assert.deepEqual(summaryRes.body.attentionSummary, listRes.body.attentionSummary);
 });
 
 test("getOverdueCount no considera vencido un seguimiento del día actual", async (t) => {

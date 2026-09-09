@@ -121,12 +121,13 @@ const getOverview = async (req, res) => {
     } else {
       const { sellerID } = req.query;
       if (sellerID) {
-        const seller = await Seller.findById(sellerID);
+        // getOverviewForSellers/cycleAnchor solo leen estos campos del seller.
+        const seller = await Seller.findById(sellerID).select("name code active startDate createdAt");
         if (!seller) return res.status(404).json({ message: "Vendedor no encontrado" });
         sellers = [seller];
         scope = "single";
       } else {
-        sellers = await Seller.find();
+        sellers = await Seller.find().select("name code active startDate createdAt");
         scope = "all";
       }
     }
@@ -150,7 +151,8 @@ const getOverview = async (req, res) => {
 const getSellersRanking = async (req, res) => {
   try {
     const period = RANKING_PERIODS.includes(req.query.period) ? req.query.period : "current";
-    const sellers = await Seller.find();
+    // getRanking/cycleAnchor solo leen estos campos del seller.
+    const sellers = await Seller.find().select("name code active startDate createdAt");
     const ranking = await getRanking(sellers, { period });
 
     res.json({ period, sellers: ranking });
