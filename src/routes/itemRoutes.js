@@ -6,7 +6,7 @@ const { uploadItem, uploadItemLibrary } = require("../config/cloudinary");
 const {
   newItem, editItem, moveItem, uploadImage, uploadDraftImage, setHidden, setAvailable, deleteItem,
   setAvailableBulk, setHiddenBulk, deleteItemsBulk,
-  getLiteItems, getPendingImages, checkImageQuota, uploadLibraryImage, assignImages
+  getLiteItems, getPendingImages, checkImageQuota, uploadLibraryImage, assignImages, deleteLibraryImage
 } = require("../controllers/itemController");
 
 router.post("/", protect, requireFeature("menu_editor"), newItem);
@@ -29,6 +29,9 @@ router.post(
   uploadItemLibrary.single("image"), uploadLibraryImage
 );
 router.post("/images/assign", protect, requireFeature("image_manager"), assignImages);
+// DELETE /images antes de DELETE /:itemID por el mismo motivo que el resto
+// de las rutas de arriba: si no, "images" se leería como itemID.
+router.delete("/images", protect, requireFeature("image_manager"), deleteLibraryImage);
 router.put("/:itemID", protect, requireFeature("menu_editor"), editItem);
 router.patch("/:itemID/move", protect, requireFeature("menu_editor"), moveItem);
 router.patch("/:itemID/hidden", protect, requireFeature("menu_editor"), setHidden);

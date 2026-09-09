@@ -5,6 +5,8 @@ const User = require("../models/User");
 const { getRequestPlan } = require("../services/planCatalog");
 const { validateAvailabilitySchedule } = require("../utils/itemAvailability");
 const { normalizeOffer } = require("../utils/offers");
+const { cloudinary } = require("../config/cloudinary");
+const { isValidImageUrl } = require("../utils/imageUrl");
 
 // ──────────────────────────────────────────────
 // Helper: verifica que el menuID pertenezca al user autenticado.
@@ -775,6 +777,88 @@ const assignImages = async (req, res) => {
   }
 };
 
+// ──────────────────────────────────────────────
+// Helper: extrae el public_id de Cloudinary a partir de la URL guardada en
+// Mongo. Las imágenes del Gestor siempre se suben con uploadItemLibrary
+// (config/cloudinary.js), que arma la secure_url como
+// .../upload/v<version>/menu-digital/items/<public_id>.<ext> — sin
+// transformaciones en la URL de entrega, así que alcanza con capturar todo
+// lo que va después de "/upload/v<version>/" y antes de la extensión final.
+// Devuelve null si la URL no tiene esa forma (no debería pasar si ya se
+// validó con isValidImageUrl, pero mejor no reventar el borrado en Mongo
+// por eso).
+// ──────────────────────────────────────────────
+const extractCloudinaryPublicId = (imageUrl) => {
+  const match = imageUrl.match(/\/upload\/(?:v\d+\/)?(.+)\.[a-zA-Z0-9]+(?:\?.*)?$/);
+  return match ? match[1] : null;
+};
+
+// ──────────────────────────────────────────────
+// Helper: borra el archivo real en Cloudinary. Se llama DESPUÉS de limpiar
+// Mongo (ver deleteLibraryImage) y nunca propaga el error: si Cloudinary
+// falla o el public_id no se pudo extraer, la imagen ya quedó sin
+// referencias en la app (que es lo que le importa al usuario) y el archivo
+// huérfano en Cloudinary es el mismo tradeoff aceptado en el resto del
+// repo para casos raros de reemplazo/borrado (ver removeImage en
+// userController.js).
+// ──────────────────────────────────────────────
+const destroyCloudinaryImage = async (imageUrl) => {
+  const publicId = extractCloudinaryPublicId(imageUrl);
+  if (!publicId) return;
+  try {
+    await cloudinary.uploader.destroy(publicId, { resource_type: "image", invalidate: true });
+  } catch (err) {
+    console.error("No se pudo borrar de Cloudinary el public_id", publicId, err.message);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Gestor de imágenes: elimina una imagen definitivamente — la saca
+//          de Cloudinary, de cualquier producto que la tenga asignada (esos
+//          productos quedan sin imagen) y del array de pendientes. A
+//          diferencia de removeImage (galería del local, userController.js)
+//          esta sí borra el archivo real en Cloudinary: la única referencia
+//          posible a esa URL fuera de acá es el/los producto(s) que se
+//          limpian en el mismo request, así que no hay riesgo de dejar un
+//          <img> roto colgando en otro lado de la app.
+// @route   DELETE /api/items/images
+// @access  Private
+// @body    { imageUrl: string }
+// ──────────────────────────────────────────────
+const deleteLibraryImage = async (req, res) => {
+  try {
+    const { imageUrl } = req.body;
+    if (!imageUrl || typeof imageUrl !== "string" || !isValidImageUrl(imageUrl)) {
+      return res.status(400).json({ message: "Falta una imageUrl válida." });
+    }
+
+    const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
+    const user = await User.findById(req.user._id).select("pendingMenuImages");
+    const isPending = (user?.pendingMenuImages || []).includes(imageUrl);
+    const holders = await Item.find({ image: imageUrl, menuID: { $in: userMenuIDs } }).select("_id");
+
+    // Misma barrera de ownership que assignImages: la imagen tiene que ser
+    // pendiente propia o estar asignada a un producto propio. Si no, alguien
+    // está tratando de borrar un archivo que no le pertenece.
+    if (!isPending && holders.length === 0) {
+      return res.status(403).json({ message: "No autorizado sobre esta imagen." });
+    }
+
+    if (holders.length > 0) {
+      await Item.updateMany({ _id: { $in: holders.map((h) => h._id) } }, { $set: { image: "" } });
+    }
+    if (isPending) {
+      await User.findByIdAndUpdate(req.user._id, { $pull: { pendingMenuImages: imageUrl } });
+    }
+
+    await destroyCloudinaryImage(imageUrl);
+
+    res.json({ removedFromItems: holders.length });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
 module.exports = {
   newItem,
   editItem,
@@ -792,5 +876,6 @@ module.exports = {
   checkImageQuota,
   uploadLibraryImage,
   assignImages,
+  deleteLibraryImage,
   MAX_BULK_ITEMS
 };

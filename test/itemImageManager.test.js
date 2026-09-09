@@ -3,13 +3,18 @@
 // seguridad de no poder "robar" una imagen pendiente de otro usuario). No
 // se testea uploadLibraryImage acá — mismo criterio que uploadDraftImage/
 // uploadImage, no testeados a nivel de subida a Cloudinary en este repo.
+const ORIGINAL_CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME;
+process.env.CLOUDINARY_CLOUD_NAME = "test-cloud";
+
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const Item = require("../src/models/Item");
 const Menu = require("../src/models/Menu");
 const User = require("../src/models/User");
+const { cloudinary } = require("../src/config/cloudinary");
 const {
-  getLiteItems, getPendingImages, assignImages, checkImageQuota, deleteItem, deleteItemsBulk, MAX_BULK_ITEMS,
+  getLiteItems, getPendingImages, assignImages, checkImageQuota, deleteItem, deleteItemsBulk,
+  deleteLibraryImage, MAX_BULK_ITEMS,
 } = require("../src/controllers/itemController");
 
 const originalItemFind = Item.find;
@@ -18,10 +23,16 @@ const originalItemFindByIdAndDelete = Item.findByIdAndDelete;
 const originalItemDeleteMany = Item.deleteMany;
 const originalItemBulkWrite = Item.bulkWrite;
 const originalItemCountDocuments = Item.countDocuments;
+const originalItemUpdateMany = Item.updateMany;
 const originalMenuFind = Menu.find;
 const originalMenuFindById = Menu.findById;
 const originalUserFindById = User.findById;
 const originalUserFindByIdAndUpdate = User.findByIdAndUpdate;
+const originalCloudinaryDestroy = cloudinary.uploader.destroy;
+
+test.after(() => {
+  process.env.CLOUDINARY_CLOUD_NAME = ORIGINAL_CLOUD_NAME;
+});
 
 test.afterEach(() => {
   Item.find = originalItemFind;
@@ -30,10 +41,12 @@ test.afterEach(() => {
   Item.deleteMany = originalItemDeleteMany;
   Item.bulkWrite = originalItemBulkWrite;
   Item.countDocuments = originalItemCountDocuments;
+  Item.updateMany = originalItemUpdateMany;
   Menu.find = originalMenuFind;
   Menu.findById = originalMenuFindById;
   User.findById = originalUserFindById;
   User.findByIdAndUpdate = originalUserFindByIdAndUpdate;
+  cloudinary.uploader.destroy = originalCloudinaryDestroy;
 });
 
 const makeResponse = () => ({
@@ -455,4 +468,95 @@ test("checkImageQuota rechaza con 403 al llegar al tope del plan, sin llamar a n
   assert.equal(nextCalled, false);
   assert.equal(res.statusCode, 403);
   assert.match(res.body.message, /7 imágenes/);
+});
+
+// ──────────────────────────────────────────────
+// deleteLibraryImage
+// ──────────────────────────────────────────────
+
+const VALID_LIBRARY_URL = "https://res.cloudinary.com/test-cloud/image/upload/v123/menu-digital/items/user1_999.jpg";
+
+test("deleteLibraryImage rechaza sin una imageUrl válida", async () => {
+  const req = { user: { _id: "user-1" }, body: { imageUrl: "https://evil.example.com/x.jpg" } };
+  const res = makeResponse();
+  await deleteLibraryImage(req, res);
+  assert.equal(res.statusCode, 400);
+});
+
+test("deleteLibraryImage rechaza una imagen que no está pendiente ni asignada a un producto del usuario", async () => {
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  User.findById = () => ({ select: async () => ({ pendingMenuImages: [] }) });
+  Item.find = () => ({ select: async () => [] }); // nadie del usuario tiene esa imagen
+
+  const req = { user: { _id: "user-1" }, body: { imageUrl: VALID_LIBRARY_URL } };
+  const res = makeResponse();
+  await deleteLibraryImage(req, res);
+
+  assert.equal(res.statusCode, 403);
+});
+
+test("deleteLibraryImage borra una imagen pendiente: la saca de pendingMenuImages y destruye en Cloudinary", async () => {
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  User.findById = () => ({ select: async () => ({ pendingMenuImages: [VALID_LIBRARY_URL] }) });
+  Item.find = () => ({ select: async () => [] }); // ningún producto la tiene asignada
+
+  let pullArgs;
+  User.findByIdAndUpdate = async (id, update) => {
+    pullArgs = { id, update };
+    return {};
+  };
+  let updateManyCalled = false;
+  Item.updateMany = async () => { updateManyCalled = true; return {}; };
+
+  let destroyArgs;
+  cloudinary.uploader.destroy = async (publicId, options) => {
+    destroyArgs = { publicId, options };
+    return { result: "ok" };
+  };
+
+  const req = { user: { _id: "user-1" }, body: { imageUrl: VALID_LIBRARY_URL } };
+  const res = makeResponse();
+  await deleteLibraryImage(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.removedFromItems, 0);
+  assert.deepEqual(pullArgs.update, { $pull: { pendingMenuImages: VALID_LIBRARY_URL } });
+  assert.equal(updateManyCalled, false);
+  assert.equal(destroyArgs.publicId, "menu-digital/items/user1_999");
+});
+
+test("deleteLibraryImage borra una imagen asignada: limpia Item.image en los productos que la tenían y no toca pendientes", async () => {
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  User.findById = () => ({ select: async () => ({ pendingMenuImages: [] }) });
+  Item.find = () => ({ select: async () => [{ _id: "item-1" }, { _id: "item-2" }] });
+
+  let updateManyArgs;
+  Item.updateMany = async (filter, update) => { updateManyArgs = { filter, update }; return {}; };
+  let userUpdateCalled = false;
+  User.findByIdAndUpdate = async () => { userUpdateCalled = true; return {}; };
+  cloudinary.uploader.destroy = async () => ({ result: "ok" });
+
+  const req = { user: { _id: "user-1" }, body: { imageUrl: VALID_LIBRARY_URL } };
+  const res = makeResponse();
+  await deleteLibraryImage(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.removedFromItems, 2);
+  assert.deepEqual(updateManyArgs.filter._id.$in, ["item-1", "item-2"]);
+  assert.equal(updateManyArgs.update.$set.image, "");
+  assert.equal(userUpdateCalled, false);
+});
+
+test("deleteLibraryImage igual devuelve 200 si Cloudinary falla al destruir (la limpieza en Mongo ya vale)", async () => {
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  User.findById = () => ({ select: async () => ({ pendingMenuImages: [VALID_LIBRARY_URL] }) });
+  Item.find = () => ({ select: async () => [] });
+  User.findByIdAndUpdate = async () => ({});
+  cloudinary.uploader.destroy = async () => { throw new Error("Cloudinary caído"); };
+
+  const req = { user: { _id: "user-1" }, body: { imageUrl: VALID_LIBRARY_URL } };
+  const res = makeResponse();
+  await deleteLibraryImage(req, res);
+
+  assert.equal(res.statusCode, 200);
 });
