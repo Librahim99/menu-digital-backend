@@ -4,7 +4,7 @@
     {
       "name": "menu-digital-frontend",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--prefix", "C:\\Users\\Thomas\\OneDrive\\Documentos\\GitHub\\menu-digital-frontend"],
+      "runtimeArgs": ["run", "dev", "--prefix", "F:\\Lucas\\Job\\MenuDigital\\menu-digital-frontend"],
       "port": 5173
     },
     {
