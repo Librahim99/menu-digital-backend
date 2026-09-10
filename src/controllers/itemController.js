@@ -21,7 +21,9 @@ const hasNegativeOptionPrice = (options) => {
 };
 
 const verifyMenuOwnership = async (menuID, userID) => {
-  const menu = await Menu.findById(menuID);
+  // Ningún caller lee el menu devuelto más allá de este chequeo de
+  // ownership — solo hace falta userID.
+  const menu = await Menu.findById(menuID).select("userID");
   if (!menu) return { error: "Menú no encontrado", status: 404 };
   if (menu.userID.toString() !== userID.toString())
     return { error: "No autorizado", status: 403 };
@@ -305,9 +307,9 @@ const moveItem = async (req, res) => {
     const { menuID: newMenuID } = req.body;
     if (!newMenuID) return res.status(400).json({ message: "menuID destino requerido" });
  
-    const item = await Item.findById(req.params.itemID);
+    const item = await Item.findById(req.params.itemID).select("menuID");
     if (!item) return res.status(404).json({ message: "Item no encontrado" });
- 
+
     // Verifica ownership del menú origen
     const { error: errorOrigen, status: statusOrigen } = await verifyMenuOwnership(item.menuID, req.user._id);
     if (errorOrigen) return res.status(statusOrigen).json({ message: errorOrigen });
@@ -357,12 +359,12 @@ const uploadImage = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "No se recibió ningún archivo" });
  
-    const item = await Item.findById(req.params.itemID);
+    const item = await Item.findById(req.params.itemID).select("menuID");
     if (!item) return res.status(404).json({ message: "Item no encontrado" });
- 
+
     const { error, status } = await verifyMenuOwnership(item.menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
- 
+
     const updated = await Item.findByIdAndUpdate(
       req.params.itemID,
       { image: req.file.path }, // Cloudinary devuelve la URL en req.file.path
@@ -385,12 +387,12 @@ const setHidden = async (req, res) => {
     const { hidden } = req.body;
     if (typeof hidden !== "boolean") return res.status(400).json({ message: "hidden debe ser un booleano" });
  
-    const item = await Item.findById(req.params.itemID);
+    const item = await Item.findById(req.params.itemID).select("menuID");
     if (!item) return res.status(404).json({ message: "Item no encontrado" });
- 
+
     const { error, status } = await verifyMenuOwnership(item.menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
- 
+
     const updated = await Item.findByIdAndUpdate(req.params.itemID, { hidden }, { new: true });
     res.json({ hidden: updated.hidden });
   } catch (err) {
@@ -408,12 +410,12 @@ const setAvailable = async (req, res) => {
     const { available } = req.body;
     if (typeof available !== "boolean") return res.status(400).json({ message: "available debe ser un booleano" });
  
-    const item = await Item.findById(req.params.itemID);
+    const item = await Item.findById(req.params.itemID).select("menuID");
     if (!item) return res.status(404).json({ message: "Item no encontrado" });
- 
+
     const { error, status } = await verifyMenuOwnership(item.menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
- 
+
     const updated = await Item.findByIdAndUpdate(req.params.itemID, { available }, { new: true });
     res.json({ available: updated.available });
   } catch (err) {
@@ -429,7 +431,9 @@ const setAvailable = async (req, res) => {
 
 const deleteItem = async (req, res) => {
   try {
-    const item = await Item.findById(req.params.itemID);
+    // menuID (ownership) + image (recycleDeletedItemImages abajo) — no se
+    // usa ningún otro campo del item borrado.
+    const item = await Item.findById(req.params.itemID).select("menuID image");
     if (!item) return res.status(404).json({ message: "Item no encontrado" });
 
       const { error, status } = await verifyMenuOwnership(item.menuID, req.user._id);

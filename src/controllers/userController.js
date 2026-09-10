@@ -506,6 +506,42 @@ const getAuthUser = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
+// @desc    Versión liviana de GET /me para el dashboard, que solo necesita
+//          7 campos y no el usuario completo (ver getAuthUser para el
+//          editor de perfil, que sí necesita el objeto entero).
+// @route   GET /api/users/me/summary
+// @access  Private
+// ──────────────────────────────────────────────
+const getAuthUserSummary = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select(
+      "slug hasDelivery template subscription subscriptionExpiresAt contactInfo.businessName media.backgroundPicture"
+    );
+    if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+
+    // Contar items y categorías del usuario
+    const menus = await Menu.find({ userID: user._id });
+    const categorias = menus.filter(m => m.section === false);
+    const menuIDs = categorias.map(m => m._id);
+    const itemCount = await Item.countDocuments({ menuID: { $in: menuIDs }, hidden: false });
+
+    const plan = await getPlanForUser(user);
+
+    res.json({
+      slug: user.slug,
+      hasDelivery: user.hasDelivery,
+      template: getTemplateForFeatures(user.template, plan.features),
+      itemCount,
+      categoryCount: categorias.length,
+      contactInfo: getContactInfo(user.contactInfo),
+      media: { backgroundPicture: user.media?.backgroundPicture || "" },
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
 // @desc    Obtener datos públicos de un local por slug + menú completo armado.
 //          Se ejecuta UNA sola vez cuando el cliente entra a /negocio/menu.
 //          Devuelve el user y el menú estructurado para que el front no necesite
@@ -1263,6 +1299,7 @@ module.exports = {
   verifyEmail,
   resendVerificationCode,
   getAuthUser,
+  getAuthUserSummary,
   fetchUserWithMenu,
   downloadMenuPdf,
   fetchOwnMenu,

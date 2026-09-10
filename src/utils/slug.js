@@ -1,5 +1,8 @@
 const User = require("../models/User");
 
+// La sección editorial ocupa /blog; un local con ese nombre recibe un sufijo.
+const RESERVED_SLUGS = new Set(["blog"]);
+
 // Normaliza un nombre a un slug URL-friendly.
 // "Café Roma" -> "cafe-roma"
 const generateSlug = (name) =>
@@ -19,7 +22,7 @@ const generateUniqueSlug = async (name, excludeUserID = null) => {
 
   let candidate = base;
   let suffix = 2;
-  while (await User.exists({
+  while (RESERVED_SLUGS.has(candidate) || await User.exists({
     slug: candidate,
     ...(excludeUserID && { _id: { $ne: excludeUserID } }),
   })) {
