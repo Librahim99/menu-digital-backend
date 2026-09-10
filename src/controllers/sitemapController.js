@@ -78,6 +78,8 @@ const getSitemap = async (req, res) => {
 
     urls.push(
       buildUrlEntry(`${SITE_URL}/`),
+      buildUrlEntry(`${SITE_URL}/blog`),
+      buildUrlEntry(`${SITE_URL}/blog/que-es-un-menu-digital-qr`),
       buildUrlEntry(`${SITE_URL}/contacto`),
       buildUrlEntry(`${SITE_URL}/terminos`),
       buildUrlEntry(`${SITE_URL}/privacidad`),

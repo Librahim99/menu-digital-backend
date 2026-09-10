@@ -14,6 +14,17 @@ test("agrega un sufijo incremental cuando el slug ya existe", async (t) => {
   assert.equal(await generateUniqueSlug("Café Roma"), "cafe-roma-3");
 });
 
+test("reserva la ruta del blog y resuelve colisiones del sufijo", async (t) => {
+  const queries = [];
+  t.mock.method(User, "exists", async (query) => {
+    queries.push(query);
+    return query.slug === "blog-2";
+  });
+
+  assert.equal(await generateUniqueSlug("Blóg"), "blog-3");
+  assert.deepEqual(queries.map((query) => query.slug), ["blog-2", "blog-3"]);
+});
+
 test("reintenta la creación si el índice detecta una carrera de slug", async (t) => {
   const existence = [false, true, false];
   t.mock.method(User, "exists", async () => existence.shift());
