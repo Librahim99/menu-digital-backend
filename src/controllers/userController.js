@@ -472,7 +472,13 @@ const resendVerificationCode = async (req, res) => {
 // ──────────────────────────────────────────────
 const getAuthUser = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id);
+    // Usa el reloj de MongoDB y devuelve el valor persistido en la misma consulta.
+    // La actividad no cambia updatedAt: el sitemap lo usa como fecha de contenido.
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { $currentDate: { lastConnectionAt: true } },
+      { new: true, timestamps: false }
+    );
     if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
 
     // Contar items y categorías del usuario

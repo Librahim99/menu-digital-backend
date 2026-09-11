@@ -43,6 +43,12 @@ const UserSchema = new mongoose.Schema(
       default: true,
     },
 
+    // Última consulta autenticada a GET /users/me; null hasta el primer acceso.
+    lastConnectionAt: {
+      type: Date,
+      default: null,
+    },
+
     // Verificación de email post-registro (código de 6 dígitos, ver
     // PendingServiceAction action:"verificacion_email"). Default `true` a
     // propósito: las cuentas creadas antes de esta funcionalidad no tienen

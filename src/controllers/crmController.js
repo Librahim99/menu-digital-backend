@@ -90,7 +90,7 @@ const summarizeAttention = (clients) => ({
 const buildClientsWithAttention = async (req) => {
   const users = await User.find(scopedUserMatch(req, { admin: false }))
     .select(
-      "username slug subscription subscriptionExpiresAt active createdAt sellerID menu " +
+      "username slug subscription subscriptionExpiresAt active createdAt lastConnectionAt sellerID menu " +
       "trialActive contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
       "media.pictures media.backgroundPicture schedule"
     )
@@ -293,6 +293,7 @@ const buildClientsWithAttention = async (req) => {
       subscriptionExpiresAt,
       active: u.active,
       createdAt: u.createdAt,
+      lastConnectionAt: u.lastConnectionAt || null,
       trialActive: u.trialActive === true,
       isTrialActive: isTrialCurrentlyActive(u.trialActive, subscriptionExpiresAt, now),
       contactInfo: {

@@ -41,6 +41,7 @@ test("listClients arma la vista 360 y resume las alertas sin consultas por clien
     subscriptionExpiresAt: new Date("2020-01-01T00:00:00.000Z"),
     active: true,
     createdAt: new Date("2019-01-01T00:00:00.000Z"),
+    lastConnectionAt: new Date("2026-09-12T01:30:00.000Z"),
     contactInfo: {
       businessName: "Bar de prueba",
       mail: "contacto@example.com",
@@ -59,7 +60,10 @@ test("listClients arma la vista 360 y resume las alertas sin consultas por clien
   const paymentDate = new Date("2026-08-20T12:00:00.000Z");
 
   t.mock.method(User, "find", () => ({
-    select() { return this; },
+    select(fields) {
+      assert.match(fields, /\blastConnectionAt\b/);
+      return this;
+    },
     async sort() { return [user]; },
   }));
   t.mock.method(CrmProfile, "find", () => ({ select: async () => [profile] }));
@@ -85,6 +89,7 @@ test("listClients arma la vista 360 y resume las alertas sin consultas por clien
 
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.clients.length, 1);
+  assert.equal(res.body.clients[0].lastConnectionAt.toISOString(), "2026-09-12T01:30:00.000Z");
   assert.deepEqual(res.body.clients[0].contactInfo, {
     mail: "contacto@example.com",
     number: 1112345678,
@@ -153,6 +158,7 @@ test("listClients suma el tráfico de la carta y el vendedor que trajo la cuenta
   assert.deepEqual(client.views, { last30d: 140, previous30d: 90 });
   assert.equal(client.seller.name, "Ana Vendedora");
   assert.equal(client.seller.code, "ANA-001");
+  assert.equal(client.lastConnectionAt, null);
   // Con tráfico real no se marca la alerta de carta sin visitas.
   assert.equal(client.attention.includes("no_traffic"), false);
 });

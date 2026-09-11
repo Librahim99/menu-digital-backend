@@ -45,6 +45,7 @@ test("las lecturas de panel, landing y carta omiten campos retirados sin alterar
   };
   t.mock.method(User, "findOne", async () => user);
   t.mock.method(User, "findById", async () => user);
+  t.mock.method(User, "findByIdAndUpdate", async () => user);
   t.mock.method(Menu, "find", async () => []);
   t.mock.method(Item, "find", async () => []);
   t.mock.method(Item, "countDocuments", async () => 0);
