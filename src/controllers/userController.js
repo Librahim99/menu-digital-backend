@@ -999,7 +999,9 @@ const editUser = async (req, res) => {
           if (!d || typeof d !== "object") return false;
           if (typeof d.enabled !== "boolean") return false;
           if (!d.enabled) return true; // open/close no importan si está cerrado
-          return HHMM_RE.test(d.open) && HHMM_RE.test(d.close) && d.open < d.close;
+          // Cierre <= apertura termina al día siguiente; iguales son 24 horas.
+          return typeof d.open === "string" && typeof d.close === "string" &&
+            HHMM_RE.test(d.open) && HHMM_RE.test(d.close);
         });
       if (!isValid) {
         return res.status(400).json({ message: "El horario cargado no es válido." });
