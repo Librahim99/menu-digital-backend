@@ -8,7 +8,7 @@ const CrmProfile = require("../models/CrmProfile");
 const PaymentTransaction = require("../models/PaymentTransaction");
 const PageView = require("../models/PageView");
 const Seller = require("../models/Seller");
-const { buenosAiresDateStr } = require("../utils/dates");
+const { buenosAiresDateStr, startOfMonthBA } = require("../utils/dates");
 const { getSubscriptionState, isTrialCurrentlyActive } = require("../config/plans");
 const { STAGES } = CrmProfile;
 
@@ -566,8 +566,7 @@ const getCrmSummary = async (req, res) => {
   try {
     const clients = await buildClientsWithAttention(req);
 
-    const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthStart = startOfMonthBA();
 
     const planBreakdown = { free: 0, basic: 0, pro: 0 };
     let newThisMonth = 0;

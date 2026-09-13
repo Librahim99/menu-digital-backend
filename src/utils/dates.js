@@ -29,6 +29,22 @@ const formatter = new Intl.DateTimeFormat("en-CA", {
 const buenosAiresDateStr = (date = new Date()) => formatter.format(date);
 
 /**
+ * Instante (Date) de las 00:00 del primer día del mes de `date` (default:
+ * ahora), leído en horario de Buenos Aires. A diferencia de
+ * `new Date(now.getFullYear(), now.getMonth(), 1)`, no depende de la TZ del
+ * proceso: dos procesos con TZ distinta (ej. UTC en un deploy cloud vs.
+ * America/Argentina/Buenos_Aires local) dan el mismo instante para el mismo
+ * `date`. BA es UTC-3 fijo (ver comentario de arriba), por eso la medianoche
+ * local es siempre las 03:00 UTC.
+ */
+const startOfMonthBA = (date = new Date()) => {
+  const parts = formatter.formatToParts(date);
+  const year = Number(parts.find((p) => p.type === "year").value);
+  const month = Number(parts.find((p) => p.type === "month").value);
+  return new Date(Date.UTC(year, month - 1, 1, 3, 0, 0, 0));
+};
+
+/**
  * Suma meses calendario conservando el día cuando existe. Si el mes destino
  * es más corto, usa su último día (ej: 31/01 + 1 mes = 28/02 o 29/02).
  */
@@ -48,4 +64,4 @@ const addCalendarMonths = (date, months) => {
   return result;
 };
 
-module.exports = { addCalendarMonths, buenosAiresDateStr, TIMEZONE_BA: TZ };
+module.exports = { addCalendarMonths, buenosAiresDateStr, startOfMonthBA, TIMEZONE_BA: TZ };

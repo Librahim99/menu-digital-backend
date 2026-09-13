@@ -368,6 +368,54 @@ test("getCrmSummary calcula totales livianos y reusa el mismo attentionSummary q
   assert.deepEqual(summaryRes.body.attentionSummary, listRes.body.attentionSummary);
 });
 
+test("getCrmSummary cuenta un alta de fin de mes en horario de Buenos Aires aunque el proceso corra en UTC", async (t) => {
+  const originalTZ = process.env.TZ;
+  t.after(() => {
+    if (originalTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTZ;
+  });
+  // TZ típica de un deploy cloud: es la que dispara el bug si getCrmSummary
+  // calculara el inicio de mes con new Date(now.getFullYear(), now.getMonth(), 1)
+  // en vez de horario de Buenos Aires (ver startOfMonthBA en src/utils/dates.js).
+  process.env.TZ = "UTC";
+
+  // Mismo instante del reporte del bug: 2026-10-01T01:00:00Z ya es "octubre"
+  // para un proceso en UTC, pero en Buenos Aires (UTC-3) todavía son las
+  // 22:00 del 30/09 — para el negocio, el mes en curso sigue siendo
+  // septiembre.
+  const queryInstant = new Date("2026-10-01T01:00:00.000Z");
+  t.mock.timers.enable({ apis: ["Date"], now: queryInstant });
+
+  // Cliente creado el 30/09 a las 20:00 hora Buenos Aires (23:00 UTC): es
+  // anterior al instante consultado, pero un proceso en UTC ya lo lee como
+  // "30/09 23:00", que queda ANTES de su (incorrecto) inicio de mes en
+  // "01/10 00:00 UTC" — por eso lo excluía de newThisMonth pese a haberse
+  // creado dentro de septiembre en hora de Buenos Aires.
+  const lateSeptemberClientBA = new Date("2026-09-30T23:00:00.000Z");
+
+  const users = [{
+    _id: "1", username: "u1", slug: "u1", subscription: "free",
+    subscriptionExpiresAt: null, active: true, createdAt: lateSeptemberClientBA,
+    contactInfo: { businessName: "Bar Límite" }, media: {}, schedule: {},
+  }];
+
+  t.mock.method(User, "find", () => ({
+    select() { return this; },
+    async sort() { return users; },
+  }));
+  t.mock.method(CrmProfile, "find", () => ({ select: async () => [] }));
+  t.mock.method(Menu, "find", () => ({ select: async () => [] }));
+  t.mock.method(Item, "aggregate", async () => []);
+  t.mock.method(PaymentTransaction, "aggregate", async () => []);
+  t.mock.method(PageView, "aggregate", async () => []);
+
+  const summaryRes = response();
+  await getCrmSummary({}, summaryRes);
+
+  assert.equal(summaryRes.statusCode, 200);
+  assert.equal(summaryRes.body.newThisMonth, 1);
+});
+
 test("getOverdueCount no considera vencido un seguimiento del día actual", async (t) => {
   let filter;
   t.mock.method(CrmProfile, "countDocuments", async (receivedFilter) => {
