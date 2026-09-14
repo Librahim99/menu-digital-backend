@@ -1,6 +1,7 @@
 const Seller = require("../models/Seller");
 const { handleError } = require("../utils/handleError");
 const { getOverviewForSellers, getRanking } = require("../services/sellerPanelService");
+const { getInfluencerOverview } = require("../services/influencerPanelService");
 
 const RANKING_PERIODS = ["current", "previous", "historic"];
 
@@ -22,6 +23,8 @@ const getMyProfile = async (req, res) => {
       startDate: seller.startDate,
       profilePicture: seller.profilePicture,
       admin: seller.admin,
+      influencer: seller.influencer === true,
+      receivesLeads: seller.receivesLeads === true,
       createdAt: seller.createdAt,
     });
   } catch (error) {
@@ -122,12 +125,13 @@ const getOverview = async (req, res) => {
       const { sellerID } = req.query;
       if (sellerID) {
         // getOverviewForSellers/cycleAnchor solo leen estos campos del seller.
-        const seller = await Seller.findById(sellerID).select("name code active startDate createdAt");
+        const seller = await Seller.findById(sellerID).select("name code active startDate createdAt influencer");
         if (!seller) return res.status(404).json({ message: "Vendedor no encontrado" });
+        if (seller.influencer) return res.status(400).json({ message: "Este perfil utiliza el panel de influencers" });
         sellers = [seller];
         scope = "single";
       } else {
-        sellers = await Seller.find().select("name code active startDate createdAt");
+        sellers = await Seller.find({ influencer: { $ne: true } }).select("name code active startDate createdAt");
         scope = "all";
       }
     }
@@ -152,7 +156,7 @@ const getSellersRanking = async (req, res) => {
   try {
     const period = RANKING_PERIODS.includes(req.query.period) ? req.query.period : "current";
     // getRanking/cycleAnchor solo leen estos campos del seller.
-    const sellers = await Seller.find().select("name code active startDate createdAt");
+    const sellers = await Seller.find({ influencer: { $ne: true } }).select("name code active startDate createdAt");
     const ranking = await getRanking(sellers, { period });
 
     res.json({ period, sellers: ranking });
@@ -161,7 +165,19 @@ const getSellersRanking = async (req, res) => {
   }
 };
 
+const getMyInfluencerOverview = async (req, res) => {
+  try {
+    if (req.seller?.influencer !== true) {
+      return res.status(403).json({ message: "Acceso exclusivo para influencers" });
+    }
+    res.json(await getInfluencerOverview(req.seller));
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
 module.exports = {
+  getMyInfluencerOverview,
   getMyProfile,
   changeMyPassword,
   uploadMyPhoto,

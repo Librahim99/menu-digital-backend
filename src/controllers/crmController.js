@@ -28,12 +28,14 @@ const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 // para un vendedor (solo sus propios clientes atribuidos — cada función que
 // toca un cliente puntual filtra por eso).
 
-// Cuando la request es de un vendedor, filtra la query inicial por su propio
-// sellerID en vez de post-filtrar el array ya resuelto: así un scoping que se
-// olvide agregar en un path nuevo el día de mañana falla cerrado (lista
-// vacía), no abierto (todos los clientes de todos los vendedores).
+// El vendedor conserva sus clientes directos y atiende los referidos que le
+// fueron asignados. sellerID mantiene el origen de la cuenta; assignedSeller
+// define quién realiza el seguimiento sin cambiar esa atribución.
 const scopedUserMatch = (req, extra = {}) => (
-  req.seller ? { ...extra, sellerID: req.seller._id } : extra
+  req.seller ? {
+    ...extra,
+    $or: [{ sellerID: req.seller._id }, { assignedSeller: req.seller._id }],
+  } : extra
 );
 
 // Perfil "por defecto" que devolvemos cuando un cliente todavía no tiene CRM
@@ -42,6 +44,9 @@ const scopedUserMatch = (req, extra = {}) => (
 const defaultProfile = () => ({ stage: "lead", tags: [], nextFollowUp: null, notes: [] });
 
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
+const sellerSummary = (seller) => seller
+  ? { _id: seller._id, name: seller.name, code: seller.code }
+  : null;
 
 const buildOnboardingStatus = ({ user, categoryCount, itemCount }) => {
   const businessName = user.contactInfo?.businessName || "";
@@ -90,7 +95,7 @@ const summarizeAttention = (clients) => ({
 const buildClientsWithAttention = async (req) => {
   const users = await User.find(scopedUserMatch(req, { admin: false }))
     .select(
-      "username slug subscription subscriptionExpiresAt active createdAt lastConnectionAt sellerID menu " +
+      "username slug subscription subscriptionExpiresAt active createdAt lastConnectionAt sellerID assignedSeller influencerReferral menu " +
       "trialActive contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
       "media.pictures media.backgroundPicture schedule"
     )
@@ -175,11 +180,10 @@ const buildClientsWithAttention = async (req) => {
     ]),
   ]);
 
-  // Vendedor que trajo cada cuenta: `sellerID` vive en User desde siempre,
-  // pero nunca se resolvía acá, así que desde la ficha del cliente no había
-  // forma de saber de quién era la venta.
+  // Resolver origen y responsable en una sola consulta, también para los
+  // referidos pendientes de asignación (assignedSeller es null).
   const sellerIDs = [...new Set(
-    users.filter((u) => u.sellerID).map((u) => u.sellerID.toString())
+    users.flatMap((u) => [u.sellerID, u.assignedSeller]).filter(Boolean).map(String)
   )];
   const sellers = sellerIDs.length
     ? await Seller.find({ _id: { $in: sellerIDs } }).select("name code")
@@ -310,14 +314,9 @@ const buildClientsWithAttention = async (req) => {
         last30d: viewsLast30d,
         previous30d: views?.previous30d || 0,
       },
-      seller: u.sellerID
-        ? (() => {
-            const seller = sellersByID.get(u.sellerID.toString());
-            return seller
-              ? { _id: seller._id, name: seller.name, code: seller.code }
-              : null;
-          })()
-        : null,
+      seller: sellerSummary(u.sellerID && sellersByID.get(u.sellerID.toString())),
+      leadSource: u.influencerReferral === true ? "influencer" : (u.sellerID ? "seller" : null),
+      assignedSeller: sellerSummary(u.assignedSeller && sellersByID.get(u.assignedSeller.toString())),
       attention,
     };
   });
@@ -353,7 +352,7 @@ const getClient = async (req, res) => {
     // El detalle CRM expone un DTO acotado: no entrega el documento User
     // completo ni campos sensibles que el panel no necesita.
     const user = await User.findOne(scopedUserMatch(req, { _id: userID, admin: false })).select(
-      "username slug subscription subscriptionExpiresAt active hasDelivery createdAt trialActive " +
+      "username slug subscription subscriptionExpiresAt active hasDelivery createdAt trialActive sellerID assignedSeller influencerReferral " +
       "contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
       "media.pictures media.backgroundPicture schedule"
     );
@@ -361,10 +360,13 @@ const getClient = async (req, res) => {
     // mismo criterio que el resto de la app: no confirmar existencia cross-tenant.
     if (!user) return res.status(404).json({ message: "Cliente no encontrado" });
 
-    const [profile, menus] = await Promise.all([
+    const sellerIDs = [...new Set([user.sellerID, user.assignedSeller].filter(Boolean).map(String))];
+    const [profile, menus, sellers] = await Promise.all([
       CrmProfile.findOne({ userID }).populate("notes.author", "username"),
       Menu.find({ userID }).select("_id section"),
+      sellerIDs.length ? Seller.find({ _id: { $in: sellerIDs } }).select("name code") : [],
     ]);
+    const sellersByID = new Map(sellers.map((seller) => [seller._id.toString(), seller]));
     const menuIds = menus.map((m) => m._id);
     const itemCount = await Item.countDocuments({ menuID: { $in: menuIds } });
     const categoryCount = menus.filter((m) => !m.section).length;
@@ -387,6 +389,9 @@ const getClient = async (req, res) => {
         createdAt: user.createdAt,
         trialActive: user.trialActive === true,
         isTrialActive: isTrialCurrentlyActive(user.trialActive, user.subscriptionExpiresAt, new Date()),
+        leadSource: user.influencerReferral === true ? "influencer" : (user.sellerID ? "seller" : null),
+        seller: sellerSummary(user.sellerID && sellersByID.get(user.sellerID.toString())),
+        assignedSeller: sellerSummary(user.assignedSeller && sellersByID.get(user.assignedSeller.toString())),
         contactInfo: {
           businessName,
           mail: user.contactInfo?.mail || "",
@@ -419,7 +424,7 @@ const updateProfile = async (req, res) => {
     const exists = await User.exists(scopedUserMatch(req, { _id: userID, admin: false }));
     if (!exists) return res.status(404).json({ message: "Cliente no encontrado" });
 
-    const { stage, tags, nextFollowUp } = req.body;
+    const { stage, tags, nextFollowUp, assignedSeller } = req.body;
     const updates = {};
 
     if (stage !== undefined) {
@@ -443,6 +448,33 @@ const updateProfile = async (req, res) => {
         }
         updates.nextFollowUp = parsedDate;
       }
+    }
+
+    if (assignedSeller !== undefined) {
+      if (req.seller || !req.user?.admin) {
+        return res.status(403).json({ message: "Solo un administrador puede asignar vendedores" });
+      }
+      if (assignedSeller !== null && (typeof assignedSeller !== "string" || !isValidId(assignedSeller))) {
+        return res.status(400).json({ message: "Vendedor asignado inválido" });
+      }
+      const referral = await User.exists({ _id: userID, admin: false, influencerReferral: true });
+      if (!referral) {
+        return res.status(400).json({ message: "Solo se puede asignar un vendedor a un lead de influencer" });
+      }
+      if (assignedSeller !== null) {
+        const seller = await Seller.exists({
+          _id: assignedSeller, active: true, influencer: { $ne: true }, receivesLeads: true,
+        });
+        if (!seller) {
+          return res.status(400).json({ message: "El vendedor no está habilitado para recibir leads" });
+        }
+      }
+      const result = await User.updateOne(
+        { _id: userID, admin: false, influencerReferral: true },
+        { $set: { assignedSeller } },
+        { runValidators: true }
+      );
+      if (!result.matchedCount) return res.status(404).json({ message: "Cliente no encontrado" });
     }
 
     const profile = await CrmProfile.findOneAndUpdate(
@@ -506,7 +538,7 @@ const deleteNote = async (req, res) => {
       return res.status(400).json({ message: "ID inválido" });
     }
 
-    const exists = await User.exists(scopedUserMatch(req, { _id: userID }));
+    const exists = await User.exists(scopedUserMatch(req, { _id: userID, admin: false }));
     if (!exists) return res.status(404).json({ message: "Cliente no encontrado" });
 
     const profile = await CrmProfile.findOneAndUpdate(
@@ -534,7 +566,7 @@ const getOverdueCount = async (req, res) => {
     const match = { nextFollowUp: { $ne: null, $lt: todayCalendarCutoff } };
 
     if (req.seller) {
-      const clientIDs = await User.find({ sellerID: req.seller._id }).distinct("_id");
+      const clientIDs = await User.find(scopedUserMatch(req, { admin: false })).distinct("_id");
       match.userID = { $in: clientIDs };
     }
 

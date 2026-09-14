@@ -5,7 +5,7 @@ const User = require("../models/User");
 const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
 const PaymentTransaction = require("../models/PaymentTransaction");
-const SellerSale = require("../models/SellerSale");
+const { attributionForUser, createSaleSnapshot, recordSaleFromTransaction } = require("../services/sellerSaleService");
 const {
   PLAN_MAP,
   PLAN_ORDER,
@@ -146,6 +146,7 @@ const markPaymentApplied = ({
   pendingRegistrationID,
   preferenceId,
   checkoutID,
+  saleAttribution,
   session,
 }) => PaymentTransaction.findOneAndUpdate(
   { paymentID, entitlementStatus: { $ne: "applied" } },
@@ -158,6 +159,7 @@ const markPaymentApplied = ({
       pendingRegistrationID,
       preferenceId,
       checkoutID,
+      saleAttribution,
     }),
   },
   withSession({ new: true, runValidators: true }, session)
@@ -238,31 +240,6 @@ const linkPendingRegistration = (paymentID, pending) => {
   );
 };
 
-// Registra la venta a comisionar cuando un pago recién se aplica. No es la
-// fuente de verdad (PaymentTransaction lo es): si falla, no debe frenar ni
-// hacer fallar la acreditación del pago, solo faltar ese registro en el
-// panel de vendedores. Sin vendedor asociado no hay nada que registrar acá.
-const recordSellerSale = async ({
-  paymentID,
-  userID,
-  sellerID,
-  plan,
-  amount,
-  subscriptionDate,
-  months
-}) => {
-  if (!sellerID) return;
-  try {
-    await SellerSale.findOneAndUpdate(
-      { paymentID },
-      { $setOnInsert: { userID, sellerID, plan, amount, subscriptionDate, months } },
-      { upsert: true, setDefaultsOnInsert: true }
-    );
-  } catch (err) {
-    console.error("No se pudo registrar la venta del vendedor:", err);
-  }
-};
-
 const applyExistingUserEntitlement = async ({
   paymentID,
   associatedID,
@@ -270,6 +247,7 @@ const applyExistingUserEntitlement = async ({
   months,
   approvedAt,
   checkoutID,
+  attribution,
 }) => mongoose.connection.transaction(async (session) => {
   // Este write serializa entregas concurrentes del mismo paymentID dentro de
   // la transacción. Si otra entrega ya lo aplicó, no vuelve a tocar User.
@@ -284,7 +262,7 @@ const applyExistingUserEntitlement = async ({
 
   let userQuery = User.findById(associatedID);
   if (session) userQuery = userQuery.session(session);
-  const previousUser = await userQuery.select("subscription subscriptionExpiresAt");
+  const previousUser = await userQuery.select("subscription subscriptionExpiresAt sellerID influencerReferral assignedSeller influencerFirstPaymentID");
   if (!previousUser) {
     await markPaymentNotApplied({
       paymentID,
@@ -381,6 +359,17 @@ const applyExistingUserEntitlement = async ({
       || lockedTransaction.subscriptionExpiresAtAfter
   ) || subscriptionExpiresAt;
 
+  const saleSource = attribution || attributionForUser(previousUser);
+  const firstInfluencerPurchase = Boolean(saleSource.influencerID)
+    && (!previousUser.influencerFirstPaymentID || previousUser.influencerFirstPaymentID === paymentID);
+  const saleAttribution = lockedTransaction.saleAttribution || createSaleSnapshot({
+    attribution: saleSource,
+    plan: mappedPlan,
+    months,
+    amount: lockedTransaction.amount,
+    subscriptionDate: approvedAt,
+    firstInfluencerPurchase,
+  });
   const updatedUser = await User.findByIdAndUpdate(
     associatedID,
     {
@@ -389,6 +378,7 @@ const applyExistingUserEntitlement = async ({
       // Pagó un plan real: si venía de la prueba gratis, deja de contar como
       // "en trial" en CRM/admin. No-op para el resto de usuarios.
       trialActive: false,
+      ...(firstInfluencerPurchase && { influencerFirstPaymentID: paymentID }),
     },
     withSession({ new: true, runValidators: true }, session)
   );
@@ -400,6 +390,7 @@ const applyExistingUserEntitlement = async ({
     paymentID,
     userID: previousUser._id || associatedID,
     checkoutID,
+    saleAttribution,
     session,
   });
   if (!appliedTransaction) {
@@ -411,8 +402,7 @@ const applyExistingUserEntitlement = async ({
     previousPlan: effectiveCurrentPlan,
     isRenewal: targetRank === currentRank,
     subscriptionExpiresAt: durableExpiry,
-    sellerID: updatedUser.sellerID,
-    amount: lockedTransaction.amount,
+    transaction: appliedTransaction,
   };
 });
 
@@ -695,6 +685,7 @@ const processPaymentEvent = async (paymentId) => {
   // Una entrega repetida siempre refresca el estado financiero, pero un
   // beneficio ya aplicado no vuelve a tocar User ni duplica el evento CRM.
   if (paymentTransaction?.entitlementStatus === "applied") {
+    await recordSaleFromTransaction(paymentTransaction);
     return;
   }
 
@@ -915,21 +906,20 @@ const processPaymentEvent = async (paymentId) => {
         paymentID: paymentSnapshot.paymentID,
         userID: completedUser._id || pending.userID,
         ...pendingAssociation,
+        saleAttribution: createSaleSnapshot({
+          attribution: checkout?.attribution || attributionForUser(pending),
+          plan: mappedPlan,
+          months: completedMonths,
+          amount: paymentTransaction.amount,
+          subscriptionDate: approvedAt,
+        }),
       });
       if (newlyApplied) {
         await logCrmEvent(
           completedUser._id || pending.userID,
           `Alta por pago MP — plan ${mappedPlan} × ${completedMonths} mes(es), vigente hasta ${completedExpiry.toISOString()}`
         );
-        await recordSellerSale({
-          paymentID: paymentSnapshot.paymentID,
-          userID: completedUser._id || pending.userID,
-          sellerID: pending.sellerID,
-          plan: mappedPlan,
-          months: completedMonths,
-          amount: paymentTransaction.amount,
-          subscriptionDate: approvedAt,
-        });
+        await recordSaleFromTransaction(newlyApplied);
       }
       return;
     }
@@ -1054,21 +1044,20 @@ const processPaymentEvent = async (paymentId) => {
         paymentID: paymentSnapshot.paymentID,
         userID: alreadyExists._id,
         ...pendingAssociation,
+        saleAttribution: createSaleSnapshot({
+          attribution: checkout?.attribution || attributionForUser(pending),
+          plan: mappedPlan,
+          months: recoveredMonths,
+          amount: paymentTransaction.amount,
+          subscriptionDate: approvedAt,
+        }),
       });
       if (newlyApplied) {
         await logCrmEvent(
           alreadyExists._id,
           `Alta por pago MP — plan ${mappedPlan} × ${recoveredMonths} mes(es), vigente hasta ${recoveredExpiry.toISOString()}`
         );
-        await recordSellerSale({
-          paymentID: paymentSnapshot.paymentID,
-          userID: alreadyExists._id,
-          sellerID: pending.sellerID,
-          plan: mappedPlan,
-          months: recoveredMonths,
-          amount: paymentTransaction.amount,
-          subscriptionDate: approvedAt,
-        });
+        await recordSaleFromTransaction(newlyApplied);
       }
       return;
     }
@@ -1148,21 +1137,20 @@ const processPaymentEvent = async (paymentId) => {
       paymentID: paymentSnapshot.paymentID,
       userID: user._id,
       ...pendingAssociation,
+      saleAttribution: createSaleSnapshot({
+        attribution: checkout?.attribution || attributionForUser(pending),
+        plan: mappedPlan,
+        months: entitlementMonths,
+        amount: paymentTransaction.amount,
+        subscriptionDate: approvedAt,
+      }),
     });
     if (newlyApplied) {
       await logCrmEvent(
         user._id,
         `Alta por pago MP — plan ${mappedPlan} × ${entitlementMonths} mes(es)${pending.sellerID ? " · ref. vendedor" : ""}, vigente hasta ${entitlementExpiresAt.toISOString()}`
       );
-      await recordSellerSale({
-        paymentID: paymentSnapshot.paymentID,
-        userID: user._id,
-        sellerID: pending.sellerID,
-        plan: mappedPlan,
-        months: entitlementMonths,
-        amount: paymentTransaction.amount,
-        subscriptionDate: approvedAt,
-      });
+      await recordSaleFromTransaction(newlyApplied);
     }
 
     return;
@@ -1194,21 +1182,14 @@ const processPaymentEvent = async (paymentId) => {
     months: metadataMonths,
     approvedAt,
     checkoutID: checkout?._id || checkoutID || undefined,
+    attribution: checkout?.attribution,
   });
   if (entitlementResult.appliedNow) {
     await logCrmEvent(
       associatedID,
       `Pago MP aprobado — ${entitlementResult.isRenewal ? `renovación ${mappedPlan}` : `plan ${entitlementResult.previousPlan} → ${mappedPlan}`} × ${metadataMonths} mes(es), vigente hasta ${entitlementResult.subscriptionExpiresAt.toISOString()}`
     );
-    await recordSellerSale({
-      paymentID: paymentSnapshot.paymentID,
-      userID: associatedID,
-      sellerID: entitlementResult.sellerID,
-      plan: mappedPlan,
-      months: metadataMonths,
-      amount: entitlementResult.amount,
-      subscriptionDate: approvedAt,
-    });
+    await recordSaleFromTransaction(entitlementResult.transaction);
   }
 };
 
@@ -1467,6 +1448,20 @@ const confirmarArrepentimiento = async (req, res) => {
       { paymentID: transaction.paymentID },
       { $set: { refundId: String(refund.id) } }
     );
+    try {
+      await recordSaleFromTransaction({
+        paymentID: transaction.paymentID,
+        userID: transaction.userID,
+        entitlementStatus: transaction.entitlementStatus,
+        saleAttribution: transaction.saleAttribution,
+        status: "refunded",
+        refundedAmount: transaction.amount,
+      });
+    } catch (saleError) {
+      // El dinero ya fue reembolsado: completar la baja. La notificación de
+      // MercadoPago sincronizará nuevamente este estado desde la transacción.
+      console.error("No se pudo sincronizar la venta reembolsada:", saleError);
+    }
 
     await User.findByIdAndUpdate(pending.userID, {
       $set: {

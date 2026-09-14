@@ -60,6 +60,21 @@ const paymentTransactionSchema = new mongoose.Schema(
     // campo ausente significa que el contexto todavía no fue capturado.
     subscriptionExpiresAtBefore: { type: Date },
     subscriptionExpiresAtAfter: { type: Date },
+    // Se escribe al aplicar el pago, en la misma transacción que User. Las
+    // notificaciones siguientes solo actualizan su estado financiero.
+    saleAttribution: {
+      type: new mongoose.Schema({
+        sellerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", default: null },
+        influencerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", default: null },
+        influencerRate: { type: Number, enum: [0, 0.15], required: true },
+        influencerCommissionAmount: { type: Number, min: 0, required: true },
+        plan: { type: String, enum: ["basic", "pro"], required: true },
+        months: { type: Number, enum: [1, 3, 6, 12], required: true },
+        amount: { type: Number, min: 0, required: true },
+        subscriptionDate: { type: Date, required: true },
+      }, { _id: false }),
+      default: undefined,
+    },
 
     // ── Reembolsos / arrepentimiento ──
 refunded: {

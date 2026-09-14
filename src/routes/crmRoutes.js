@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { isAdmin, protectSellerOrAdminAny } = require("../middleware/auth");
+const { isAdmin, protectSellerOrAdminAny, denyInfluencer } = require("../middleware/auth");
 const {
   listClients,
   getClient,
@@ -12,11 +12,9 @@ const {
   exportClients,
 } = require("../controllers/crmController");
 
-// CRM: lo maneja tanto un admin (ve todo) como un vendedor (ve y edita solo
-// sus propios clientes atribuidos — el scoping vive en cada controller,
-// filtrando la query por req.seller._id en vez de post-filtrar el resultado,
-// para que un olvido de scoping en un path nuevo falle cerrado, no abierto).
-router.use(protectSellerOrAdminAny);
+// Admin ve todo; vendedor ve sus clientes directos o asignados. El influencer
+// solo accede a su panel y no puede consultar ni modificar datos internos de CRM.
+router.use(protectSellerOrAdminAny, denyInfluencer);
 
 // Rutas de nombre fijo van ANTES de /clients/:userID para no chocar con el param.
 router.get("/overdue-count", getOverdueCount);

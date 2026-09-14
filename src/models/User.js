@@ -90,6 +90,16 @@ const UserSchema = new mongoose.Schema(
       ref: "Seller",
       default: null,
     },
+    // Origen congelado al registrarse; no depende de cambios posteriores del seller.
+    influencerReferral: { type: Boolean, default: false, immutable: true },
+    assignedSeller: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Seller",
+      default: null,
+      index: true,
+    },
+    // Se reclama al aplicar el primer pago dentro de la transacción de acreditación.
+    influencerFirstPaymentID: { type: String, default: null },
 
     // Marca histórica: la cuenta se originó vía prueba gratuita de 7 días
     // (código de promoción). No se resetea al vencer el trial por tiempo —

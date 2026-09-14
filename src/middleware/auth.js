@@ -187,7 +187,7 @@ const protectSellerOrAdminAny = async (req, res, next) => {
       // getOverviewForSellers cuando scope="self", que llama a cycleAnchor()
       // (utils/sellerCycle.js), y esa función necesita startDate/createdAt
       // para anclar el ciclo de comisión — sin ellos devuelve Invalid Date.
-      const seller = await Seller.findById(decoded.id).select("name active code startDate createdAt");
+      const seller = await Seller.findById(decoded.id).select("name active code startDate createdAt influencer");
       if (!seller) {
         return res.status(401).json({ message: "Vendedor no encontrado" });
       }
@@ -247,7 +247,7 @@ const protectSeller = async (req, res, next) => {
     // active/startDate/profilePicture/admin/createdAt) — se listan explícitos
     // para dejar afuera dni (sensible) y updatedAt (no se usa).
     const seller = await Seller.findById(decoded.id).select(
-      "name mail number code active startDate profilePicture admin createdAt"
+      "name mail number code active startDate profilePicture admin createdAt influencer receivesLeads"
     );
     if (!seller) {
       return res.status(401).json({ message: "Vendedor no encontrado" });
@@ -263,7 +263,16 @@ const protectSeller = async (req, res, next) => {
   }
 };
 
+// El perfil se consulta en cada request: nunca se confía en un flag del JWT/front.
+const denyInfluencer = (req, res, next) => {
+  if (req.seller?.influencer === true) {
+    return res.status(403).json({ message: "Accedé desde tu panel de influencer" });
+  }
+  next();
+};
+
 module.exports = {
+  denyInfluencer,
   protect,
   isAdmin,
   requireFeature,

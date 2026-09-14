@@ -31,6 +31,7 @@ const {
   claimPendingServiceAction,
 } = require("../utils/serviceActionCodes");
 const Seller = require("../models/Seller");
+const { nextLeadSeller } = require("../services/leadAssignmentService");
 
 // Manda el código de verificación de email: al registrarse (newUser) y cada
 // vez que cambia el mail real de la cuenta (editUser). Best-effort a
@@ -250,7 +251,7 @@ const registerTrial = async (req, res) => {
       return res.status(400).json({ message: "Código de promoción inválido" });
     }
     const seller = await Seller.findOne({ code });
-    if (!seller) {
+    if (!seller || seller.active === false) {
       return res.status(400).json({ message: "Código de promoción no encontrado" });
     }
 
@@ -272,6 +273,8 @@ const registerTrial = async (req, res) => {
 
     const now = new Date();
     const trialExpiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const influencerReferral = seller.influencer === true;
+    const assignedSeller = influencerReferral ? await nextLeadSeller() : null;
 
     const user = await createUserWithUniqueSlug({
       username: cleanUsername,
@@ -284,6 +287,8 @@ const registerTrial = async (req, res) => {
       subscription: "pro",
       subscriptionExpiresAt: trialExpiresAt,
       sellerID: seller._id,
+      influencerReferral,
+      assignedSeller,
       trialActive: true,
     });
 
@@ -332,6 +337,7 @@ const loginUser = async (req, res) => {
       code: seller.code,
       admin: seller.admin,
       role: "seller",
+      influencer: seller.influencer === true,
       profilePicture: seller.profilePicture,
       token: generateAuthToken(seller._id, "seller"),
     });

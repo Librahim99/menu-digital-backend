@@ -14,6 +14,7 @@ const {
 } = require("../controllers/paymentController");
 const PendingRegistration = require("../models/PendingRegistration");
 const PaymentCheckout = require("../models/PaymentCheckout");
+const { attributionForUser } = require("../services/sellerSaleService");
 const User = require("../models/User");
 const { PLAN_ORDER } = require("../config/plans");
 const {
@@ -180,6 +181,7 @@ router.post("/crear-preferencia", protect, async (req, res) => {
       currency: PAYMENT_CURRENCY,
       sourcePlan: req.user.subscription,
       sourceExpiresAt: req.user.subscriptionExpiresAt || null,
+      attribution: attributionForUser(req.user),
       preferenceStartsAt,
       preferenceExpiresAt,
     });
@@ -574,6 +576,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
       : await PaymentCheckout.create({
           operation: "registration",
           pendingRegistrationID: pending._id,
+          attribution: attributionForUser(pending),
           planId,
           months: monthsNum,
           expectedAmount: unitPrice,

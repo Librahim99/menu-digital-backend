@@ -9,6 +9,7 @@ const { PaymentRefund } = require("mercadopago");
 
 const User = require("../src/models/User");
 const PaymentTransaction = require("../src/models/PaymentTransaction");
+const SellerSale = require("../src/models/SellerSale");
 const PendingServiceAction = require("../src/models/PendingServiceAction");
 const CrmProfile = require("../src/models/CrmProfile");
 const mailer = require("../src/utils/mailer");
@@ -337,6 +338,12 @@ test("POST /arrepentimiento/confirmar: reembolsa una sola vez aunque se confirme
     amount: 5000,
     status: "approved",
     refunded: false,
+    entitlementStatus: "applied",
+    saleAttribution: {
+      sellerID: null, influencerID: "influencer-1", influencerRate: 0.15,
+      influencerCommissionAmount: 750, plan: "pro", months: 1,
+      amount: 5000, subscriptionDate: new Date(),
+    },
     paymentApprovedAt: new Date(),
   };
   // El re-chequeo en confirmar busca refunded:{$ne:true} — una vez que el
@@ -354,6 +361,8 @@ test("POST /arrepentimiento/confirmar: reembolsa una sola vez aunque se confirme
     select: async () => ({ contactInfo: { mail: "dueno-real@example.com" } }),
   }));
   t.mock.method(User, "findByIdAndUpdate", async () => {});
+  const sales = [];
+  t.mock.method(SellerSale, "findOneAndUpdate", async (filter, update) => { sales.push({ filter, update }); });
 
   let refundCalls = 0;
   t.mock.method(PaymentRefund.prototype, "create", async (_body, options) => {
@@ -375,6 +384,9 @@ test("POST /arrepentimiento/confirmar: reembolsa una sola vez aunque se confirme
   await getHandler("/arrepentimiento/confirmar")({ body: { requestId, code: capturedCode } }, primeraConfirmacion);
   assert.equal(primeraConfirmacion.statusCode, 200);
   assert.equal(refundCalls, 1);
+  assert.equal(sales.length, 1);
+  assert.deepEqual(sales[0].update.$set, { paymentStatus: "refunded", refundedAmount: 5000 });
+  assert.equal(sales[0].update.$setOnInsert.influencerCommissionAmount, 750);
 
   const segundaConfirmacion = createResponse();
   await getHandler("/arrepentimiento/confirmar")({ body: { requestId, code: capturedCode } }, segundaConfirmacion);

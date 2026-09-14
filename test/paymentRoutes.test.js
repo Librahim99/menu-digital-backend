@@ -247,6 +247,30 @@ test("/crear-preferencia usa discountPrice cuando el usuario tiene sellerID (có
   }
 });
 
+test("el checkout congela influencer y vendedor asignado desde el servidor, sin aceptar atribución del body", async (t) => {
+  silencePaymentLogs(t);
+  let saved;
+  t.mock.method(Plan, "findOne", async ({ name }) => new Plan({ ...catalog.INITIAL_PLANS.find((plan) => plan.name === name), __v: 0 }));
+  t.mock.method(PaymentCheckout, "create", async (snapshot) => { saved = snapshot; return { ...snapshot, _id: AUTH_CHECKOUT_ID }; });
+  t.mock.method(PaymentCheckout, "findByIdAndUpdate", async () => ({ _id: AUTH_CHECKOUT_ID }));
+  t.mock.method(RestClient, "fetch", async () => ({ id: "preference", init_point: "https://mercadopago.test/preference" }));
+  const user = { _id: "owner", subscription: "free", sellerID: "64f000000000000000000222", influencerReferral: true, assignedSeller: "64f000000000000000000111" };
+  const res = createResponse();
+  await getHandler("/crear-preferencia")({ user, body: { planId: "basic", months: 3, planVersion: 0, attribution: { sellerID: "attacker", influencerRate: 1 } } }, res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(saved.attribution, { sellerID: user.assignedSeller, influencerID: user.sellerID, influencerRate: 0.15 });
+  user.assignedSeller = null;
+  await getHandler("/crear-preferencia")({ user, body: { planId: "basic", months: 3, planVersion: 0 } }, createResponse());
+  assert.equal(saved.attribution.sellerID, null);
+  assert.equal(saved.attribution.influencerID, user.sellerID);
+});
+
+test("la atribución de checkout es inmutable y un checkout legacy no recibe valores por default", () => {
+  assert.equal(PaymentCheckout.schema.path("attribution").options.immutable, true);
+  const legacy = PaymentCheckout.hydrate({ _id: "64f000000000000000000123", operation: "upgrade" });
+  assert.equal(legacy.attribution, undefined);
+});
+
 test(
   "/crear-preferencia-registro rechaza sellerCode — un código de promoción ahora da la prueba gratis, no un pago con descuento",
   { concurrency: false },

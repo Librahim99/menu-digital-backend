@@ -5,7 +5,7 @@ const { handleError } = require("../utils/handleError");
 // de facturación y el CRM de cada vendedor viven en su propio panel
 // (/sellers), no en este listado — ver sellerPanelController/crmController.
 const SELLER_FIELDS =
-  "name mail number startDate dni code active admin profilePicture createdAt updatedAt";
+  "name mail number startDate dni code active admin influencer receivesLeads profilePicture createdAt updatedAt";
 
 const sellerToDTO = (seller) => ({
   _id: seller._id,
@@ -17,6 +17,8 @@ const sellerToDTO = (seller) => ({
   code: seller.code,
   active: seller.active,
   admin: seller.admin,
+  influencer: seller.influencer === true,
+  receivesLeads: seller.receivesLeads === true,
   profilePicture: seller.profilePicture,
   createdAt: seller.createdAt,
   updatedAt: seller.updatedAt,
@@ -61,7 +63,13 @@ const getSellerById = async (req, res) => {
 // Crear seller
 const createSeller = async (req, res) => {
   try {
-    const { name, password, dni, mail, number, startDate, active, admin } = req.body;
+    const { name, password, dni, mail, number, startDate, active, admin, influencer, receivesLeads } = req.body;
+    if ([influencer, receivesLeads].some(value => value !== undefined && typeof value !== "boolean")) {
+      return res.status(400).json({ message: "Influencer y recepción de leads deben ser booleanos" });
+    }
+    if (influencer && receivesLeads) {
+      return res.status(400).json({ message: "Un influencer no puede recibir leads para seguimiento" });
+    }
     let response = ""
     // Validar datos obligatorios
     if (!name || !dni) {
@@ -127,6 +135,8 @@ const createSeller = async (req, res) => {
       code,
       admin: typeof admin === "boolean" ? admin : false,
       active: typeof active === "boolean" ? active : true,
+      influencer: influencer === true,
+      receivesLeads: receivesLeads === true,
     });
 
     res.status(201).json({
@@ -148,7 +158,10 @@ const createSeller = async (req, res) => {
 // Modificar seller
 const updateSeller = async (req, res) => {
   try {
-    const { name, dni, mail, number, startDate, active, admin } = req.body;
+    const { name, dni, mail, number, startDate, active, admin, influencer, receivesLeads } = req.body;
+    if ([influencer, receivesLeads].some(value => value !== undefined && typeof value !== "boolean")) {
+      return res.status(400).json({ message: "Influencer y recepción de leads deben ser booleanos" });
+    }
 
     const seller = await Seller.findById(req.params.id);
 
@@ -156,6 +169,10 @@ const updateSeller = async (req, res) => {
       return res.status(404).json({
         message: "Vendedor no encontrado",
       });
+    }
+
+    if ((influencer ?? seller.influencer) && (receivesLeads ?? seller.receivesLeads)) {
+      return res.status(400).json({ message: "Un influencer no puede recibir leads para seguimiento" });
     }
 
     // Verificar nombre duplicado
@@ -209,6 +226,8 @@ const updateSeller = async (req, res) => {
     if (typeof admin === "boolean" && admin !== seller.admin) {
       seller.admin = admin;
     }
+    if (typeof influencer === "boolean") seller.influencer = influencer;
+    if (typeof receivesLeads === "boolean") seller.receivesLeads = receivesLeads;
 
     await seller.save();
 

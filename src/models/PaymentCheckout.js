@@ -69,6 +69,17 @@ const paymentCheckoutSchema = new mongoose.Schema(
       },
     },
     sourceExpiresAt: { type: Date, default: null, immutable: true },
+    // Ausente en legacy; null dentro del snapshot nuevo significa sin
+    // beneficiario y nunca debe sustituirse por la asignación actual.
+    attribution: {
+      type: new mongoose.Schema({
+        sellerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", default: null, immutable: true },
+        influencerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", default: null, immutable: true },
+        influencerRate: { type: Number, enum: [0, 0.15], required: true, immutable: true },
+      }, { _id: false }),
+      default: undefined,
+      immutable: true,
+    },
     preferenceStartsAt: {
       type: Date,
       required: function () {

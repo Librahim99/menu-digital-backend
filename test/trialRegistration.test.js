@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const User = require("../src/models/User");
 const Seller = require("../src/models/Seller");
+const LeadAssignmentState = require("../src/models/LeadAssignmentState");
 const Plan = require("../src/models/Plan");
 const PendingServiceAction = require("../src/models/PendingServiceAction");
 const mailer = require("../src/utils/mailer");
@@ -174,6 +175,8 @@ test("registerTrial crea la cuenta con Pro por 7 días, sellerID del código y d
 
   assert.equal(createdData.subscription, "pro");
   assert.equal(createdData.sellerID, seller._id);
+  assert.equal(createdData.influencerReferral, false);
+  assert.equal(createdData.assignedSeller, null);
   assert.equal(createdData.trialActive, true);
   assert.equal(createdData.emailVerified, false);
   assert.equal(createdData.contactInfo.mail, "trial@example.com");
@@ -182,4 +185,48 @@ test("registerTrial crea la cuenta con Pro por 7 días, sellerID del código y d
   const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
   assert.ok(expiresAtMs >= beforeCreation + sevenDaysMs);
   assert.ok(expiresAtMs <= afterCreation + sevenDaysMs);
+});
+
+for (const receiver of ["64f000000000000000000888", null]) {
+  test(`registerTrial conserva origen influencer y receptor ${receiver || "pendiente"}`, async (t) => {
+    mockEmailVerificationCode(t);
+    mockPlanCatalog(t);
+    const previousSecret = process.env.JWT_SECRET;
+    process.env.JWT_SECRET = "jwt-secret-de-prueba";
+    t.after(() => {
+      if (previousSecret === undefined) delete process.env.JWT_SECRET;
+      else process.env.JWT_SECRET = previousSecret;
+    });
+    t.mock.method(Seller, "findOne", async () => ({ ...seller, active: true, influencer: true }));
+    t.mock.method(Seller, "find", filter => {
+      assert.deepEqual(filter, { active: true, receivesLeads: true, influencer: { $ne: true } });
+      return { select() { return this; }, sort() { return this; }, async lean() { return receiver ? [{ _id: receiver }] : []; } };
+    });
+    t.mock.method(LeadAssignmentState, "findOneAndUpdate", async () => {
+      assert.ok(receiver, "sin receptores no debe consumir un turno");
+      return { sequence: 1 };
+    });
+    t.mock.method(User, "findOne", async () => null);
+    t.mock.method(User, "exists", async () => false);
+    let created;
+    t.mock.method(User, "create", async data => {
+      created = data;
+      return { _id: "64f000000000000000000abc", ...data };
+    });
+    const res = response();
+    // Los campos de atribución enviados por el navegador no son confiables.
+    await registerTrial({ body: baseBody({ assignedSeller: "otro", influencerReferral: false }) }, res);
+    assert.equal(res.statusCode, 201);
+    assert.equal(created.sellerID, seller._id);
+    assert.equal(created.influencerReferral, true);
+    assert.equal(created.assignedSeller, receiver);
+  });
+}
+
+test("registerTrial no acepta códigos desactivados", async (t) => {
+  t.mock.method(Seller, "findOne", async () => ({ ...seller, active: false }));
+  t.mock.method(User, "create", () => assert.fail("no debe crear una cuenta"));
+  const res = response();
+  await registerTrial({ body: baseBody() }, res);
+  assert.equal(res.statusCode, 400);
 });

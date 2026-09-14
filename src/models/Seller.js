@@ -49,6 +49,15 @@ const SellerSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    influencer: { type: Boolean, default: false },
+    receivesLeads: {
+      type: Boolean,
+      default: false,
+      validate: {
+        validator: function (value) { return !value || !this.influencer; },
+        message: "Un influencer no puede recibir leads para seguimiento",
+      },
+    },
     startDate: {
       type: Date,
       default: null,
