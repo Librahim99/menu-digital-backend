@@ -532,13 +532,19 @@ const getAuthUserSummary = async (req, res) => {
     );
     if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
 
-    // Contar items y categorías del usuario
-    const menus = await Menu.find({ userID: user._id });
-    const categorias = menus.filter(m => m.section === false);
-    const menuIDs = categorias.map(m => m._id);
-    const itemCount = await Item.countDocuments({ menuID: { $in: menuIDs }, hidden: false });
-
-    const plan = await getPlanForUser(user);
+    // Contar items y categorías del usuario. getPlanForUser solo depende del
+    // user ya leído (no de los menús), así que corre en paralelo con esa
+    // consulta en vez de sumar su propio round-trip a Mongo atrás del resto.
+    const [{ categorias, itemCount }, plan] = await Promise.all([
+      (async () => {
+        const menus = await Menu.find({ userID: user._id });
+        const categorias = menus.filter(m => m.section === false);
+        const menuIDs = categorias.map(m => m._id);
+        const itemCount = await Item.countDocuments({ menuID: { $in: menuIDs }, hidden: false });
+        return { categorias, itemCount };
+      })(),
+      getPlanForUser(user),
+    ]);
 
     res.json({
       slug: user.slug,
