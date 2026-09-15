@@ -103,8 +103,6 @@ const UserSchema = new mongoose.Schema(
     // del vendedor. Registros viejos quedan en null (no cuentan como nuevos,
     // sin necesidad de backfill; mismo criterio lazy que emailVerified).
     assignedSellerAt: { type: Date, default: null },
-    // Se reclama al aplicar el primer pago dentro de la transacción de acreditación.
-    influencerFirstPaymentID: { type: String, default: null },
 
     // Marca histórica: la cuenta se originó vía prueba gratuita de 7 días
     // (código de promoción). No se resetea al vencer el trial por tiempo —

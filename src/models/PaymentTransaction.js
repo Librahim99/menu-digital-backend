@@ -65,9 +65,6 @@ const paymentTransactionSchema = new mongoose.Schema(
     saleAttribution: {
       type: new mongoose.Schema({
         sellerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", default: null },
-        influencerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", default: null },
-        influencerRate: { type: Number, enum: [0, 0.15], required: true },
-        influencerCommissionAmount: { type: Number, min: 0, required: true },
         plan: { type: String, enum: ["basic", "pro"], required: true },
         months: { type: Number, enum: [1, 3, 6, 12], required: true },
         amount: { type: Number, min: 0, required: true },

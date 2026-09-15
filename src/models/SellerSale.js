@@ -1,10 +1,12 @@
 const mongoose = require("mongoose");
 
 // Snapshot inmutable de una venta atribuida a un vendedor, tomado en el
-// momento en que el pago se aplica. sellerID es el vendedor que comisiona;
-// influencerID conserva el origen del lead. Ambos vienen del checkout y no
-// migran cuando se reasigna al cliente. La comisión del influencer queda
-// congelada; la tabla de comisión normal sigue resuelta desde su panel.
+// momento en que el pago se aplica. sellerID es siempre el mismo sellerID que
+// tiene el User en ese momento (el vendedor normal, o el vendedor influencer
+// cuando el lead vino referido) — viene del checkout y no migra cuando se
+// reasigna el seguimiento del cliente (assignedSeller) a otro vendedor. La
+// comisión, tanto de vendedores normales como de influencers, nunca se guarda
+// acá: se recalcula siempre a partir de `amount` desde su propio panel.
 const sellerSaleSchema = new mongoose.Schema(
   {
     // Clave natural del pago en MercadoPago (igual que PaymentTransaction).
@@ -13,9 +15,6 @@ const sellerSaleSchema = new mongoose.Schema(
     paymentID: { type: String, required: true, unique: true, trim: true },
     userID: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     sellerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", default: null },
-    influencerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", default: null },
-    influencerRate: { type: Number, enum: [0, 0.15], default: 0 },
-    influencerCommissionAmount: { type: Number, min: 0, default: 0 },
     plan: { type: String, enum: ["basic", "pro"], required: true },
     amount: { type: Number, required: true, min: 0 },
     months: { type: Number, enum: [1, 3, 6, 12], required: true },
@@ -29,6 +28,5 @@ const sellerSaleSchema = new mongoose.Schema(
 );
 
 sellerSaleSchema.index({ sellerID: 1, subscriptionDate: -1 });
-sellerSaleSchema.index({ influencerID: 1, subscriptionDate: -1 });
 
 module.exports = mongoose.model("SellerSale", sellerSaleSchema);

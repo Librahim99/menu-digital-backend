@@ -1,22 +1,15 @@
 const SellerSale = require("../models/SellerSale");
 
-const INFLUENCER_RATE = 0.15;
-const roundMoney = (amount) => Math.round(amount * 100) / 100;
+// El sellerID que comisiona por una venta es siempre el mismo sellerID que
+// tiene el User en ese momento (el vendedor normal, o el vendedor influencer
+// cuando el lead vino referido) — assignedSeller es solo el responsable de
+// seguimiento en el CRM y nunca participa de la atribución de una venta.
+const attributionForUser = (user) => ({ sellerID: user?.sellerID || null });
 
-// El origen del lead se congela al registrarlo; cambiar el rol de Seller no
-// debe convertir clientes históricos en referidos de influencers.
-const attributionForUser = (user) => user?.influencerReferral === true
-  ? { sellerID: user.assignedSeller || null, influencerID: user.sellerID || null, influencerRate: INFLUENCER_RATE }
-  : { sellerID: user?.sellerID || null, influencerID: null, influencerRate: 0 };
-
-const createSaleSnapshot = ({ attribution, plan, months, amount, subscriptionDate, firstInfluencerPurchase = false }) => {
-  if (!attribution?.sellerID && !attribution?.influencerID) return undefined;
-  const influencerRate = attribution.influencerID ? attribution.influencerRate : 0;
+const createSaleSnapshot = ({ attribution, plan, months, amount, subscriptionDate }) => {
+  if (!attribution?.sellerID) return undefined;
   return {
-    sellerID: attribution.sellerID || null,
-    influencerID: attribution.influencerID || null,
-    influencerRate,
-    influencerCommissionAmount: firstInfluencerPurchase ? roundMoney(amount * influencerRate) : 0,
+    sellerID: attribution.sellerID,
     plan,
     months,
     amount,
@@ -44,4 +37,4 @@ const recordSaleFromTransaction = async (transaction) => {
   );
 };
 
-module.exports = { INFLUENCER_RATE, attributionForUser, createSaleSnapshot, recordSaleFromTransaction };
+module.exports = { attributionForUser, createSaleSnapshot, recordSaleFromTransaction };

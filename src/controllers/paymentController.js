@@ -262,7 +262,7 @@ const applyExistingUserEntitlement = async ({
 
   let userQuery = User.findById(associatedID);
   if (session) userQuery = userQuery.session(session);
-  const previousUser = await userQuery.select("subscription subscriptionExpiresAt sellerID influencerReferral assignedSeller influencerFirstPaymentID");
+  const previousUser = await userQuery.select("subscription subscriptionExpiresAt sellerID");
   if (!previousUser) {
     await markPaymentNotApplied({
       paymentID,
@@ -360,15 +360,12 @@ const applyExistingUserEntitlement = async ({
   ) || subscriptionExpiresAt;
 
   const saleSource = attribution || attributionForUser(previousUser);
-  const firstInfluencerPurchase = Boolean(saleSource.influencerID)
-    && (!previousUser.influencerFirstPaymentID || previousUser.influencerFirstPaymentID === paymentID);
   const saleAttribution = lockedTransaction.saleAttribution || createSaleSnapshot({
     attribution: saleSource,
     plan: mappedPlan,
     months,
     amount: lockedTransaction.amount,
     subscriptionDate: approvedAt,
-    firstInfluencerPurchase,
   });
   const updatedUser = await User.findByIdAndUpdate(
     associatedID,
@@ -378,7 +375,6 @@ const applyExistingUserEntitlement = async ({
       // Pagó un plan real: si venía de la prueba gratis, deja de contar como
       // "en trial" en CRM/admin. No-op para el resto de usuarios.
       trialActive: false,
-      ...(firstInfluencerPurchase && { influencerFirstPaymentID: paymentID }),
     },
     withSession({ new: true, runValidators: true }, session)
   );

@@ -74,8 +74,6 @@ const paymentCheckoutSchema = new mongoose.Schema(
     attribution: {
       type: new mongoose.Schema({
         sellerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", default: null, immutable: true },
-        influencerID: { type: mongoose.Schema.Types.ObjectId, ref: "Seller", default: null, immutable: true },
-        influencerRate: { type: Number, enum: [0, 0.15], required: true, immutable: true },
       }, { _id: false }),
       default: undefined,
       immutable: true,

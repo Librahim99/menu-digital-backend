@@ -340,8 +340,7 @@ test("POST /arrepentimiento/confirmar: reembolsa una sola vez aunque se confirme
     refunded: false,
     entitlementStatus: "applied",
     saleAttribution: {
-      sellerID: null, influencerID: "influencer-1", influencerRate: 0.15,
-      influencerCommissionAmount: 750, plan: "pro", months: 1,
+      sellerID: "influencer-1", plan: "pro", months: 1,
       amount: 5000, subscriptionDate: new Date(),
     },
     paymentApprovedAt: new Date(),
@@ -386,7 +385,7 @@ test("POST /arrepentimiento/confirmar: reembolsa una sola vez aunque se confirme
   assert.equal(refundCalls, 1);
   assert.equal(sales.length, 1);
   assert.deepEqual(sales[0].update.$set, { paymentStatus: "refunded", refundedAmount: 5000 });
-  assert.equal(sales[0].update.$setOnInsert.influencerCommissionAmount, 750);
+  assert.equal(sales[0].update.$setOnInsert.sellerID, "influencer-1");
 
   const segundaConfirmacion = createResponse();
   await getHandler("/arrepentimiento/confirmar")({ body: { requestId, code: capturedCode } }, segundaConfirmacion);

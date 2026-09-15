@@ -583,9 +583,6 @@ test("upgrade aprobado con sellerID registra la venta del vendedor", async (t) =
       $setOnInsert: {
         userID: USER_ID,
         sellerID: "64f000000000000000000321",
-        influencerID: null,
-        influencerRate: 0,
-        influencerCommissionAmount: 0,
         plan: "basic",
         months: 3,
         amount: 5400,
@@ -596,15 +593,14 @@ test("upgrade aprobado con sellerID registra la venta del vendedor", async (t) =
   });
 });
 
-test("influencer: primera compra usa 15% del importe pagado y congela asignación del checkout", async (t) => {
+test("influencer: la venta usa el sellerID del influencer congelado en el checkout, no assignedSeller", async (t) => {
   const context = mockCommon(t, approvedPayment({
     metadata: { plan_id: "basic", months: 3, type: "upgrade", checkout_id: CHECKOUT_ID },
   }));
-  mockCheckout(t, { attribution: {
-    sellerID: "64f000000000000000000111",
-    influencerID: "64f000000000000000000222",
-    influencerRate: 0.15,
-  } });
+  // El checkout congela sellerID = el sellerID del user en ese momento (el
+  // influencer, cuando el lead vino referido) — assignedSeller (el vendedor
+  // de seguimiento en el CRM) nunca participa de esta atribución.
+  mockCheckout(t, { attribution: { sellerID: "64f000000000000000000222" } });
   const updates = [];
   const user = mockExistingUser(t, {
     subscription: "free", subscriptionExpiresAt: null,
@@ -615,11 +611,8 @@ test("influencer: primera compra usa 15% del importe pagado y congela asignació
   await mpWebhook(request(), res);
   assert.equal(res.statusCode, 200);
   const sale = context.sellerSaleWrites[0].update.$setOnInsert;
-  assert.equal(sale.sellerID, "64f000000000000000000111");
-  assert.equal(sale.influencerID, user.sellerID);
+  assert.equal(sale.sellerID, user.sellerID);
   assert.equal(sale.amount, 5400);
-  assert.equal(sale.influencerCommissionAmount, 810);
-  assert.equal(user.influencerFirstPaymentID, "payment-123");
   const { userID, ...snapshot } = sale;
   assert.equal(userID, USER_ID);
   assert.deepEqual(context.getTransaction().saleAttribution, snapshot);
@@ -628,19 +621,7 @@ test("influencer: primera compra usa 15% del importe pagado y congela asignació
   assert.deepEqual(context.sellerSaleWrites[1], context.sellerSaleWrites[0]);
 });
 
-test("influencer: sin receptor en checkout conserva sellerID null aunque se asigne antes del pago", async (t) => {
-  const context = mockCommon(t, approvedPayment({
-    metadata: { plan_id: "basic", months: 3, type: "upgrade", checkout_id: CHECKOUT_ID },
-  }));
-  mockCheckout(t, { attribution: { sellerID: null, influencerID: "64f000000000000000000222", influencerRate: 0.15 } });
-  mockExistingUser(t, { subscription: "free", sellerID: "64f000000000000000000222", influencerReferral: true, assignedSeller: "64f000000000000000000333" }, []);
-  await mpWebhook(request(), response());
-  const sale = context.sellerSaleWrites[0].update.$setOnInsert;
-  assert.equal(sale.sellerID, null);
-  assert.equal(sale.influencerCommissionAmount, 810);
-});
-
-test("influencer: una renovación posterior no vuelve a generar comisión", async (t) => {
+test("influencer: cada pago (primero y renovaciones) se registra en SellerSale atribuido al influencer; cuál cuenta para comisión lo decide el panel, no el webhook", async (t) => {
   const context = mockCommon(t, (paymentID) => approvedPayment({ id: paymentID }));
   const updates = [];
   mockExistingUser(t, {
@@ -649,12 +630,12 @@ test("influencer: una renovación posterior no vuelve a generar comisión", asyn
   }, updates);
   await mpWebhook(request("first"), response());
   await mpWebhook(request("renewal"), response());
-  assert.equal(context.getTransaction("first").saleAttribution.influencerCommissionAmount, 810);
-  assert.equal(context.getTransaction("renewal").saleAttribution.influencerCommissionAmount, 0);
+  assert.equal(context.getTransaction("first").saleAttribution.sellerID, "64f000000000000000000222");
+  assert.equal(context.getTransaction("renewal").saleAttribution.sellerID, "64f000000000000000000222");
   assert.equal(updates.length, 2);
 });
 
-test("influencer: dos acreditaciones serializadas del mismo cliente solo reclaman una comisión", async (t) => {
+test("influencer: dos acreditaciones serializadas del mismo cliente registran ambas ventas atribuidas al influencer", async (t) => {
   const context = mockCommon(t, (paymentID) => approvedPayment({ id: paymentID }));
   let queue = Promise.resolve();
   t.mock.method(mongoose.connection, "transaction", (work) => {
@@ -662,12 +643,10 @@ test("influencer: dos acreditaciones serializadas del mismo cliente solo reclama
     queue = result.catch(() => {});
     return result;
   });
-  const user = mockExistingUser(t, { subscription: "free", sellerID: "64f000000000000000000222", influencerReferral: true }, []);
+  mockExistingUser(t, { subscription: "free", sellerID: "64f000000000000000000222", influencerReferral: true }, []);
   await Promise.all([mpWebhook(request("first"), response()), mpWebhook(request("second"), response())]);
-  const amounts = ["first", "second"].map((id) => context.getTransaction(id).saleAttribution.influencerCommissionAmount);
-  assert.equal(amounts.filter((amount) => amount === 810).length, 1);
-  assert.equal(amounts.filter((amount) => amount === 0).length, 1);
-  assert.ok(["first", "second"].includes(user.influencerFirstPaymentID));
+  const sellerIDs = ["first", "second"].map((id) => context.getTransaction(id).saleAttribution.sellerID);
+  assert.deepEqual(sellerIDs, ["64f000000000000000000222", "64f000000000000000000222"]);
 });
 
 test("influencer: fallo SellerSale devuelve 500 y reintento repara sin volver a aplicar el plan", async (t) => {
@@ -691,29 +670,29 @@ test("influencer: fallo SellerSale devuelve 500 y reintento repara sin volver a 
   assert.equal(retry.statusCode, 200);
   assert.equal(updates.length, 1);
   assert.equal(attempts, 2);
-  assert.equal(recovered.influencerID, "64f000000000000000000222");
-  assert.equal(recovered.sellerID, null);
-  assert.equal(recovered.influencerCommissionAmount, 810);
+  // El reintento reutiliza el snapshot ya congelado en la transacción, no
+  // recalcula con el sellerID nuevo que el user tiene ahora.
+  assert.equal(recovered.sellerID, "64f000000000000000000222");
 });
 
-test("influencer: reembolso actualiza estado financiero y conserva comisión bruta y primer pago", async (t) => {
+test("influencer: reembolso actualiza estado financiero y conserva la atribución original", async (t) => {
   let payment = approvedPayment();
   const context = mockCommon(t, () => payment);
   const updates = [];
-  const user = mockExistingUser(t, { subscription: "free", sellerID: "64f000000000000000000222", influencerReferral: true }, updates);
+  mockExistingUser(t, { subscription: "free", sellerID: "64f000000000000000000222", influencerReferral: true }, updates);
   await mpWebhook(request(), response());
   payment = approvedPayment({ status: "refunded", transaction_amount_refunded: 5400 });
   await mpWebhook(request(), response());
   const write = context.sellerSaleWrites.at(-1).update;
   assert.deepEqual(write.$set, { refundedAmount: 5400, paymentStatus: "refunded" });
-  assert.equal(write.$setOnInsert.influencerCommissionAmount, 810);
-  assert.equal(user.influencerFirstPaymentID, "payment-123");
+  assert.equal(write.$setOnInsert.sellerID, "64f000000000000000000222");
+  assert.equal(write.$setOnInsert.amount, 5400);
   assert.equal(updates.length, 1);
 });
 
 test("un snapshot sin atribución no toma un vendedor añadido después del checkout", async (t) => {
   const context = mockCommon(t, approvedPayment({ metadata: { plan_id: "basic", months: 3, type: "upgrade", checkout_id: CHECKOUT_ID } }));
-  mockCheckout(t, { attribution: { sellerID: null, influencerID: null, influencerRate: 0 } });
+  mockCheckout(t, { attribution: { sellerID: null } });
   mockExistingUser(t, { subscription: "free", sellerID: "64f000000000000000000222", influencerReferral: true }, []);
   await mpWebhook(request(), response());
   assert.equal(context.sellerSaleWrites.length, 0);
@@ -1781,9 +1760,6 @@ test("un alta con usuario ya existente y sellerID registra la venta del vendedor
       $setOnInsert: {
         userID: USER_ID,
         sellerID: pending.sellerID,
-        influencerID: null,
-        influencerRate: 0,
-        influencerCommissionAmount: 0,
         plan: "basic",
         months: 3,
         amount: 5400,
@@ -2157,9 +2133,6 @@ test("un alta con sellerID crea el usuario atribuido al vendedor, sin bono de d�
       $setOnInsert: {
         userID: NEW_USER_ID,
         sellerID: pending.sellerID,
-        influencerID: null,
-        influencerRate: 0,
-        influencerCommissionAmount: 0,
         plan: "pro",
         months: 12,
         amount: 5400,
@@ -2207,9 +2180,6 @@ test("un alta ya completada con sellerID registra la venta del vendedor al recup
       $setOnInsert: {
         userID: NEW_USER_ID,
         sellerID: pending.sellerID,
-        influencerID: null,
-        influencerRate: 0,
-        influencerCommissionAmount: 0,
         plan: "basic",
         months: 3,
         amount: 5400,
