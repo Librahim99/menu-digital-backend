@@ -98,6 +98,11 @@ const UserSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    // Cuándo se fijó assignedSeller (reparto automático al alta o reasignación
+    // manual desde el CRM) — permite detectar "asignación nueva" para alertas
+    // del vendedor. Registros viejos quedan en null (no cuentan como nuevos,
+    // sin necesidad de backfill; mismo criterio lazy que emailVerified).
+    assignedSellerAt: { type: Date, default: null },
     // Se reclama al aplicar el primer pago dentro de la transacción de acreditación.
     influencerFirstPaymentID: { type: String, default: null },
 

@@ -177,6 +177,7 @@ test("registerTrial crea la cuenta con Pro por 7 días, sellerID del código y d
   assert.equal(createdData.sellerID, seller._id);
   assert.equal(createdData.influencerReferral, false);
   assert.equal(createdData.assignedSeller, null);
+  assert.equal(createdData.assignedSellerAt, null);
   assert.equal(createdData.trialActive, true);
   assert.equal(createdData.emailVerified, false);
   assert.equal(createdData.contactInfo.mail, "trial@example.com");
@@ -220,6 +221,10 @@ for (const receiver of ["64f000000000000000000888", null]) {
     assert.equal(created.sellerID, seller._id);
     assert.equal(created.influencerReferral, true);
     assert.equal(created.assignedSeller, receiver);
+    // Se estampa la fecha de asignación solo cuando hay a quién asignarle
+    // (mismo criterio que la reasignación manual desde el CRM).
+    if (receiver) assert.ok(created.assignedSellerAt instanceof Date);
+    else assert.equal(created.assignedSellerAt, null);
   });
 }
 

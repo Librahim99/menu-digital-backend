@@ -9,7 +9,7 @@ const CrmProfile = require("../src/models/CrmProfile");
 const PaymentTransaction = require("../src/models/PaymentTransaction");
 const PageView = require("../src/models/PageView");
 const {
-  listClients, getClient, updateProfile, addNote, deleteNote, getOverdueCount,
+  listClients, getClient, updateProfile, addNote, deleteNote, getOverdueCount, markAlertsSeen,
 } = require("../src/controllers/crmController");
 const crmRouter = require("../src/routes/crmRoutes");
 
@@ -118,19 +118,58 @@ for (const [name, handler, successStatus, body] of [
   });
 }
 
-test("CRM overdue-count incluye seguimientos de directos y asignados, sin contar ajenos", async (t) => {
+test("CRM overdue-count incluye seguimientos de directos y asignados, sin contar ajenos, y suma newAssignments desde la última vez visto", async (t) => {
   mockClientLookup(t);
   t.mock.method(CrmProfile, "countDocuments", async (filter) => {
     assert.deepEqual(filter.userID.$in, clients.slice(0, 2).map((row) => row._id));
     return filter.userID.$in.length;
   });
+  const seenAt = new Date("2026-09-01T00:00:00.000Z");
+  t.mock.method(Seller, "findById", (id) => {
+    assert.equal(id, seller._id);
+    return { select: async () => ({ crmAlertsSeenAt: seenAt }) };
+  });
+  t.mock.method(User, "countDocuments", async (filter) => {
+    assert.deepEqual(filter, { assignedSeller: seller._id, assignedSellerAt: { $gt: seenAt } });
+    return 3;
+  });
   const res = response();
   await getOverdueCount({ seller }, res);
-  assert.deepEqual(res.body, { count: 2 });
+  assert.deepEqual(res.body, { count: 2, newAssignments: 3 });
 });
 
-test("CRM asignación: solo admin asigna a un vendedor habilitado y conserva el influencer de origen", async (t) => {
+test("CRM overdue-count para admin no calcula newAssignments (no tiene bandeja personal)", async (t) => {
   mockClientLookup(t);
+  t.mock.method(CrmProfile, "countDocuments", async () => 5);
+  t.mock.method(Seller, "findById", () => assert.fail("Un admin no debería consultar crmAlertsSeenAt"));
+  t.mock.method(User, "countDocuments", () => assert.fail("Un admin no debería contar newAssignments"));
+  const res = response();
+  await getOverdueCount({ user: { admin: true } }, res);
+  assert.deepEqual(res.body, { count: 5, newAssignments: 0 });
+});
+
+test("CRM alertas: un vendedor marca sus alertas como vistas; un admin no puede", async (t) => {
+  const updatedAt = new Date("2026-09-15T12:30:00.000Z");
+  t.mock.timers.enable({ apis: ["Date"], now: updatedAt });
+  t.mock.method(Seller, "findByIdAndUpdate", async (id, update) => {
+    assert.equal(id, seller._id);
+    assert.deepEqual(update, { crmAlertsSeenAt: updatedAt });
+    return { ...seller, crmAlertsSeenAt: updatedAt };
+  });
+  const res = response();
+  await markAlertsSeen({ seller }, res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { ok: true });
+
+  const forbidden = response();
+  await markAlertsSeen({ user: { admin: true } }, forbidden);
+  assert.equal(forbidden.statusCode, 403);
+});
+
+test("CRM asignación: solo admin asigna a un vendedor habilitado, conserva el influencer de origen y estampa assignedSellerAt", async (t) => {
+  mockClientLookup(t);
+  const assignmentInstant = new Date("2026-09-15T12:00:00.000Z");
+  t.mock.timers.enable({ apis: ["Date"], now: assignmentInstant });
   let saved;
   t.mock.method(Seller, "exists", async (filter) => {
     assert.deepEqual(filter, { _id: seller._id, active: true, influencer: { $ne: true }, receivesLeads: true });
@@ -145,14 +184,14 @@ test("CRM asignación: solo admin asigna a un vendedor habilitado y conserva el 
   const res = response();
   await updateProfile({ user: { admin: true }, params: { userID: clients[3]._id }, body: { assignedSeller: seller._id } }, res);
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(saved, { $set: { assignedSeller: seller._id } });
+  assert.deepEqual(saved, { $set: { assignedSeller: seller._id, assignedSellerAt: assignmentInstant } });
 });
 
-test("CRM asignación: admin puede dejar un referido pendiente sin cambiar el origen", async (t) => {
+test("CRM asignación: admin puede dejar un referido pendiente sin cambiar el origen, y limpia assignedSellerAt", async (t) => {
   mockClientLookup(t);
   t.mock.method(Seller, "exists", () => assert.fail("Desasignar no requiere un vendedor"));
   t.mock.method(User, "updateOne", async (_filter, update) => {
-    assert.deepEqual(update, { $set: { assignedSeller: null } });
+    assert.deepEqual(update, { $set: { assignedSeller: null, assignedSellerAt: null } });
     return { matchedCount: 1 };
   });
   t.mock.method(CrmProfile, "findOneAndUpdate", () => ({ populate: async () => ({ stage: "lead" }) }));

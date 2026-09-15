@@ -62,6 +62,14 @@ const SellerSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Marca cuándo este vendedor revisó por última vez sus alertas de CRM
+    // (seguimientos vencidos / leads nuevos asignados). Permite calcular
+    // "nuevo desde la última vez que entró" de forma real y entre
+    // dispositivos, sin depender de localStorage.
+    crmAlertsSeenAt: {
+      type: Date,
+      default: null,
+    },
   }, {
     timestamps: true, // Agrega createdAt y updatedAt automáticamente
   }

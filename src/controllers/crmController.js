@@ -95,7 +95,7 @@ const summarizeAttention = (clients) => ({
 const buildClientsWithAttention = async (req) => {
   const users = await User.find(scopedUserMatch(req, { admin: false }))
     .select(
-      "username slug subscription subscriptionExpiresAt active createdAt lastConnectionAt sellerID assignedSeller influencerReferral menu " +
+      "username slug subscription subscriptionExpiresAt active createdAt lastConnectionAt sellerID assignedSeller assignedSellerAt influencerReferral menu " +
       "trialActive contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
       "media.pictures media.backgroundPicture schedule"
     )
@@ -317,6 +317,7 @@ const buildClientsWithAttention = async (req) => {
       seller: sellerSummary(u.sellerID && sellersByID.get(u.sellerID.toString())),
       leadSource: u.influencerReferral === true ? "influencer" : (u.sellerID ? "seller" : null),
       assignedSeller: sellerSummary(u.assignedSeller && sellersByID.get(u.assignedSeller.toString())),
+      assignedSellerAt: u.assignedSellerAt || null,
       attention,
     };
   });
@@ -352,7 +353,7 @@ const getClient = async (req, res) => {
     // El detalle CRM expone un DTO acotado: no entrega el documento User
     // completo ni campos sensibles que el panel no necesita.
     const user = await User.findOne(scopedUserMatch(req, { _id: userID, admin: false })).select(
-      "username slug subscription subscriptionExpiresAt active hasDelivery createdAt trialActive sellerID assignedSeller influencerReferral " +
+      "username slug subscription subscriptionExpiresAt active hasDelivery createdAt trialActive sellerID assignedSeller assignedSellerAt influencerReferral " +
       "contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
       "media.pictures media.backgroundPicture schedule"
     );
@@ -392,6 +393,7 @@ const getClient = async (req, res) => {
         leadSource: user.influencerReferral === true ? "influencer" : (user.sellerID ? "seller" : null),
         seller: sellerSummary(user.sellerID && sellersByID.get(user.sellerID.toString())),
         assignedSeller: sellerSummary(user.assignedSeller && sellersByID.get(user.assignedSeller.toString())),
+        assignedSellerAt: user.assignedSellerAt || null,
         contactInfo: {
           businessName,
           mail: user.contactInfo?.mail || "",
@@ -471,7 +473,7 @@ const updateProfile = async (req, res) => {
       }
       const result = await User.updateOne(
         { _id: userID, admin: false, influencerReferral: true },
-        { $set: { assignedSeller } },
+        { $set: { assignedSeller, assignedSellerAt: assignedSeller ? new Date() : null } },
         { runValidators: true }
       );
       if (!result.matchedCount) return res.status(404).json({ message: "Cliente no encontrado" });
@@ -555,23 +557,52 @@ const deleteNote = async (req, res) => {
 
 // ──────────────────────────────────────────────
 // @desc    Cantidad de clientes con seguimiento vencido (nextFollowUp en el
-//          pasado). Endpoint liviano — lo consulta el sidebar del panel para
-//          el badge de alerta, sin traer la lista completa de clientes.
-// @route   GET /api/admin/crm/overdue-count
-// @access  Admin
+//          pasado) + cantidad de leads asignados a este vendedor desde la
+//          última vez que revisó sus alertas (newAssignments, solo tiene
+//          sentido para un vendedor puntual — un admin no tiene una bandeja
+//          personal, por eso siempre da 0). Endpoint liviano — lo consulta
+//          el sidebar del panel para el badge de alerta, sin traer la lista
+//          completa de clientes.
+// @route   GET /api/sellers/crm/overdue-count
+// @access  Admin o vendedor
 // ──────────────────────────────────────────────
 const getOverdueCount = async (req, res) => {
   try {
     const todayCalendarCutoff = new Date(`${buenosAiresDateStr()}T00:00:00.000Z`);
     const match = { nextFollowUp: { $ne: null, $lt: todayCalendarCutoff } };
 
+    let newAssignments = 0;
     if (req.seller) {
       const clientIDs = await User.find(scopedUserMatch(req, { admin: false })).distinct("_id");
       match.userID = { $in: clientIDs };
+
+      const seller = await Seller.findById(req.seller._id).select("crmAlertsSeenAt");
+      newAssignments = await User.countDocuments({
+        assignedSeller: req.seller._id,
+        assignedSellerAt: { $gt: seller?.crmAlertsSeenAt || new Date(0) },
+      });
     }
 
     const count = await CrmProfile.countDocuments(match);
-    res.json({ count });
+    res.json({ count, newAssignments });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Marca que el vendedor revisó sus alertas de CRM ahora — resetea
+//          el conteo de newAssignments que devuelve getOverdueCount.
+// @route   POST /api/sellers/crm/alerts/seen
+// @access  Vendedor (un admin no tiene bandeja personal que marcar)
+// ──────────────────────────────────────────────
+const markAlertsSeen = async (req, res) => {
+  try {
+    if (!req.seller) {
+      return res.status(403).json({ message: "Solo un vendedor puede marcar sus alertas como vistas" });
+    }
+    await Seller.findByIdAndUpdate(req.seller._id, { crmAlertsSeenAt: new Date() });
+    res.json({ ok: true });
   } catch (err) {
     handleError(res, err);
   }
@@ -727,5 +758,5 @@ const exportClients = async (req, res) => {
 };
 
 module.exports = {
-  listClients, getClient, updateProfile, addNote, deleteNote, getOverdueCount, getCrmSummary, exportClients,
+  listClients, getClient, updateProfile, addNote, deleteNote, getOverdueCount, markAlertsSeen, getCrmSummary, exportClients,
 };

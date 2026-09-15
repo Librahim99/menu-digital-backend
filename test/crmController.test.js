@@ -427,7 +427,7 @@ test("getOverdueCount no considera vencido un seguimiento del día actual", asyn
   await getOverdueCount({}, res);
 
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body, { count: 2 });
+  assert.deepEqual(res.body, { count: 2, newAssignments: 0 });
   assert.equal(filter.nextFollowUp.$ne, null);
   assert.match(filter.nextFollowUp.$lt.toISOString(), /T00:00:00\.000Z$/);
 });
@@ -501,6 +501,7 @@ test("getClient limita el detalle a clientes no admin y calcula el onboarding", 
     "_id",
     "active",
     "assignedSeller",
+    "assignedSellerAt",
     "contactInfo",
     "createdAt",
     "hasDelivery",

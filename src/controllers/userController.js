@@ -289,6 +289,7 @@ const registerTrial = async (req, res) => {
       sellerID: seller._id,
       influencerReferral,
       assignedSeller,
+      assignedSellerAt: assignedSeller ? now : null,
       trialActive: true,
     });
 

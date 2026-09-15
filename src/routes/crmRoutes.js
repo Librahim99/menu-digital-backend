@@ -8,6 +8,7 @@ const {
   addNote,
   deleteNote,
   getOverdueCount,
+  markAlertsSeen,
   getCrmSummary,
   exportClients,
 } = require("../controllers/crmController");
@@ -18,6 +19,7 @@ router.use(protectSellerOrAdminAny, denyInfluencer);
 
 // Rutas de nombre fijo van ANTES de /clients/:userID para no chocar con el param.
 router.get("/overdue-count", getOverdueCount);
+router.post("/alerts/seen", markAlertsSeen);
 // Resumen ejecutivo del dashboard del CEO: exclusivo admin (mismo criterio
 // que /export — un token de vendedor nunca setea req.user).
 router.get("/summary", isAdmin, getCrmSummary);
