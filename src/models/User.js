@@ -181,6 +181,15 @@ const UserSchema = new mongoose.Schema(
       },
     },
 
+    // Marca al usuario cuyo pendingMenuImages actúa como banco de "imágenes
+    // prediseñadas" (genéricas) que ven TODOS los usuarios en el Gestor de
+    // imágenes, además de las propias. Debería haber como mucho un user en
+    // true a la vez — se setea a mano, no hay un flujo de alta para esto.
+    presetImagesUser: {
+      type: Boolean,
+      default: false,
+    },
+
     // Horario de atención, un DayHours por día de la semana. Sin `default`
     // a propósito: si el dueño nunca lo cargó, el campo queda `undefined`
     // (no un horario 09:00-18:00 inventado) — el front trata su ausencia

@@ -13,7 +13,7 @@ const Menu = require("../src/models/Menu");
 const User = require("../src/models/User");
 const { cloudinary } = require("../src/config/cloudinary");
 const {
-  getLiteItems, getPendingImages, assignImages, checkImageQuota, deleteItem, deleteItemsBulk,
+  getLiteItems, getPendingImages, getPresetImages, assignImages, checkImageQuota, deleteItem, deleteItemsBulk,
   deleteLibraryImage, MAX_BULK_ITEMS,
 } = require("../src/controllers/itemController");
 
@@ -28,10 +28,20 @@ const originalMenuFind = Menu.find;
 const originalMenuFindById = Menu.findById;
 const originalUserFindById = User.findById;
 const originalUserFindByIdAndUpdate = User.findByIdAndUpdate;
+const originalUserFindOne = User.findOne;
 const originalCloudinaryDestroy = cloudinary.uploader.destroy;
 
 test.after(() => {
   process.env.CLOUDINARY_CLOUD_NAME = ORIGINAL_CLOUD_NAME;
+});
+
+// Sin esto, todo test que llegue a getPresetImagesOwner() (assignImages,
+// deleteLibraryImage, checkImageQuota) ejecutaría el User.findOne real de
+// Mongoose sin conexión. Default "sin banco de prediseñadas configurado" —
+// deja el comportamiento de siempre intacto; los tests de presets de más
+// abajo pisan este mock con el suyo.
+test.beforeEach(() => {
+  User.findOne = () => ({ select: async () => null });
 });
 
 test.afterEach(() => {
@@ -46,6 +56,7 @@ test.afterEach(() => {
   Menu.findById = originalMenuFindById;
   User.findById = originalUserFindById;
   User.findByIdAndUpdate = originalUserFindByIdAndUpdate;
+  User.findOne = originalUserFindOne;
   cloudinary.uploader.destroy = originalCloudinaryDestroy;
 });
 
@@ -91,6 +102,27 @@ test("getPendingImages devuelve el array de pendientes del usuario", async () =>
 
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.body, { pendingImages: ["url-1", "url-2"] });
+});
+
+test("getPresetImages devuelve las pendingMenuImages del usuario marcado presetImagesUser", async () => {
+  User.findOne = (filter) => {
+    assert.deepEqual(filter, { presetImagesUser: true });
+    return { select: async () => ({ _id: "preset-owner", pendingMenuImages: ["preset-1", "preset-2"] }) };
+  };
+  const res = makeResponse();
+  await getPresetImages({}, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { presetImages: ["preset-1", "preset-2"] });
+});
+
+test("getPresetImages devuelve array vacío si ningún usuario está marcado como banco de prediseñadas", async () => {
+  User.findOne = () => ({ select: async () => null });
+  const res = makeResponse();
+  await getPresetImages({}, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { presetImages: [] });
 });
 
 // ──────────────────────────────────────────────
@@ -292,6 +324,101 @@ test("assignImages devuelve la imagen a pendientes si se la desasigna sin darle 
 });
 
 // ──────────────────────────────────────────────
+// assignImages — imágenes prediseñadas (banco compartido, ver
+// User.presetImagesUser): asignarlas/desasignarlas nunca toca
+// pendingMenuImages de nadie, a diferencia de una pendiente propia.
+// ──────────────────────────────────────────────
+
+test("assignImages permite asignar una imagen prediseñada ajena y no la toca en pendingMenuImages de nadie", async () => {
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  User.findById = () => ({ select: async () => ({ pendingMenuImages: [] }) }); // quien asigna no la tiene pendiente
+  User.findOne = () => ({ select: async () => ({ _id: "preset-owner", pendingMenuImages: ["preset-url"] }) });
+  Item.find = () => ({
+    select: async (fields) => {
+      if (fields === "_id menuID") return [{ _id: "item-1", menuID: "menu-A" }];
+      if (fields === "_id image") return []; // todavía nadie la tiene asignada
+      throw new Error("unexpected select: " + fields);
+    },
+  });
+
+  let bulkOps;
+  Item.bulkWrite = async (ops) => { bulkOps = ops; return {}; };
+  const userUpdateCalls = [];
+  User.findByIdAndUpdate = async (id, update) => { userUpdateCalls.push(update); return {}; };
+
+  const req = {
+    user: { _id: "user-1" },
+    body: { changes: [{ imageUrl: "preset-url", itemIDs: ["item-1"] }] },
+  };
+  const res = makeResponse();
+  await assignImages(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(bulkOps, [
+    { updateMany: { filter: { _id: { $in: ["item-1"] } }, update: { $set: { image: "preset-url" } } } },
+  ]);
+  // Ni $pull ni $addToSet: la prediseñada no se mueve del array de su dueño.
+  assert.equal(userUpdateCalls.length, 0);
+});
+
+test("assignImages al desasignar una imagen prediseñada no la agrega a las pendientes propias de quien la usaba", async () => {
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  User.findById = () => ({ select: async () => ({ pendingMenuImages: [] }) });
+  User.findOne = () => ({ select: async () => ({ _id: "preset-owner", pendingMenuImages: ["preset-url"] }) });
+  Item.find = () => ({
+    select: async (fields) => {
+      if (fields === "_id menuID") return [];
+      if (fields === "_id image") return [{ _id: "item-1", image: "preset-url" }]; // item-1 la tenía asignada
+      throw new Error("unexpected select: " + fields);
+    },
+  });
+
+  let bulkOps;
+  Item.bulkWrite = async (ops) => { bulkOps = ops; return {}; };
+  const userUpdateCalls = [];
+  User.findByIdAndUpdate = async (id, update) => { userUpdateCalls.push(update); return {}; };
+
+  const req = {
+    user: { _id: "user-1" },
+    body: { changes: [{ imageUrl: "preset-url", itemIDs: [] }] },
+  };
+  const res = makeResponse();
+  await assignImages(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(bulkOps[0].updateMany.update.$set.image, "");
+  assert.equal(userUpdateCalls.length, 0); // no vuelve a pendingMenuImages de user-1
+});
+
+test("assignImages trata la imagen como pendiente propia (no preset) cuando quien asigna es el dueño del banco", async () => {
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  User.findById = () => ({ select: async () => ({ pendingMenuImages: ["own-url"] }) });
+  User.findOne = () => ({ select: async () => ({ _id: "user-1", pendingMenuImages: ["own-url"] }) }); // mismo user
+  Item.find = () => ({
+    select: async (fields) => {
+      if (fields === "_id menuID") return [{ _id: "item-1", menuID: "menu-A" }];
+      if (fields === "_id image") return [];
+      throw new Error("unexpected select: " + fields);
+    },
+  });
+
+  Item.bulkWrite = async () => ({});
+  const userUpdateCalls = [];
+  User.findByIdAndUpdate = async (id, update) => { userUpdateCalls.push(update); return {}; };
+
+  const req = {
+    user: { _id: "user-1" },
+    body: { changes: [{ imageUrl: "own-url", itemIDs: ["item-1"] }] },
+  };
+  const res = makeResponse();
+  await assignImages(req, res);
+
+  assert.equal(res.statusCode, 200);
+  const pullCall = userUpdateCalls.find((u) => u.$pull);
+  assert.deepEqual(pullCall.$pull.pendingMenuImages.$in, ["own-url"]);
+});
+
+// ──────────────────────────────────────────────
 // deleteItem / deleteItemsBulk — la imagen saliente vuelve a pendientes
 // ──────────────────────────────────────────────
 
@@ -459,6 +586,30 @@ test("checkImageQuota deja pasar si pendientes + asignadas todavía no llegó al
   assert.equal(res.statusCode, 200);
 });
 
+test("checkImageQuota (Pro) no cuenta las imágenes prediseñadas asignadas contra el cupo propio", async () => {
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  User.findById = () => ({ select: async () => ({ pendingMenuImages: [] }) });
+  User.findOne = () => ({
+    select: async () => ({ _id: "preset-owner", pendingMenuImages: ["preset-1", "preset-2"] }),
+  });
+  // 5 productos creados, todos con una imagen prediseñada asignada (ninguna propia).
+  Item.countDocuments = async (filter) => {
+    if (filter.image) {
+      assert.deepEqual(filter.image.$nin, ["preset-1", "preset-2"]);
+      return 0;
+    }
+    return 5;
+  };
+
+  const req = { user: { _id: "user-1" }, plan: { features: { item_limit: null } } };
+  const res = makeResponse();
+  let nextCalled = false;
+  await checkImageQuota(req, res, () => { nextCalled = true; });
+
+  assert.equal(nextCalled, true);
+  assert.equal(res.statusCode, 200);
+});
+
 test("checkImageQuota rechaza con 403 al llegar al tope del plan, sin llamar a next", async () => {
   Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
   User.findById = () => ({ select: async () => ({ pendingMenuImages: ["url-1", "url-2", "url-3"] }) });
@@ -549,6 +700,38 @@ test("deleteLibraryImage borra una imagen asignada: limpia Item.image en los pro
   assert.deepEqual(updateManyArgs.filter._id.$in, ["item-1", "item-2"]);
   assert.equal(updateManyArgs.update.$set.image, "");
   assert.equal(userUpdateCalled, false);
+});
+
+test("deleteLibraryImage rechaza borrar una imagen prediseñada ajena aunque esté asignada a un producto propio", async () => {
+  User.findOne = () => ({
+    select: async () => ({ _id: "preset-owner", pendingMenuImages: [VALID_LIBRARY_URL] }),
+  });
+  let destroyCalled = false;
+  cloudinary.uploader.destroy = async () => { destroyCalled = true; return { result: "ok" }; };
+
+  const req = { user: { _id: "user-1" }, body: { imageUrl: VALID_LIBRARY_URL } };
+  const res = makeResponse();
+  await deleteLibraryImage(req, res);
+
+  assert.equal(res.statusCode, 403);
+  assert.equal(destroyCalled, false);
+});
+
+test("deleteLibraryImage permite al dueño del banco de prediseñadas borrar su propia imagen (no es 'ajena')", async () => {
+  User.findOne = () => ({ select: async () => ({ _id: "user-1", pendingMenuImages: [VALID_LIBRARY_URL] }) });
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  User.findById = () => ({ select: async () => ({ pendingMenuImages: [VALID_LIBRARY_URL] }) });
+  Item.find = () => ({ select: async () => [] });
+  User.findByIdAndUpdate = async () => ({});
+  let destroyCalled = false;
+  cloudinary.uploader.destroy = async () => { destroyCalled = true; return { result: "ok" }; };
+
+  const req = { user: { _id: "user-1" }, body: { imageUrl: VALID_LIBRARY_URL } };
+  const res = makeResponse();
+  await deleteLibraryImage(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(destroyCalled, true);
 });
 
 test("deleteLibraryImage igual devuelve 200 si Cloudinary falla al destruir (la limpieza en Mongo ya vale)", async () => {

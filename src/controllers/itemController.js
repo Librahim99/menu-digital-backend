@@ -553,6 +553,30 @@ const getPendingImages = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
+// Helper: usuario marcado como banco de imágenes prediseñadas (a lo sumo
+// uno, ver User.presetImagesUser). Sus pendingMenuImages son las que ven
+// TODOS los usuarios como "Imágenes prediseñadas" en el Gestor de imágenes.
+// ──────────────────────────────────────────────
+const getPresetImagesOwner = () => User.findOne({ presetImagesUser: true }).select("pendingMenuImages");
+
+// ──────────────────────────────────────────────
+// @desc    Gestor de imágenes: imágenes prediseñadas (genéricas) disponibles
+//          para cualquier usuario, además de las propias. Son las
+//          pendingMenuImages del usuario marcado con presetImagesUser=true
+//          — asignarlas no las saca de ahí, ver assignImages.
+// @route   GET /api/items/images/presets
+// @access  Private
+// ──────────────────────────────────────────────
+const getPresetImages = async (req, res) => {
+  try {
+    const presetOwner = await getPresetImagesOwner();
+    res.json({ presetImages: presetOwner?.pendingMenuImages || [] });
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
 // Helper: tope de imágenes vigente para el usuario, y cuántas ya tiene
 // asignadas a productos (la cantidad de pendientes se lee aparte, cambia
 // con cada subida).
@@ -561,12 +585,21 @@ const getPendingImages = async (req, res) => {
 //     pasa a ser la cantidad de productos que el usuario YA creó — no
 //     tiene sentido acumular más imágenes que productos que algún día las
 //     puedan usar. Con 0 productos creados, el tope efectivo es 0.
+//   Las imágenes prediseñadas asignadas no cuentan como "asignadas" acá:
+//   no ocupan un slot propio, son un banco compartido.
 // ──────────────────────────────────────────────
 const getImageQuotaLimit = async (req) => {
   const { features } = await getRequestPlan(req);
   const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
+  const presetOwner = await getPresetImagesOwner();
+  const presetUrls = presetOwner && presetOwner._id.toString() !== req.user._id.toString()
+    ? presetOwner.pendingMenuImages || []
+    : [];
   const [assignedCount, totalItemCount] = await Promise.all([
-    Item.countDocuments({ menuID: { $in: userMenuIDs }, image: { $ne: "" } }),
+    Item.countDocuments({
+      menuID: { $in: userMenuIDs },
+      image: presetUrls.length > 0 ? { $ne: "", $nin: presetUrls } : { $ne: "" },
+    }),
     features.item_limit === null ? Item.countDocuments({ menuID: { $in: userMenuIDs } }) : Promise.resolve(null),
   ]);
   const effectiveLimit = features.item_limit === null ? totalItemCount : features.item_limit;
@@ -703,6 +736,17 @@ const assignImages = async (req, res) => {
     const user = await User.findById(req.user._id).select("pendingMenuImages");
     const pendingSet = new Set(user?.pendingMenuImages || []);
 
+    // Imágenes prediseñadas: pendingMenuImages del usuario marcado con
+    // presetImagesUser=true. Usarlas nunca las saca ni las agrega a ESTE
+    // array (a diferencia de las pendientes propias) — por eso quedan
+    // afuera del diff urlsToPull/urlsToAdd más abajo. Si el que asigna ES el
+    // dueño del banco, se trata como pendiente propia de siempre (presetSet
+    // vacío), no como preset.
+    const presetOwner = await getPresetImagesOwner();
+    const presetSet = presetOwner && presetOwner._id.toString() !== req.user._id.toString()
+      ? new Set(presetOwner.pendingMenuImages || [])
+      : new Set();
+
     // Ownership de todos los productos mencionados, en una sola consulta.
     const allItemIds = [...seenItemIds];
     const itemsByID = new Map(
@@ -734,11 +778,13 @@ const assignImages = async (req, res) => {
       const uniqueItemIDs = [...new Set(itemIDs)];
 
       // La imagen tiene que ser del usuario: o está en sus pendientes, o ya
-      // es la imagen de algún producto suyo. Si no, alguien está tratando
-      // de asignarse una imagen ajena (pendiente de otro usuario, nunca
-      // asignada a nada) como si fuera propia.
+      // es la imagen de algún producto suyo, o es una prediseñada disponible
+      // para todos. Si no, alguien está tratando de asignarse una imagen
+      // ajena (pendiente de otro usuario, nunca asignada a nada) como si
+      // fuera propia.
       const currentHolders = currentHoldersByUrl.get(imageUrl) || [];
-      if (!pendingSet.has(imageUrl) && currentHolders.length === 0) {
+      const isPresetImage = presetSet.has(imageUrl);
+      if (!pendingSet.has(imageUrl) && currentHolders.length === 0 && !isPresetImage) {
         return res.status(403).json({ message: "No autorizado sobre una de las imágenes enviadas." });
       }
 
@@ -755,10 +801,12 @@ const assignImages = async (req, res) => {
       }
       updatedItemCount += toAdd.length + toRemove.length;
 
-      if (uniqueItemIDs.length > 0) {
-        urlsToPull.push(imageUrl);
-      } else {
-        urlsToAdd.push(imageUrl);
+      if (!isPresetImage) {
+        if (uniqueItemIDs.length > 0) {
+          urlsToPull.push(imageUrl);
+        } else {
+          urlsToAdd.push(imageUrl);
+        }
       }
     }
 
@@ -836,6 +884,17 @@ const deleteLibraryImage = async (req, res) => {
       return res.status(400).json({ message: "Falta una imageUrl válida." });
     }
 
+    // Una imagen prediseñada no se puede borrar desde acá ni siquiera si hoy
+    // está asignada a un producto propio — el archivo en Cloudinary es del
+    // usuario marcado presetImagesUser, no de quien la está usando.
+    const presetOwner = await getPresetImagesOwner();
+    const isForeignPreset = Boolean(presetOwner)
+      && presetOwner._id.toString() !== req.user._id.toString()
+      && (presetOwner.pendingMenuImages || []).includes(imageUrl);
+    if (isForeignPreset) {
+      return res.status(403).json({ message: "No se puede eliminar una imagen prediseñada." });
+    }
+
     const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
     const user = await User.findById(req.user._id).select("pendingMenuImages");
     const isPending = (user?.pendingMenuImages || []).includes(imageUrl);
@@ -877,6 +936,7 @@ module.exports = {
   deleteItemsBulk,
   getLiteItems,
   getPendingImages,
+  getPresetImages,
   checkImageQuota,
   uploadLibraryImage,
   assignImages,

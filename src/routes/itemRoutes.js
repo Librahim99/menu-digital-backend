@@ -6,7 +6,8 @@ const { uploadItem, uploadItemLibrary } = require("../config/cloudinary");
 const {
   newItem, editItem, moveItem, uploadImage, uploadDraftImage, setHidden, setAvailable, deleteItem,
   setAvailableBulk, setHiddenBulk, deleteItemsBulk,
-  getLiteItems, getPendingImages, checkImageQuota, uploadLibraryImage, assignImages, deleteLibraryImage
+  getLiteItems, getPendingImages, getPresetImages, checkImageQuota, uploadLibraryImage, assignImages,
+  deleteLibraryImage
 } = require("../controllers/itemController");
 
 router.post("/", protect, requireFeature("menu_editor"), newItem);
@@ -24,6 +25,7 @@ router.post("/bulk/delete", protect, requireFeature("menu_editor"), deleteItemsB
 // plan, configurable aparte desde el catálogo).
 router.get("/lite", protect, requireFeature("image_manager"), getLiteItems);
 router.get("/images/pending", protect, requireFeature("image_manager"), getPendingImages);
+router.get("/images/presets", protect, requireFeature("image_manager"), getPresetImages);
 router.post(
   "/images/upload", protect, requireFeature("image_manager"), imageUploadLimiter, checkImageQuota,
   uploadItemLibrary.single("image"), uploadLibraryImage
