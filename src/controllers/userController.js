@@ -13,6 +13,7 @@ const {
 } = require("../config/plans");
 const { getPlanForUser, getRequestPlan } = require("../services/planCatalog");
 const { buenosAiresDateStr } = require("../utils/dates");
+const { buildStatsPeriod } = require("../utils/statsPeriod");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { buildMenuHTML, buildFooterTemplate } = require("../utils/menuPdfTemplate");
 const { getBrowser } = require("../utils/pdfBrowser");
@@ -814,6 +815,28 @@ const fetchOwnMenu = async (req, res) => {
 // ──────────────────────────────────────────────
 const fetchStats = async (req, res) => {
   try {
+    const requestedDays = req.query?.days;
+    if (requestedDays !== undefined && requestedDays !== "7" && requestedDays !== "30") {
+      return res.status(400).json({ message: "El período debe ser de 7 o 30 días." });
+    }
+    if (requestedDays !== undefined) {
+      const { dates, previousDates, ...period } = buildStatsPeriod(Number(requestedDays), req.user.createdAt);
+      const rows = await PageView.find({
+        userID: req.user._id,
+        date: { $gte: period.previousStart, $lte: period.todayDate },
+      });
+      const byDate = new Map(rows.map(row => [row.date, row.count]));
+      const days = dates.map(date => ({ date, count: byDate.get(date) || 0 }));
+      const previousDays = previousDates.map(date => ({ date, count: byDate.get(date) || 0 }));
+      return res.json({
+        ...period, days, previousDays,
+        totalViews: days.reduce((sum, day) => sum + day.count, 0),
+        previousTotalViews: previousDays.reduce((sum, day) => sum + day.count, 0),
+        todayViews: byDate.get(period.todayDate) || 0,
+      });
+    }
+    // Compatibilidad para clientes anteriores que no envían days.
+
     const MS_PER_DAY = 24 * 60 * 60 * 1000;
     const now = Date.now();
 
@@ -891,6 +914,39 @@ const trackItemViewEndpoint = async (req, res) => {
 // ──────────────────────────────────────────────
 const fetchItemStats = async (req, res) => {
   try {
+    const requestedDays = req.query?.days;
+    if (requestedDays !== undefined && requestedDays !== "7" && requestedDays !== "30") {
+      return res.status(400).json({ message: "El período debe ser de 7 o 30 días." });
+    }
+    if (requestedDays !== undefined) {
+      const periodData = buildStatsPeriod(Number(requestedDays), req.user.createdAt);
+      const { dates: _dates, previousDates: _previousDates, ...period } = periodData;
+      const rows = await ItemView.aggregate([
+        { $match: { userID: req.user._id, date: { $gte: period.previousStart, $lte: period.periodEnd } } },
+        { $group: {
+          _id: "$itemID",
+          totalViews: { $sum: { $cond: [{ $gte: ["$date", period.periodStart] }, "$count", 0] } },
+          previousViews: { $sum: { $cond: [{ $lt: ["$date", period.periodStart] }, "$count", 0] } },
+        } },
+        { $match: { totalViews: { $gt: 0 } } },
+        { $sort: { totalViews: -1, _id: 1 } },
+        { $limit: 10 },
+      ]);
+      const items = await Item.find({ _id: { $in: rows.map(row => row._id) } }).select("title image");
+      const byId = new Map(items.map(item => [item._id.toString(), item]));
+      return res.json({
+        ...period,
+        topItems: rows.map(row => ({
+          itemID: row._id,
+          title: byId.get(row._id.toString())?.title || "(producto eliminado)",
+          image: byId.get(row._id.toString())?.image || "",
+          totalViews: row.totalViews,
+          previousViews: row.previousViews,
+        })),
+      });
+    }
+    // Compatibilidad para clientes anteriores que no envían days.
+
     const MS_PER_DAY = 24 * 60 * 60 * 1000;
     const now = Date.now();
     const sinceStr = buenosAiresDateStr(new Date(now - 29 * MS_PER_DAY));
