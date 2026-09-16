@@ -27,6 +27,10 @@ const {
   deleteBackground,
   useTemplate,
   setActive,
+  getPanelSettingsStatus,
+  verifyPanelSettingsPassword,
+  changePanelSettingsPassword,
+  updatePanelSettings,
 } = require("../controllers/userController");
 
 // ──────────────────────────────────────────────
@@ -63,6 +67,13 @@ router.delete("/remove-image", protect, removeImage);
 router.delete("/background", protect, deleteBackground);
 router.patch("/template", protect, useTemplate);
 router.patch("/active", protect, setActive);
+// Panel de "Configuración" del dashboard — ver comentario en userController.js.
+// authLimiter en las dos rutas de contraseña: mismo criterio que login/
+// verify-email, para no dejar probar contraseñas sin límite por IP.
+router.get("/me/settings", protect, getPanelSettingsStatus);
+router.post("/me/settings/verify-password", protect, authLimiter, verifyPanelSettingsPassword);
+router.patch("/me/settings/password", protect, authLimiter, changePanelSettingsPassword);
+router.patch("/me/settings", protect, updatePanelSettings);
 // NOTA DE SEGURIDAD: existía acá un PATCH /subscription de autoservicio
 // (protect, sin isAdmin) que dejaba que cualquier usuario logueado se
 // asignara a sí mismo cualquier plan pago sin pagar nada — y encima el

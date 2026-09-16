@@ -793,6 +793,9 @@ const fetchOwnMenu = async (req, res) => {
       canScheduleItems: features.programacion_productos,
       canScheduleOffers: features.programacion_productos,
       canUseImageManager: features.image_manager,
+      // Configuración del panel (ver newItem/newMenu y las rutas /me/settings).
+      autoGenerateCodes: req.user.panelSettings?.autoGenerateCodes === true,
+      disableMenuDelete: req.user.panelSettings?.disableMenuDelete === true,
     };
 
     res.json({ menu: menuArmado, limits });
@@ -1306,6 +1309,148 @@ const setActive = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
+// Panel de "Configuración" del dashboard (tarjeta "Agregar opción en el
+// dashboard de user para configuraciones"). La contraseña acá es un gate de
+// ENTRADA a la pantalla, independiente del password de login — protege que
+// un empleado con el login compartido del local no toque estos ajustes a la
+// ligera. Una vez adentro (verify-password devolvió ok), cambiar los
+// toggles no vuelve a pedirla.
+// ──────────────────────────────────────────────
+
+// ──────────────────────────────────────────────
+// @desc    Estado del panel de Configuración: si ya existe una contraseña
+//          seteada (para que el front sepa si mostrar "crear" o "ingresar")
+//          y el valor vigente de los toggles.
+// @route   GET /api/users/me/settings
+// @access  Private
+// ──────────────────────────────────────────────
+const getPanelSettingsStatus = async (req, res) => {
+  try {
+    const withPassword = await User.findById(req.user._id).select("+panelSettings.password");
+    res.json({
+      hasPassword: !!withPassword?.panelSettings?.password,
+      autoGenerateCodes: req.user.panelSettings?.autoGenerateCodes === true,
+      disableMenuDelete: req.user.panelSettings?.disableMenuDelete === true,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Ingresar al panel de Configuración. Si todavía no existe una
+//          contraseña del panel, esta llamada la establece (alta); si ya
+//          existe, la verifica.
+// @route   POST /api/users/me/settings/verify-password
+// @access  Private
+// ──────────────────────────────────────────────
+const verifyPanelSettingsPassword = async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (typeof password !== "string" || !password) {
+      return res.status(400).json({ message: "Ingresá la contraseña." });
+    }
+
+    const user = await User.findById(req.user._id).select("+panelSettings.password");
+    if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+
+    if (!user.panelSettings?.password) {
+      if (isWeakPassword(password)) {
+        return res.status(400).json({
+          message: "La contraseña debe tener al menos 8 caracteres y no puede ser una demasiado común.",
+        });
+      }
+      user.panelSettings.password = password; // el hook pre-save la hashea
+      await user.save();
+      return res.json({
+        ok: true,
+        created: true,
+        autoGenerateCodes: user.panelSettings.autoGenerateCodes === true,
+        disableMenuDelete: user.panelSettings.disableMenuDelete === true,
+      });
+    }
+
+    const matches = await user.matchPanelSettingsPassword(password);
+    // 400 y no 401 a propósito: en el resto de la app un 401 de cualquier
+    // endpoint dispara un logout global (ver parseApiResponse en
+    // MenuEditor.tsx y los fetch de UserEditor.tsx) — acá solo significa que
+    // el PIN del panel está mal, la sesión sigue vigente.
+    if (!matches) return res.status(400).json({ message: "Contraseña incorrecta." });
+
+    res.json({
+      ok: true,
+      created: false,
+      autoGenerateCodes: user.panelSettings.autoGenerateCodes === true,
+      disableMenuDelete: user.panelSettings.disableMenuDelete === true,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Cambiar la contraseña del panel de Configuración (requiere la
+//          actual). Distinto del password de login.
+// @route   PATCH /api/users/me/settings/password
+// @access  Private
+// ──────────────────────────────────────────────
+const changePanelSettingsPassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (typeof currentPassword !== "string" || typeof newPassword !== "string") {
+      return res.status(400).json({ message: "Faltan datos." });
+    }
+    if (isWeakPassword(newPassword)) {
+      return res.status(400).json({
+        message: "La nueva contraseña debe tener al menos 8 caracteres y no puede ser una demasiado común.",
+      });
+    }
+
+    const user = await User.findById(req.user._id).select("+panelSettings.password");
+    if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+
+    const matches = await user.matchPanelSettingsPassword(currentPassword);
+    // Mismo motivo que en verifyPanelSettingsPassword: 400, no 401.
+    if (!matches) return res.status(400).json({ message: "La contraseña actual no es correcta." });
+
+    user.panelSettings.password = newPassword;
+    await user.save();
+
+    res.json({ ok: true });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Guardar los toggles del panel de Configuración. No vuelve a pedir
+//          la contraseña del panel (ver nota arriba) — la sesión ya
+//          verificó al entrar a la pantalla.
+// @route   PATCH /api/users/me/settings
+// @access  Private
+// ──────────────────────────────────────────────
+const updatePanelSettings = async (req, res) => {
+  try {
+    const { autoGenerateCodes, disableMenuDelete } = req.body;
+    const updates = {};
+    if (typeof autoGenerateCodes === "boolean") updates["panelSettings.autoGenerateCodes"] = autoGenerateCodes;
+    if (typeof disableMenuDelete === "boolean") updates["panelSettings.disableMenuDelete"] = disableMenuDelete;
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ message: "Nada para actualizar." });
+    }
+
+    const user = await User.findByIdAndUpdate(req.user._id, { $set: updates }, { new: true });
+    res.json({
+      autoGenerateCodes: user.panelSettings.autoGenerateCodes === true,
+      disableMenuDelete: user.panelSettings.disableMenuDelete === true,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
 // Aquí irían más funciones relacionadas con usuarios, como eliminar cuenta, cambiar password, etc.
 // ──────────────────────────────────────────────
 
@@ -1337,4 +1482,8 @@ module.exports = {
   deleteBackground,
   useTemplate,
   setActive,
+  getPanelSettingsStatus,
+  verifyPanelSettingsPassword,
+  changePanelSettingsPassword,
+  updatePanelSettings,
 };

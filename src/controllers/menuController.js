@@ -2,6 +2,7 @@ const { handleError } = require("../utils/handleError");
 const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const User = require("../models/User");
+const { generateAutoCode } = require("../utils/autoCode");
 
 // ──────────────────────────────────────────────
 // Helper: verifica ownership del menú
@@ -31,18 +32,33 @@ const newMenu = async (req, res) => {
       if (error) return res.status(status).json({ message: error });
     }
 
-    // Verifica que el código sea único para este usuario
-    const existingMenu = await Menu.findOne({ userID: req.user._id, code });
-    if (existingMenu) return res.status(400).json({ message: "Código de menú ya existe" });
+    // Mismo criterio que itemController.newItem: código en blanco + config
+    // activa => código temporal y se reemplaza por el definitivo ya con el
+    // ID real. Un código en blanco nunca compite en el chequeo de unicidad
+    // (si compitiera, la segunda categoría/sección sin código chocaría
+    // contra la primera).
+    const cleanCode = typeof code === "string" ? code.trim() : "";
+    const autoGenerate = cleanCode === "" && req.user.panelSettings?.autoGenerateCodes === true;
+
+    if (!autoGenerate && cleanCode) {
+      const existingMenu = await Menu.findOne({ userID: req.user._id, code: cleanCode });
+      if (existingMenu) return res.status(400).json({ message: "Código de menú ya existe" });
+    }
 
     const menu = await Menu.create({
       userID: req.user._id,
       title,
       description,
-      code,
+      code: autoGenerate ? String(Date.now()) : cleanCode,
       sectionID: sectionID || null,
       section: section || false,
     });
+
+    if (autoGenerate) {
+      const siblingCodes = (await Menu.find({ userID: req.user._id, _id: { $ne: menu._id } }).select("code")).map((m) => m.code);
+      menu.code = generateAutoCode(menu.title, menu._id.toString(), siblingCodes);
+      await menu.save();
+    }
 
     // Marca al user como que ya tiene menú creado
     await User.findByIdAndUpdate(req.user._id, { menu: true });
@@ -159,6 +175,10 @@ const hideMenu = async (req, res) => {
 // ──────────────────────────────────────────────
 const deleteMenu = async (req, res) => {
   try {
+    if (req.user.panelSettings?.disableMenuDelete === true) {
+      return res.status(403).json({ message: "Eliminar categorías y secciones está deshabilitado desde Configuración." });
+    }
+
     const { error, status, menu } = await verifyOwnership(req.params.menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
  

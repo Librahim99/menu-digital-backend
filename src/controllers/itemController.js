@@ -7,6 +7,7 @@ const { validateAvailabilitySchedule } = require("../utils/itemAvailability");
 const { normalizeOffer } = require("../utils/offers");
 const { cloudinary } = require("../config/cloudinary");
 const { isValidImageUrl } = require("../utils/imageUrl");
+const { generateAutoCode } = require("../utils/autoCode");
 
 // ──────────────────────────────────────────────
 // Helper: verifica que el menuID pertenezca al user autenticado.
@@ -161,18 +162,38 @@ const newItem = async (req, res) => {
       normalizedAvailabilitySchedule = validation.schedule;
     }
 
+    // Código en blanco + panelSettings.autoGenerateCodes activo: se crea
+    // primero con un código temporal (todavía no existe el ID con el que se
+    // arma el definitivo, ver utils/autoCode) y se le asigna el código real
+    // apenas se crea. Un código en blanco nunca compite en el chequeo de
+    // unicidad de abajo — si compitiera, el primer producto sin código
+    // bloquearía a todos los siguientes con el mismo "ya existe".
+    const cleanCode = typeof code === "string" ? code.trim() : "";
+    const autoGenerate = cleanCode === "" && req.user.panelSettings?.autoGenerateCodes === true;
+
     // Verifica que el código sea único entre los productos de ESTE usuario
     // (antes se chequeaba contra TODA la colección — dos locales distintos
     // no podían usar el mismo código de producto entre sí).
-    const existingItem = await Item.findOne({ code, menuID: { $in: userMenuIDs } });
-    if (existingItem) return res.status(400).json({ message: "Código de item ya existe en este menú" });
+    if (!autoGenerate && cleanCode) {
+      const existingItem = await Item.findOne({ code: cleanCode, menuID: { $in: userMenuIDs } });
+      if (existingItem) return res.status(400).json({ message: "Código de item ya existe en este menú" });
+    }
+
     const item = await Item.create({
-        menuID, code, title, description, price, image,
+        menuID, title, description, price, image,
+        code: autoGenerate ? String(Date.now()) : cleanCode,
         offerPrice: normalizedOffer.offerPrice, offerRange: normalizedOffer.offerRange,
         availabilitySchedule: normalizedAvailabilitySchedule,
         options, isExtra, recommended, apt, hidden, available
       });
-        res.status(201).json(item) 
+
+    if (autoGenerate) {
+      const siblingCodes = (await Item.find({ menuID: { $in: userMenuIDs }, _id: { $ne: item._id } }).select("code")).map((i) => i.code);
+      item.code = generateAutoCode(item.title, item._id.toString(), siblingCodes);
+      await item.save();
+    }
+
+    res.status(201).json(item)
   } catch (err) {
     handleError(res, err);
   }
@@ -431,6 +452,10 @@ const setAvailable = async (req, res) => {
 
 const deleteItem = async (req, res) => {
   try {
+    if (req.user.panelSettings?.disableMenuDelete === true) {
+      return res.status(403).json({ message: "Eliminar productos está deshabilitado desde Configuración." });
+    }
+
     // menuID (ownership) + image (recycleDeletedItemImages abajo) — no se
     // usa ningún otro campo del item borrado.
     const item = await Item.findById(req.params.itemID).select("menuID image");
@@ -505,6 +530,10 @@ const setHiddenBulk = async (req, res) => {
 // ──────────────────────────────────────────────
 const deleteItemsBulk = async (req, res) => {
   try {
+    if (req.user.panelSettings?.disableMenuDelete === true) {
+      return res.status(403).json({ message: "Eliminar productos está deshabilitado desde Configuración." });
+    }
+
     const itemIds = validateBulkItemIds(req, res);
     if (!itemIds) return;
 

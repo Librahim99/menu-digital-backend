@@ -233,6 +233,32 @@ const UserSchema = new mongoose.Schema(
         close: { type: String },
       },
     },
+
+    // Panel de "Configuración" del dashboard (tarjeta "Agregar opción en el
+    // dashboard de user para configuraciones"). `password` es un gate propio
+    // de ESE panel, independiente del password de login: protege que un
+    // empleado con el login compartido del local no toque estos ajustes a la
+    // ligera. Null hasta que el dueño la crea la primera vez que entra.
+    panelSettings: {
+      password: {
+        type: String,
+        default: null,
+        select: false, // mismo criterio que password de login: nunca vuelve en queries por defecto
+      },
+      // Genera código automático al crear productos/categorías/secciones sin
+      // código manual (ver utils/autoCode.js). Detalle del algoritmo en la
+      // tarjeta "Generación automática de codigo de productos".
+      autoGenerateCodes: {
+        type: Boolean,
+        default: false,
+      },
+      // Oculta/bloquea eliminar productos/categorías/secciones desde el
+      // editor de menú (front y back).
+      disableMenuDelete: {
+        type: Boolean,
+        default: false,
+      },
+    },
   },
   {
     timestamps: true, // Agrega createdAt y updatedAt automáticamente
@@ -248,9 +274,16 @@ const UserSchema = new mongoose.Schema(
  * Evita re-hashear si el campo password no cambió.
  */
 UserSchema.pre("save", async function (next) {
-  if (!this.isModified("password")) return next();
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
+  if (this.isModified("password")) {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+  }
+  // Hashea la contraseña del panel de configuración con el mismo criterio,
+  // solo si vino seteada (queda en null hasta que el dueño la crea).
+  if (this.isModified("panelSettings.password") && this.panelSettings?.password) {
+    const salt = await bcrypt.genSalt(10);
+    this.panelSettings.password = await bcrypt.hash(this.panelSettings.password, salt);
+  }
   next();
 });
 
@@ -264,6 +297,16 @@ UserSchema.pre("save", async function (next) {
  */
 UserSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
+};
+
+/**
+ * Compara la contraseña ingresada con el hash del panel de Configuración.
+ * `panelSettings.password` tiene select:false — el caller debe traerla
+ * explícitamente (`.select("+panelSettings.password")`) antes de llamar esto.
+ */
+UserSchema.methods.matchPanelSettingsPassword = async function (enteredPassword) {
+  if (!this.panelSettings?.password) return false;
+  return await bcrypt.compare(enteredPassword, this.panelSettings.password);
 };
 
 module.exports = mongoose.model("User", UserSchema);
