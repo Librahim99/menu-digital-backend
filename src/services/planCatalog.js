@@ -23,6 +23,9 @@ const INITIAL_PLANS = [
     // Arranca exclusivo de Pro (decisión de negocio al lanzarlo) — el admin
     // puede habilitarlo en otros planes desde el panel en cualquier momento.
     image_manager: plan.name === "pro",
+    // Tarjeta Trello "Plantillas de menúes": agiliza la carga inicial de
+    // Basic y Pro, no incluido en Free (mismo criterio que carga_masiva_excel).
+    menu_templates: plan.name !== "free",
     item_limit: plan.name === "free" ? 15 : plan.name === "basic" ? 50 : null,
     templateIds: Array.from({ length: plan.name === "free" ? 1 : plan.name === "basic" ? 5 : 15 }, (_, i) => i + 1),
   },

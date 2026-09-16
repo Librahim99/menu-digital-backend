@@ -794,6 +794,7 @@ const fetchOwnMenu = async (req, res) => {
       canScheduleItems: features.programacion_productos,
       canScheduleOffers: features.programacion_productos,
       canUseImageManager: features.image_manager,
+      canUseTemplates: features.menu_templates,
       // Configuración del panel (ver newItem/newMenu y las rutas /me/settings).
       autoGenerateCodes: req.user.panelSettings?.autoGenerateCodes === true,
       disableMenuDelete: req.user.panelSettings?.disableMenuDelete === true,

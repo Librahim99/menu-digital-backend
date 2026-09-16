@@ -61,7 +61,7 @@ app.use(express.urlencoded({ extended: true }));
 // paymentId en un query param literal "data.id" (con punto) — el sanitizer
 // también saca claves con puntos (mismo criterio que las de $) y nos
 // rompía el webhook entero.
-app.use(["/api/users", "/api/menus", "/api/items", "/api/admin", "/api/massive", "/api/sellers"], mongoSanitize());
+app.use(["/api/users", "/api/menus", "/api/items", "/api/admin", "/api/massive", "/api/sellers", "/api/menu-templates"], mongoSanitize());
 // Red de contención general contra abuso/scraping — los límites más
 // estrictos de login/registro (authLimiter) se suman a este en sus rutas.
 app.use("/api", apiLimiter);
@@ -85,6 +85,7 @@ app.use("/api/sellers", require("./routes/sellerPanelRoutes"));
 app.use("/api/users", require("./routes/userRoutes"));
 app.use("/api/menus", require("./routes/menuRoutes"));
 app.use("/api/items", require("./routes/itemRoutes"));
+app.use("/api/menu-templates", require("./routes/menuTemplateRoutes"));
 app.use("/api/massive", require("./routes/massiveRoutes"));
 
 // ──────────────────────────────────────────────
