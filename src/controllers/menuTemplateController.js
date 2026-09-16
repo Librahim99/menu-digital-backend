@@ -3,7 +3,6 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const User = require("../models/User");
 const { getRequestPlan } = require("../services/planCatalog");
-const { generateAutoCode } = require("../utils/autoCode");
 
 // Tarjeta Trello "Plantillas de menúes": el mismo user marcado
 // presetImagesUser (ver itemController.getPresetImagesOwner) actúa también
@@ -19,50 +18,38 @@ const toIdSet = (value) =>
   new Set(Array.isArray(value) ? value.filter((id) => typeof id === "string" && id) : []);
 
 const pickCategoryFields = (menu) => {
-  const { title, description, image } = menu.toObject();
-  return { title, description, image };
+  const { title, description, image, code } = menu.toObject();
+  return { title, description, image, code };
 };
 
 const pickItemFields = (item) => {
   const {
     title, description, price, offerPrice, offerRange, options, image,
-    isExtra, recommended, apt, availabilitySchedule,
+    isExtra, recommended, apt, availabilitySchedule, code,
   } = item.toObject();
-  return { title, description, price, offerPrice, offerRange, options, image, isExtra, recommended, apt, availabilitySchedule };
+  return { title, description, price, offerPrice, offerRange, options, image, isExtra, recommended, apt, availabilitySchedule, code };
 };
 
-// Crea la copia y le asigna código único (mismo criterio que newMenu/newItem:
-// código temporal, después se reemplaza ya con el _id real disponible).
-const createMenuCopy = async (userID, fields, extra) => {
-  const created = await Menu.create({ userID, ...fields, ...extra, code: String(Date.now()) });
-  const siblings = await Menu.find({ userID, _id: { $ne: created._id } });
-  created.code = generateAutoCode(created.title, created._id.toString(), siblings.map((m) => m.code));
-  await created.save();
-  return created;
-};
-
-const createItemCopy = async (menuID, fields, allowScheduling) => {
-  const created = await Item.create({
-    menuID,
-    ...fields,
-    offerPrice: allowScheduling ? fields.offerPrice : null,
-    offerRange: allowScheduling ? fields.offerRange : { from: null, to: null },
-    availabilitySchedule: allowScheduling ? fields.availabilitySchedule : undefined,
-    available: true,
-    hidden: false,
-    code: String(Date.now()),
-  });
-  const siblings = await Item.find({ menuID, _id: { $ne: created._id } });
-  created.code = generateAutoCode(created.title, created._id.toString(), siblings.map((i) => i.code));
-  await created.save();
-  return created;
+// Trae las categorías/secciones e items propios del usuario destino, para
+// poder detectar qué códigos de la plantilla ya fueron importados antes.
+const loadOwnCatalog = async (userID) => {
+  const menus = await Menu.find({ userID });
+  const items = await Item.find({ menuID: { $in: menus.map((m) => m._id) } });
+  return {
+    menuByCode: new Map(menus.filter((m) => m.code).map((m) => [m.code, m])),
+    itemCodes: new Set(items.map((i) => i.code).filter(Boolean)),
+  };
 };
 
 // ──────────────────────────────────────────────
 // @desc    Catálogo de plantillas: menú del usuario presetImagesUser,
 //          armado igual que fetchOwnMenu (secciones → categorías → items),
 //          de solo lectura. Sin banco configurado, devuelve un menú vacío
-//          (mismo contrato que getPresetImages con la imagen).
+//          (mismo contrato que getPresetImages con la imagen). Los productos
+//          cuyo código ya existe en el menú del usuario que consulta (una
+//          importación anterior, ver copyMenuTemplates) se excluyen para no
+//          ofrecerlos de nuevo; una categoría/sección sin nada pendiente
+//          por importar tampoco se lista.
 // @route   GET /api/menu-templates
 // @access  Private
 // ──────────────────────────────────────────────
@@ -74,28 +61,37 @@ const getMenuTemplates = async (req, res) => {
     const menus = await Menu.find({ userID: owner._id, hidden: false });
     const menuIDs = menus.map((m) => m._id);
     const items = await Item.find({ menuID: { $in: menuIDs }, hidden: false });
+    const { itemCodes: ownItemCodes } = await loadOwnCatalog(req.user._id);
 
     const secciones = menus.filter((m) => m.section === true);
     const categorias = menus.filter((m) => m.section === false);
 
-    const buildCategoria = (cat) => ({
-      _id: cat._id,
-      ...pickCategoryFields(cat),
-      items: items
+    const buildCategoria = (cat) => {
+      const pendingItems = items
         .filter((item) => item.menuID.equals(cat._id))
-        .map((item) => ({ _id: item._id, ...pickItemFields(item) })),
-    });
+        .filter((item) => !item.code || !ownItemCodes.has(item.code));
+      if (pendingItems.length === 0) return null;
+      return {
+        _id: cat._id,
+        ...pickCategoryFields(cat),
+        items: pendingItems.map((item) => ({ _id: item._id, ...pickItemFields(item) })),
+      };
+    };
 
-    res.json({
-      secciones: secciones.map((sec) => ({
+    const seccionesConPendientes = secciones
+      .map((sec) => ({
         _id: sec._id,
         ...pickCategoryFields(sec),
         categorias: categorias
           .filter((cat) => cat.sectionID && cat.sectionID.equals(sec._id))
-          .map(buildCategoria),
-      })),
-      sinSeccion: categorias.filter((cat) => !cat.sectionID).map(buildCategoria),
-    });
+          .map(buildCategoria)
+          .filter(Boolean),
+      }))
+      .filter((sec) => sec.categorias.length > 0);
+
+    const sinSeccion = categorias.filter((cat) => !cat.sectionID).map(buildCategoria).filter(Boolean);
+
+    res.json({ secciones: seccionesConPendientes, sinSeccion });
   } catch (error) {
     handleError(res, error);
   }
@@ -108,6 +104,12 @@ const getMenuTemplates = async (req, res) => {
 //          el usuario los hubiera cargado a mano. Un producto suelto cuya
 //          categoría no fue elegida entera se copia dentro de una copia de
 //          esa misma categoría (un Item siempre necesita un menuID).
+//
+//          Las copias conservan el código original de la plantilla (en vez
+//          de generar uno nuevo) para poder reconocer qué ya se importó: si
+//          el usuario ya tiene una categoría/sección con ese código, se
+//          reutiliza en vez de duplicarla, y un producto cuyo código ya
+//          existe en el destino se omite en silencio (ya estaba importado).
 // @route   POST /api/menu-templates/copy
 // @access  Private
 // ──────────────────────────────────────────────
@@ -162,7 +164,22 @@ const copyMenuTemplates = async (req, res) => {
           : looseItems.filter((item) => item.menuID.toString() === catId),
       ])
     );
+
+    // Descarta lo que el usuario ya importó antes (mismo código) — evita
+    // recrearlo y evita que una categoría ya existente cuente como "nueva".
+    const { menuByCode: ownMenuByCode, itemCodes: ownItemCodes } = await loadOwnCatalog(req.user._id);
+    for (const [catId, catItems] of itemsByCategory) {
+      itemsByCategory.set(catId, catItems.filter((item) => !item.code || !ownItemCodes.has(item.code)));
+    }
     const totalNewItems = [...itemsByCategory.values()].reduce((sum, arr) => sum + arr.length, 0);
+    const hasNewSection = selectedSections.some((sec) => !sec.code || !ownMenuByCode.has(sec.code));
+    const hasNewCategory = [...categoryIdsToCreate].some((catId) => {
+      const cat = ownerMenusById.get(catId);
+      return !cat.code || !ownMenuByCode.has(cat.code);
+    });
+    if (totalNewItems === 0 && !hasNewSection && !hasNewCategory) {
+      return res.status(400).json({ message: "Esa selección ya estaba importada en tu menú." });
+    }
 
     const { features } = await getRequestPlan(req);
     if (features.item_limit !== null && totalNewItems > 0) {
@@ -176,10 +193,20 @@ const copyMenuTemplates = async (req, res) => {
     }
 
     // ── Escritura ──────────────────────────────
+    // Reutiliza categoría/sección existente por código en vez de duplicarla;
+    // si no existe, la crea con el código de la plantilla (nunca uno nuevo).
     const newSectionIdByOldId = new Map();
+    let createdSections = 0;
     for (const sec of selectedSections) {
-      const created = await createMenuCopy(req.user._id, pickCategoryFields(sec), { section: true, sectionID: null });
+      const existing = sec.code ? ownMenuByCode.get(sec.code) : null;
+      if (existing) {
+        newSectionIdByOldId.set(sec._id.toString(), existing._id);
+        continue;
+      }
+      const created = await Menu.create({ userID: req.user._id, ...pickCategoryFields(sec), section: true, sectionID: null });
       newSectionIdByOldId.set(sec._id.toString(), created._id);
+      createdSections += 1;
+      if (sec.code) ownMenuByCode.set(sec.code, created);
     }
 
     let createdCategories = 0;
@@ -187,22 +214,38 @@ const copyMenuTemplates = async (req, res) => {
     for (const catId of categoryIdsToCreate) {
       const origCat = ownerMenusById.get(catId);
       const newSectionId = origCat.sectionID ? newSectionIdByOldId.get(origCat.sectionID.toString()) || null : null;
-      const createdCat = await createMenuCopy(req.user._id, pickCategoryFields(origCat), { section: false, sectionID: newSectionId });
-      createdCategories += 1;
+
+      const existingCat = origCat.code ? ownMenuByCode.get(origCat.code) : null;
+      let destCatId;
+      if (existingCat) {
+        destCatId = existingCat._id;
+      } else {
+        const created = await Menu.create({ userID: req.user._id, ...pickCategoryFields(origCat), section: false, sectionID: newSectionId });
+        destCatId = created._id;
+        createdCategories += 1;
+        if (origCat.code) ownMenuByCode.set(origCat.code, created);
+      }
 
       for (const origItem of itemsByCategory.get(catId)) {
-        await createItemCopy(createdCat._id, pickItemFields(origItem), features.programacion_productos === true);
+        const fields = pickItemFields(origItem);
+        const allowScheduling = features.programacion_productos === true;
+        await Item.create({
+          menuID: destCatId,
+          ...fields,
+          offerPrice: allowScheduling ? fields.offerPrice : null,
+          offerRange: allowScheduling ? fields.offerRange : { from: null, to: null },
+          availabilitySchedule: allowScheduling ? fields.availabilitySchedule : undefined,
+          available: true,
+          hidden: false,
+        });
         createdItems += 1;
+        if (origItem.code) ownItemCodes.add(origItem.code);
       }
     }
 
-    if (createdCategories > 0) await User.findByIdAndUpdate(req.user._id, { menu: true });
+    if (createdCategories > 0 || createdItems > 0) await User.findByIdAndUpdate(req.user._id, { menu: true });
 
-    res.status(201).json({
-      createdSections: newSectionIdByOldId.size,
-      createdCategories,
-      createdItems,
-    });
+    res.status(201).json({ createdSections, createdCategories, createdItems });
   } catch (error) {
     handleError(res, error);
   }
