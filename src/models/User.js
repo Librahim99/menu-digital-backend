@@ -258,6 +258,22 @@ const UserSchema = new mongoose.Schema(
         type: Boolean,
         default: false,
       },
+      // Qué datos de contacto se muestran en la landing pública (tarjeta
+      // "Agregar config para mostrar opcionalmente la info de contacto en
+      // landing page user"). Ocultar un dato no lo borra de contactInfo/
+      // schedule: la API pública directamente no lo envía (ver
+      // applyLandingVisibility en userController.js). Default `true` a
+      // propósito (mismo criterio lazy que emailVerified): las cuentas
+      // anteriores a esta opción siguen mostrando todo, sin backfill.
+      landingVisibility: {
+        phone: { type: Boolean, default: true }, // fila "Teléfono" (llamar / WhatsApp)
+        whatsappReserve: { type: Boolean, default: true }, // botón "Reservar por WhatsApp"
+        mail: { type: Boolean, default: true },
+        address: { type: Boolean, default: true }, // "Cómo llegar" (Google Maps)
+        schedule: { type: Boolean, default: true }, // horarios + badge "Abierto/Cerrado ahora"
+        instagram: { type: Boolean, default: true },
+        facebook: { type: Boolean, default: true },
+      },
     },
   },
   {

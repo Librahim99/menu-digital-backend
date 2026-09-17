@@ -91,6 +91,41 @@ const getContactInfo = (contactInfo) => {
     .map(field => [field, source[field]]));
 };
 
+// Datos que el dueño puede ocultar de la landing pública desde el panel de
+// Configuración (ver panelSettings.landingVisibility en models/User.js).
+const LANDING_VISIBILITY_KEYS = ["phone", "whatsappReserve", "mail", "address", "schedule", "instagram", "facebook"];
+
+// `!== false` y no `=== true`: un documento anterior a esta opción no tiene
+// el campo guardado, y eso significa "mostrar" (mismo default que el schema).
+const getLandingVisibility = (user) => Object.fromEntries(
+  LANDING_VISIBILITY_KEYS.map(key => [key, user?.panelSettings?.landingVisibility?.[key] !== false])
+);
+
+// contactInfo público sin lo que el dueño eligió ocultar. Se quita del JSON
+// en vez de mandarlo igual y esconderlo solo en el front: si el dueño no
+// quiere mostrar su mail, no tiene por qué quedar expuesto en la respuesta
+// de la API. `keys` acota qué opciones se aplican (ver fetchUserWithMenu).
+const hideContactInfo = (contactInfo, visibility, keys = LANDING_VISIBILITY_KEYS) => {
+  const isHidden = (key) => keys.includes(key) && !visibility[key];
+  const info = { ...contactInfo };
+  const blank = (field, value) => {
+    if (Object.prototype.hasOwnProperty.call(info, field)) info[field] = value;
+  };
+
+  // El número alimenta dos cosas en la landing (la fila de teléfono y el
+  // botón de reservas): solo deja de enviarse si las dos están ocultas.
+  if (isHidden("phone") && isHidden("whatsappReserve")) blank("number", null);
+  if (isHidden("mail")) blank("mail", "");
+  // location (lat/lng) ubica el local igual que la dirección.
+  if (isHidden("address")) { blank("address", ""); blank("location", {}); }
+  if (info.social && (isHidden("instagram") || isHidden("facebook"))) {
+    info.social = { ...info.social }; // copia: no tocar el objeto del documento
+    if (isHidden("instagram")) delete info.social.instagram;
+    if (isHidden("facebook")) delete info.social.facebook;
+  }
+  return info;
+};
+
 const getPublicItemForPlan = (item, features) => {
   const filtered = item.toObject({ flattenMaps: true });
   const hasSchedule = filtered.offerRange?.from || filtered.offerRange?.to;
@@ -599,7 +634,14 @@ const fetchUserWithMenu = async (req, res) => {
 
     const userFiltered = {
       _id: user._id,
-      contactInfo: getContactInfo(user.contactInfo),
+      // La carta no muestra mail ni redes, así que si el dueño los ocultó de
+      // la landing tampoco se envían acá. Número (pedidos por WhatsApp),
+      // dirección (cabecera) y horario siguen: la opción es de la landing.
+      contactInfo: hideContactInfo(
+        getContactInfo(user.contactInfo),
+        getLandingVisibility(user),
+        ["mail", "instagram", "facebook"]
+      ),
       media: user.media,
       hasDelivery: user.hasDelivery,
       template: getTemplateForFeatures(user.template, plan.features),
@@ -607,7 +649,7 @@ const fetchUserWithMenu = async (req, res) => {
       subscription: effectivePlan,
       features: plan.features,
     }
- 
+
     const menuArmado = {
       secciones: secciones.map((sec) => ({
         ...sec.toObject(),
@@ -1000,15 +1042,20 @@ const fetchUser = async (req, res) => {
       return res.status(403).json({ code: "LANDING_NOT_INCLUDED", message: "La página del local no está incluida en este plan. Consultá la carta." });
     }
 
+    // Lo oculto no se envía (ver hideContactInfo). landingVisibility igual
+    // viaja: el número puede venir solo para el botón de reservas, con la
+    // fila de teléfono oculta, y eso el front no lo puede deducir del dato.
+    const landingVisibility = getLandingVisibility(user);
     const userFiltered = {
       _id: user._id,
-      contactInfo: getContactInfo(user.contactInfo),
+      contactInfo: hideContactInfo(getContactInfo(user.contactInfo), landingVisibility),
       media: user.media,
       hasDelivery: user.hasDelivery,
       template: getTemplateForFeatures(user.template, plan.features),
-      schedule: user.schedule,
+      schedule: landingVisibility.schedule ? user.schedule : undefined,
       subscription: effectivePlan,
       features: plan.features,
+      landingVisibility,
     }
  
     res.json( userFiltered );
@@ -1374,6 +1421,14 @@ const setActive = async (req, res) => {
 // toggles no vuelve a pedirla.
 // ──────────────────────────────────────────────
 
+// Valor vigente de los toggles, con la misma forma en todas las respuestas
+// de /me/settings.
+const getPanelSettingsValues = (user) => ({
+  autoGenerateCodes: user?.panelSettings?.autoGenerateCodes === true,
+  disableMenuDelete: user?.panelSettings?.disableMenuDelete === true,
+  landingVisibility: getLandingVisibility(user),
+});
+
 // ──────────────────────────────────────────────
 // @desc    Estado del panel de Configuración: si ya existe una contraseña
 //          seteada (para que el front sepa si mostrar "crear" o "ingresar")
@@ -1386,8 +1441,7 @@ const getPanelSettingsStatus = async (req, res) => {
     const withPassword = await User.findById(req.user._id).select("+panelSettings.password");
     res.json({
       hasPassword: !!withPassword?.panelSettings?.password,
-      autoGenerateCodes: req.user.panelSettings?.autoGenerateCodes === true,
-      disableMenuDelete: req.user.panelSettings?.disableMenuDelete === true,
+      ...getPanelSettingsValues(req.user),
     });
   } catch (error) {
     handleError(res, error);
@@ -1422,8 +1476,7 @@ const verifyPanelSettingsPassword = async (req, res) => {
       return res.json({
         ok: true,
         created: true,
-        autoGenerateCodes: user.panelSettings.autoGenerateCodes === true,
-        disableMenuDelete: user.panelSettings.disableMenuDelete === true,
+        ...getPanelSettingsValues(user),
       });
     }
 
@@ -1437,8 +1490,7 @@ const verifyPanelSettingsPassword = async (req, res) => {
     res.json({
       ok: true,
       created: false,
-      autoGenerateCodes: user.panelSettings.autoGenerateCodes === true,
-      disableMenuDelete: user.panelSettings.disableMenuDelete === true,
+      ...getPanelSettingsValues(user),
     });
   } catch (error) {
     handleError(res, error);
@@ -1488,20 +1540,27 @@ const changePanelSettingsPassword = async (req, res) => {
 // ──────────────────────────────────────────────
 const updatePanelSettings = async (req, res) => {
   try {
-    const { autoGenerateCodes, disableMenuDelete } = req.body;
+    const { autoGenerateCodes, disableMenuDelete, landingVisibility } = req.body;
     const updates = {};
     if (typeof autoGenerateCodes === "boolean") updates["panelSettings.autoGenerateCodes"] = autoGenerateCodes;
     if (typeof disableMenuDelete === "boolean") updates["panelSettings.disableMenuDelete"] = disableMenuDelete;
+    // Edición parcial (el panel manda solo el toggle que cambió): se toman
+    // únicamente las claves conocidas con valor booleano.
+    if (landingVisibility && typeof landingVisibility === "object") {
+      LANDING_VISIBILITY_KEYS.forEach((key) => {
+        if (typeof landingVisibility[key] === "boolean") {
+          updates[`panelSettings.landingVisibility.${key}`] = landingVisibility[key];
+        }
+      });
+    }
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ message: "Nada para actualizar." });
     }
 
     const user = await User.findByIdAndUpdate(req.user._id, { $set: updates }, { new: true });
-    res.json({
-      autoGenerateCodes: user.panelSettings.autoGenerateCodes === true,
-      disableMenuDelete: user.panelSettings.disableMenuDelete === true,
-    });
+    if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+    res.json(getPanelSettingsValues(user));
   } catch (error) {
     handleError(res, error);
   }
