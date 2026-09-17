@@ -114,7 +114,7 @@ const newItem = async (req, res) => {
   try {
     const {
       menuID, code, title, description, price, image,
-      offerPrice, offerRange, availabilitySchedule, options, isExtra, recommended, apt, hidden, available
+      offerPrice, offerRange, offerSchedule, availabilitySchedule, options, isExtra, recommended, apt, hidden, available
     } = req.body;
 
         if (req.body.price != null && Number(req.body.price) < 0) {
@@ -146,7 +146,7 @@ const newItem = async (req, res) => {
       }
     }
 
-    const normalizedOffer = normalizeOffer({ price, offerPrice, offerRange });
+    const normalizedOffer = normalizeOffer({ price, offerPrice, offerRange, offerSchedule });
     if (normalizedOffer.error) return res.status(400).json({ message: normalizedOffer.error });
     if (normalizedOffer.isScheduled && !features.programacion_productos) {
       return res.status(403).json({ message: "La programación de ofertas no está incluida en tu plan." });
@@ -183,6 +183,7 @@ const newItem = async (req, res) => {
         menuID, title, description, price, image,
         code: autoGenerate ? String(Date.now()) : cleanCode,
         offerPrice: normalizedOffer.offerPrice, offerRange: normalizedOffer.offerRange,
+        offerSchedule: normalizedOffer.offerSchedule,
         availabilitySchedule: normalizedAvailabilitySchedule,
         options, isExtra, recommended, apt, hidden, available
       });
@@ -225,6 +226,7 @@ const editItem = async (req, res) => {
   "image",
   "offerPrice",
   "offerRange",
+  "offerSchedule",
   "availabilitySchedule",
   "options",
   "isExtra",
@@ -250,7 +252,9 @@ const editItem = async (req, res) => {
     }
 
     const { features } = await getRequestPlan(req);
-    const changesOffer = updates.offerPrice !== undefined || updates.offerRange !== undefined;
+    const changesOffer = updates.offerPrice !== undefined
+      || updates.offerRange !== undefined
+      || updates.offerSchedule !== undefined;
     const changesPrice = updates.price !== undefined && (
           updates.price == null ? item.price != null : Number(updates.price) !== Number(item.price)
         );
@@ -268,6 +272,7 @@ const editItem = async (req, res) => {
             price: updates.price !== undefined ? updates.price : item.price,
             offerPrice: updates.offerPrice !== undefined ? updates.offerPrice : item.offerPrice,
             offerRange: updates.offerRange !== undefined ? updates.offerRange : item.offerRange,
+            offerSchedule: updates.offerSchedule !== undefined ? updates.offerSchedule : item.offerSchedule,
           });
 
           if (normalizedOffer.error) {
@@ -281,6 +286,7 @@ const editItem = async (req, res) => {
           if (changesOffer) {
             updates.offerPrice = normalizedOffer.offerPrice;
             updates.offerRange = normalizedOffer.offerRange;
+            updates.offerSchedule = normalizedOffer.offerSchedule;
           }
         }
 

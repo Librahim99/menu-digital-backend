@@ -52,11 +52,27 @@ const ItemSchema = new mongoose.Schema(
       min: [0, "El precio en oferta no puede ser negativo"],
     },
 
-    // Rango de fecha y hora en el que aplica la oferta. Sin rango, el
-    // offerPrice es manual/permanente; la API pública resuelve la vigencia.
+    // Rango de fechas en el que aplica la oferta. Los dos extremos son
+    // opcionales e independientes (solo desde, solo hasta, ambos o ninguno);
+    // sin rango ni offerSchedule el offerPrice es manual/permanente. La API
+    // pública resuelve la vigencia (ver utils/offers.js).
     offerRange: {
       from: { type: Date, default: null }, // Inicio de la oferta
       to:   { type: Date, default: null }, // Fin de la oferta
+    },
+
+    // Días y horarios de la semana en los que rige la oferta, con el mismo
+    // shape que availabilitySchedule. Se combina con offerRange: el rango
+    // acota las fechas y esto, dentro de esas fechas, los días y las horas.
+    offerSchedule: {
+      enabled: { type: Boolean, default: false },
+      mon: { type: [TimeRangeSchema], default: [] },
+      tue: { type: [TimeRangeSchema], default: [] },
+      wed: { type: [TimeRangeSchema], default: [] },
+      thu: { type: [TimeRangeSchema], default: [] },
+      fri: { type: [TimeRangeSchema], default: [] },
+      sat: { type: [TimeRangeSchema], default: [] },
+      sun: { type: [TimeRangeSchema], default: [] },
     },
 
     /**
@@ -101,6 +117,13 @@ const ItemSchema = new mongoose.Schema(
       fri: { type: [TimeRangeSchema], default: [] },
       sat: { type: [TimeRangeSchema], default: [] },
       sun: { type: [TimeRangeSchema], default: [] },
+      // Opcional: fuera de estas fechas la programación no rige y vuelve a
+      // mandar el interruptor manual `available`. Los extremos son
+      // independientes entre sí.
+      dateRange: {
+        from: { type: Date, default: null },
+        to:   { type: Date, default: null },
+      },
     },
 
     isExtra: {

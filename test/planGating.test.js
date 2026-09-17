@@ -171,3 +171,27 @@ test("la API no acepta tipos ambiguos, claves desconocidas ni templates inexiste
     assert.equal(res.statusCode, 400, JSON.stringify(change));
   }
 });
+
+test("el horario semanal de la oferta también queda detrás de la programación del plan", async (t) => {
+  t.mock.method(Plan, "findOne", async () => document("pro", { programacion_productos: false }));
+  const offerSchedule = { enabled: true, mon: [{ from: "18:00", to: "20:00" }], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] };
+  const item = { _id: "item", menuID: { equals: id => id === "menu", toString: () => "menu" }, price: 100,
+    offerPrice: 80, offerRange: { from: null, to: null }, offerSchedule, available: true,
+    toObject() { return { ...this }; } };
+  t.mock.method(Item, "findById", async () => item);
+  t.mock.method(Menu, "findById", () => ({ select: async () => ({ userID: "owner" }) }));
+  t.mock.method(Item, "findByIdAndUpdate", async () => assert.fail("No debe guardar la programación"));
+  const blocked = response();
+  await editItem({ user: { _id: "owner", subscription: "pro" }, params: { itemID: "item" }, body: { offerSchedule } }, blocked);
+  assert.equal(blocked.statusCode, 403);
+
+  t.mock.method(User, "findOne", async () => ({ _id: "owner", subscription: "pro", contactInfo: {}, template: 1 }));
+  t.mock.method(PageView, "findOneAndUpdate", async () => ({}));
+  t.mock.method(Menu, "find", async () => [{ _id: "menu", section: false, toObject() { return {}; } }]);
+  t.mock.method(Item, "find", async () => [item]);
+  const publicMenu = response();
+  await users.fetchUserWithMenu({ params: { slug: "cafe" } }, publicMenu);
+  const published = publicMenu.body.menu.sinSeccion[0].items[0];
+  assert.equal(published.offerPrice, null);
+  assert.equal(published.offerSchedule.enabled, false);
+});

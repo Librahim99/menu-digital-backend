@@ -23,7 +23,7 @@ const {
   updateUserWithUniqueSlug,
 } = require("../utils/slug");
 const { isScheduleAvailableAt } = require("../utils/itemAvailability");
-const { isOfferActive } = require("../utils/offers");
+const { getEmptyOfferSchedule, isOfferActive } = require("../utils/offers");
 const { isValidEmail, isWeakPassword, isValidUsername, isValidPhone } = require("../utils/validators");
 const { escapeRegex } = require("../utils/regex");
 const {
@@ -128,10 +128,12 @@ const hideContactInfo = (contactInfo, visibility, keys = LANDING_VISIBILITY_KEYS
 
 const getPublicItemForPlan = (item, features) => {
   const filtered = item.toObject({ flattenMaps: true });
-  const hasSchedule = filtered.offerRange?.from || filtered.offerRange?.to;
+  const hasSchedule = filtered.offerRange?.from || filtered.offerRange?.to
+    || filtered.offerSchedule?.enabled;
   if (hasSchedule && !features.programacion_productos) {
     filtered.offerPrice = null;
     filtered.offerRange = { from: null, to: null };
+    filtered.offerSchedule = getEmptyOfferSchedule();
   }
   if (filtered.offerPrice != null && !isOfferActive(filtered)) {
     filtered.offerPrice = null;

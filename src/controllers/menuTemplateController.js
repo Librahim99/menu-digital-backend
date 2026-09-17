@@ -24,10 +24,10 @@ const pickCategoryFields = (menu) => {
 
 const pickItemFields = (item) => {
   const {
-    title, description, price, offerPrice, offerRange, options, image,
+    title, description, price, offerPrice, offerRange, offerSchedule, options, image,
     isExtra, recommended, apt, availabilitySchedule, code,
   } = item.toObject();
-  return { title, description, price, offerPrice, offerRange, options, image, isExtra, recommended, apt, availabilitySchedule, code };
+  return { title, description, price, offerPrice, offerRange, offerSchedule, options, image, isExtra, recommended, apt, availabilitySchedule, code };
 };
 
 // Trae las categorías/secciones e items propios del usuario destino, para
@@ -234,6 +234,7 @@ const copyMenuTemplates = async (req, res) => {
           ...fields,
           offerPrice: allowScheduling ? fields.offerPrice : null,
           offerRange: allowScheduling ? fields.offerRange : { from: null, to: null },
+          offerSchedule: allowScheduling ? fields.offerSchedule : undefined,
           availabilitySchedule: allowScheduling ? fields.availabilitySchedule : undefined,
           available: true,
           hidden: false,
