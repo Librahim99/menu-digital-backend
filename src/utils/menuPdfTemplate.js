@@ -3,6 +3,8 @@
  * del menú. Recibe el mismo `menuArmado` que ya arma fetchUserWithMenu /
  * fetchOwnMenu: { secciones: [{...menu, categorias:[{...menu, items:[]}]}],
  * sinSeccion: [{...menu, items:[]}] }.
+ * Con `hidePrices` (opción "Ocultar precios" de la carta) no dibuja ningún
+ * precio; sin ella el HTML es el de siempre.
  */
 
 const { PLAYFAIR_REGULAR_WOFF2_BASE64, PLAYFAIR_ITALIC_WOFF2_BASE64 } = require("./menuPdfFonts");
@@ -51,7 +53,14 @@ function buildCoverContactLine(contactInfo = {}) {
   return parts.map((p) => escapeHTML(p)).join(' <span class="dot">&middot;</span> ');
 }
 
-function renderPriceBlock(item) {
+function renderPriceBlock(item, { hidePrices = false } = {}) {
+  // Con precios ocultos no va el bloque entero: ni precio, ni oferta, ni el
+  // tachado. downloadMenuPdf ya manda los items sin precios (hideItemPrices),
+  // pero el template no depende de eso para no imprimir un "$0" o un precio
+  // que se haya colado. Sin el bloque, .item-name-wrap (flex: 1) ocupa todo
+  // el ancho de .item-top: no queda un hueco a la derecha del nombre.
+  if (hidePrices) return "";
+
   // userController ya filtra offerPrice cuando la oferta todavía no comenzó
   // o ya finalizó; el template solo representa el estado público recibido.
   const offerActive = item.offerPrice != null;
@@ -71,22 +80,27 @@ function renderPriceBlock(item) {
   return "";
 }
 
-function renderOptions(options) {
+// Con precios ocultos cada variante es solo su nombre: sin la línea de puntos
+// (.opt-dots) que llevaba al precio, que quedaría apuntando a la nada. El
+// nombre va como texto suelto del <li> y no en .opt-name, que no encoge
+// (flex-shrink: 0): así un nombre largo corta en renglones en vez de
+// desbordar la columna.
+function renderOptions(options, { hidePrices = false } = {}) {
   if (!options || Object.keys(options).length === 0) return "";
   const rows = Object.entries(options)
-    .map(
-      ([name, price]) =>
-        `<li>
+    .map(([name, price]) => {
+      if (hidePrices) return `<li>${escapeHTML(name)}</li>`;
+      return `<li>
           <span class="opt-name">${escapeHTML(name)}</span>
           <span class="opt-dots"></span>
           <span class="opt-price">${formatPrice(price)}</span>
-        </li>`
-    )
+        </li>`;
+    })
     .join("");
   return `<ul class="item-options">${rows}</ul>`;
 }
 
-function renderItem(item) {
+function renderItem(item, { hidePrices = false } = {}) {
   return `
     <div class="item ${item.recommended ? "recommended" : ""}">
       ${item.image ? `<img class="item-img" src="${escapeHTML(item.image)}" alt="" />` : ""}
@@ -96,15 +110,15 @@ function renderItem(item) {
             <span class="item-title">${escapeHTML(item.title)}</span>
             ${item.recommended ? `<span class="reco-badge">★</span>` : ""}
           </div>
-          ${renderPriceBlock(item)}
+          ${renderPriceBlock(item, { hidePrices })}
         </div>
         ${item.description ? `<p class="item-desc">${escapeHTML(item.description)}</p>` : ""}
-        ${renderOptions(item.options)}
+        ${renderOptions(item.options, { hidePrices })}
       </div>
     </div>`;
 }
 
-function renderCategoryBlock(categoria, { nested } = {}) {
+function renderCategoryBlock(categoria, { nested, hidePrices = false } = {}) {
   const items = (categoria.items || []).filter((it) => !it.hidden && it.available);
   if (items.length === 0) return "";
 
@@ -120,14 +134,14 @@ function renderCategoryBlock(categoria, { nested } = {}) {
         </div>
       </div>
       <div class="items-grid">
-        ${items.map(renderItem).join("")}
+        ${items.map((item) => renderItem(item, { hidePrices })).join("")}
       </div>
     </div>`;
 }
 
-function renderChapter(seccion) {
+function renderChapter(seccion, { hidePrices = false } = {}) {
   const categoriesHTML = (seccion.categorias || [])
-    .map((cat) => renderCategoryBlock(cat, { nested: true }))
+    .map((cat) => renderCategoryBlock(cat, { nested: true, hidePrices }))
     .filter(Boolean)
     .join("");
 
@@ -146,13 +160,13 @@ function renderChapter(seccion) {
     </section>`;
 }
 
-function buildMenuHTML({ businessName = "Menú", menuArmado, contactInfo = {} }) {
+function buildMenuHTML({ businessName = "Menú", menuArmado, contactInfo = {}, hidePrices = false }) {
   const secciones  = menuArmado?.secciones ?? [];
   const sinSeccion = menuArmado?.sinSeccion ?? [];
 
-  const chaptersHTML = secciones.map(renderChapter).join("");
+  const chaptersHTML = secciones.map((sec) => renderChapter(sec, { hidePrices })).join("");
   const looseHTML = sinSeccion
-    .map((cat) => renderCategoryBlock(cat, { nested: false }))
+    .map((cat) => renderCategoryBlock(cat, { nested: false, hidePrices }))
     .filter(Boolean)
     .join("");
 

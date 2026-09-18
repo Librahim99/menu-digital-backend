@@ -178,6 +178,7 @@ test("GET /me/settings devuelve la visibilidad vigente con defaults", async (t) 
     autoGenerateCodes: false,
     disableMenuDelete: false,
     landingVisibility: { ...ALL_VISIBLE, mail: false },
+    menuDisplay: { featuredSection: false, collapsibleCategories: false, hidePrices: false },
   });
 });
 

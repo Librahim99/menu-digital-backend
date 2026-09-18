@@ -12,6 +12,7 @@ const {
   TEMPLATE_IDS,
 } = require("../config/plans");
 const { getPlanForUser, getRequestPlan } = require("../services/planCatalog");
+const { MENU_STYLES, getMenuStyle } = require("../config/menuStyles");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { buildStatsPeriod } = require("../utils/statsPeriod");
 const { logCrmEvent } = require("../utils/crmEvents");
@@ -85,11 +86,15 @@ const trackItemView = (userID, itemID) => {
 // todavía conserve campos que ya no forman parte del producto.
 const getContactInfo = (contactInfo) => {
   const source = contactInfo?.toObject?.() ?? contactInfo ?? {};
-  const fields = ["mail", "number", "location", "address", "social", "businessName", "reservationMessage"];
+  const fields = ["mail", "number", "location", "address", "social", "businessName", "reservationMessage", "orderMessage"];
   return Object.fromEntries(fields
     .filter(field => Object.prototype.hasOwnProperty.call(source, field))
     .map(field => [field, source[field]]));
 };
+
+// Tope de contactInfo.orderMessage (ver editUser); el modelo repite el mismo
+// número como red de contención.
+const ORDER_MESSAGE_MAX_LENGTH = 500;
 
 // Datos que el dueño puede ocultar de la landing pública desde el panel de
 // Configuración (ver panelSettings.landingVisibility en models/User.js).
@@ -126,6 +131,34 @@ const hideContactInfo = (contactInfo, visibility, keys = LANDING_VISIBILITY_KEYS
   return info;
 };
 
+// Opciones de cómo se ve la carta pública, que el dueño activa desde el panel
+// de Configuración (ver panelSettings.menuDisplay en models/User.js).
+const MENU_DISPLAY_KEYS = ["featuredSection", "collapsibleCategories", "hidePrices"];
+
+// `=== true`, al revés que getLandingVisibility: estas opciones arrancan
+// apagadas, así que un documento sin el campo guardado significa "no".
+const getMenuDisplay = (user) => Object.fromEntries(
+  MENU_DISPLAY_KEYS.map(key => [key, user?.panelSettings?.menuDisplay?.[key] === true])
+);
+
+// Item de la carta pública sin precios, para cuando el dueño activó "Ocultar
+// precios". Mismo principio que hideContactInfo: las dos rutas públicas con
+// los productos, la carta (GET /:slug/menu) y el PDF (GET /:slug/menu/pdf),
+// no mandan lo que el dueño ocultó, en vez de mandarlo igual y esconderlo
+// solo en el front o en el template. Ver getPublicMenuItem.
+// Las claves de options se conservan porque la carta y el PDF siguen
+// mostrando los nombres de las variantes (y el pedido por WhatsApp las
+// lista); solo se pisa el valor. Recibe el item ya pasado por
+// getPublicItemForPlan (objeto plano, options sin Map).
+const hideItemPrices = (item) => ({
+  ...item,
+  price: null,
+  offerPrice: null,
+  offerRange: { from: null, to: null },
+  offerSchedule: getEmptyOfferSchedule(),
+  options: Object.fromEntries(Object.keys(item.options ?? {}).map(name => [name, 0])),
+});
+
 const getPublicItemForPlan = (item, features) => {
   const filtered = item.toObject({ flattenMaps: true });
   const hasSchedule = filtered.offerRange?.from || filtered.offerRange?.to
@@ -146,6 +179,15 @@ const getPublicItemForPlan = (item, features) => {
     filtered.available = isScheduleAvailableAt(filtered.availabilitySchedule);
   }
   return filtered;
+};
+
+// Item tal como lo ven los clientes, en la carta (fetchUserWithMenu) y en el
+// PDF (downloadMenuPdf): filtrado según el plan y, con "Ocultar precios", sin
+// precios. El editor (fetchOwnMenu) no pasa por acá: necesita los precios
+// para editarlos.
+const getPublicMenuItem = (item, features, menuDisplay) => {
+  const publicItem = getPublicItemForPlan(item, features);
+  return menuDisplay.hidePrices ? hideItemPrices(publicItem) : publicItem;
 };
 
 // ──────────────────────────────────────────────
@@ -548,6 +590,7 @@ const getAuthUser = async (req, res) => {
       downgradedAt: subscriptionState.downgradedAt,
       features: plan.features,
       template: getTemplateForFeatures(user.template, plan.features),
+      menuStyle: getMenuStyle(user.menuStyle),
       itemCount,
       categoryCount: categorias.length,
     });
@@ -633,6 +676,11 @@ const fetchUserWithMenu = async (req, res) => {
     const secciones  = menus.filter((m) => m.section === true);
     const categorias = menus.filter((m) => m.section === false);
 
+    // Con "Ocultar precios" los items viajan sin precios (getPublicMenuItem),
+    // igual que en el PDF. El carrito y el pedido por WhatsApp siguen: la
+    // carta los arma con productos y cantidades, sin montos.
+    const menuDisplay = getMenuDisplay(user);
+    const toPublicItem = (item) => getPublicMenuItem(item, plan.features, menuDisplay);
 
     const userFiltered = {
       _id: user._id,
@@ -650,6 +698,8 @@ const fetchUserWithMenu = async (req, res) => {
       schedule: user.schedule,
       subscription: effectivePlan,
       features: plan.features,
+      menuDisplay,
+      menuStyle: getMenuStyle(user.menuStyle),
     }
 
     const menuArmado = {
@@ -661,7 +711,7 @@ const fetchUserWithMenu = async (req, res) => {
             ...cat.toObject(),
             items: allItems
               .filter((item) => item.menuID.equals(cat._id))
-              .map((item) => getPublicItemForPlan(item, plan.features)),
+              .map(toPublicItem),
           })),
       })),
       sinSeccion: categorias
@@ -670,7 +720,7 @@ const fetchUserWithMenu = async (req, res) => {
           ...cat.toObject(),
           items: allItems
             .filter((item) => item.menuID.equals(cat._id))
-            .map((item) => getPublicItemForPlan(item, plan.features)),
+            .map(toPublicItem),
         })),
     };
  
@@ -686,6 +736,8 @@ const fetchUserWithMenu = async (req, res) => {
 //          fetchUserWithMenu (mismos filtros de hidden/available), y le pasa
 //          esa estructura al template de utils/menuPdfTemplate para renderizar
 //          el HTML que Puppeteer convierte en PDF.
+//          Respeta "Ocultar precios" (menuDisplay.hidePrices) igual que la
+//          carta: con la opción activa el PDF sale sin ningún precio.
 // @route   GET /api/users/:slug/menu/pdf
 // @access  Public
 // ──────────────────────────────────────────────
@@ -721,9 +773,15 @@ const downloadMenuPdf = async (req, res) => {
     const secciones  = menus.filter((m) => m.section === true);
     const categorias = menus.filter((m) => m.section === false);
 
-    // flattenMaps: true convierte item.options (Mongoose Map) a un objeto
-    // plano — sin esto, Object.entries() en el template no itera bien las
-    // variantes/adicionales del item.
+    // Con "Ocultar precios" los items salen sin precios, igual que en la
+    // carta (fetchUserWithMenu), y el template tampoco dibuja el lugar del
+    // precio ni el valor de las variantes.
+    const menuDisplay = getMenuDisplay(user);
+    const toPublicItem = (item) => getPublicMenuItem(item, plan.features, menuDisplay);
+
+    // flattenMaps: true (en getPublicItemForPlan) convierte item.options
+    // (Mongoose Map) a un objeto plano — sin esto, Object.entries() en el
+    // template no itera bien las variantes/adicionales del item.
     const menuArmado = {
       secciones: secciones.map((sec) => ({
         ...sec.toObject(),
@@ -733,7 +791,7 @@ const downloadMenuPdf = async (req, res) => {
             ...cat.toObject(),
             items: allItems
               .filter((item) => item.menuID.equals(cat._id))
-              .map((item) => getPublicItemForPlan(item, plan.features)),
+              .map(toPublicItem),
           })),
       })),
       sinSeccion: categorias
@@ -742,7 +800,7 @@ const downloadMenuPdf = async (req, res) => {
           ...cat.toObject(),
           items: allItems
             .filter((item) => item.menuID.equals(cat._id))
-            .map((item) => getPublicItemForPlan(item, plan.features)),
+            .map(toPublicItem),
         })),
     };
 
@@ -751,6 +809,7 @@ const downloadMenuPdf = async (req, res) => {
       businessName,
       menuArmado,
       contactInfo: user.contactInfo,
+      hidePrices: menuDisplay.hidePrices,
     });
 
     const browser = await getBrowser();
@@ -1087,9 +1146,10 @@ const editUser = async (req, res) => {
     // Conservar los datos de contacto vigentes que no llegan en una edición
     // parcial, sin volver a aceptar campos retirados enviados por clientes viejos.
     if (updates.contactInfo) {
+      const incomingContactInfo = getContactInfo(updates.contactInfo);
       updates.contactInfo = {
         ...getContactInfo(req.user.contactInfo),
-        ...getContactInfo(updates.contactInfo),
+        ...incomingContactInfo,
       };
 
       // Mismo chequeo que en el alta (newUser): el email de contacto no es
@@ -1109,6 +1169,23 @@ const editUser = async (req, res) => {
         return res.status(400).json({
           message: "Para cambiar tu email de contacto usá la opción de cambiar email y confirmá el código que te mandamos a la casilla nueva.",
         });
+      }
+
+      // El texto extra del pedido por WhatsApp termina dentro de un link
+      // wa.me que arma la carta: se exige string y se acota el largo para
+      // que un texto enorme no rompa ese link. Solo se valida si llegó en
+      // esta edición; si no, queda el que ya estaba guardado.
+      if (Object.prototype.hasOwnProperty.call(incomingContactInfo, "orderMessage")) {
+        if (typeof incomingContactInfo.orderMessage !== "string") {
+          return res.status(400).json({ message: "El mensaje de pedido no es válido." });
+        }
+        const orderMessage = incomingContactInfo.orderMessage.trim();
+        if (orderMessage.length > ORDER_MESSAGE_MAX_LENGTH) {
+          return res.status(400).json({
+            message: `El mensaje de pedido no puede superar los ${ORDER_MESSAGE_MAX_LENGTH} caracteres.`,
+          });
+        }
+        updates.contactInfo.orderMessage = orderMessage;
       }
     }
 
@@ -1356,7 +1433,11 @@ const deleteBackground = async (req, res) => {
 // ──────────────────────────────────────────────
 const useTemplate = async (req, res) => {
   try {
-    const { template } = req.body;
+    const { template, menuStyle } = req.body;
+
+    if (menuStyle !== undefined && !MENU_STYLES.includes(menuStyle)) {
+      return res.status(400).json({ message: "Diseño de carta inválido" });
+    }
 
     if (typeof template !== "number") {
       return res.status(400).json({ message: "Template debe ser un número" });
@@ -1375,15 +1456,21 @@ const useTemplate = async (req, res) => {
 
     const user = await User.findByIdAndUpdate(
       req.user._id,
-      { template },
-      { new: true }
+      { template, ...(menuStyle !== undefined ? { menuStyle } : {}) },
+      { new: true, runValidators: true }
     );
+
+    if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
 
     if (previousTemplate !== template) {
       await logCrmEvent(req.user._id, `Cambió de template #${previousTemplate} → #${template}`);
     }
 
-    res.json({ template: user.template });
+    if (menuStyle !== undefined && getMenuStyle(req.user.menuStyle) !== menuStyle) {
+      await logCrmEvent(req.user._id, `Cambió el diseño de carta a ${menuStyle === "bistro" ? "Bistró" : "Clásico"}`);
+    }
+
+    res.json({ template: user.template, menuStyle: getMenuStyle(user.menuStyle) });
   } catch (error) {
     handleError(res, error);
   }
@@ -1429,6 +1516,7 @@ const getPanelSettingsValues = (user) => ({
   autoGenerateCodes: user?.panelSettings?.autoGenerateCodes === true,
   disableMenuDelete: user?.panelSettings?.disableMenuDelete === true,
   landingVisibility: getLandingVisibility(user),
+  menuDisplay: getMenuDisplay(user),
 });
 
 // ──────────────────────────────────────────────
@@ -1542,19 +1630,25 @@ const changePanelSettingsPassword = async (req, res) => {
 // ──────────────────────────────────────────────
 const updatePanelSettings = async (req, res) => {
   try {
-    const { autoGenerateCodes, disableMenuDelete, landingVisibility } = req.body;
+    const { autoGenerateCodes, disableMenuDelete } = req.body;
     const updates = {};
     if (typeof autoGenerateCodes === "boolean") updates["panelSettings.autoGenerateCodes"] = autoGenerateCodes;
     if (typeof disableMenuDelete === "boolean") updates["panelSettings.disableMenuDelete"] = disableMenuDelete;
     // Edición parcial (el panel manda solo el toggle que cambió): se toman
-    // únicamente las claves conocidas con valor booleano.
-    if (landingVisibility && typeof landingVisibility === "object") {
-      LANDING_VISIBILITY_KEYS.forEach((key) => {
-        if (typeof landingVisibility[key] === "boolean") {
-          updates[`panelSettings.landingVisibility.${key}`] = landingVisibility[key];
+    // únicamente las claves conocidas con valor booleano. landingVisibility y
+    // menuDisplay siguen el mismo criterio.
+    [
+      ["landingVisibility", LANDING_VISIBILITY_KEYS],
+      ["menuDisplay", MENU_DISPLAY_KEYS],
+    ].forEach(([group, keys]) => {
+      const values = req.body[group];
+      if (!values || typeof values !== "object") return;
+      keys.forEach((key) => {
+        if (typeof values[key] === "boolean") {
+          updates[`panelSettings.${group}.${key}`] = values[key];
         }
       });
-    }
+    });
 
     if (Object.keys(updates).length === 0) {
       return res.status(400).json({ message: "Nada para actualizar." });

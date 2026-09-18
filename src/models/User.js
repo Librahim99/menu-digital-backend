@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const { isValidImageUrl } = require("../utils/imageUrl");
+const { MENU_STYLES } = require("../config/menuStyles");
 
 const UserSchema = new mongoose.Schema(
   {
@@ -124,6 +125,13 @@ const UserSchema = new mongoose.Schema(
       default: 1, // Template visual elegido para su landing/menú
     },
 
+    // Diseño de la carta; template sigue eligiendo la paleta de colores.
+    menuStyle: {
+      type: String,
+      enum: MENU_STYLES,
+      default: "classic",
+    },
+
     acceptedTerms: {
       type: Boolean,
       default: false,
@@ -160,6 +168,16 @@ const UserSchema = new mongoose.Schema(
       social: { type: Object, default: {} }, // Ej: { instagram: "", facebook: "" }
       businessName: { type: String, default: "" }, // Nombre visible del local
       reservationMessage: { type: String, default: "" }, // Mensaje pre-cargado del botón "Reservar por WhatsApp"
+      // Texto libre que la carta suma al final del mensaje de pedido por
+      // WhatsApp, debajo del total (o de los productos, si la carta oculta
+      // los precios). Vacío = el pedido sale igual que antes.
+      // El tipo, el trim y el largo se validan en editUser; el maxlength es
+      // la red de contención, mismo criterio que el password.
+      orderMessage: {
+        type: String,
+        default: "",
+        maxlength: [500, "El mensaje de pedido no puede superar los 500 caracteres."],
+      },
     },
 
     // Imágenes del local (galería y foto de portada)
@@ -273,6 +291,19 @@ const UserSchema = new mongoose.Schema(
         schedule: { type: Boolean, default: true }, // horarios + badge "Abierto/Cerrado ahora"
         instagram: { type: Boolean, default: true },
         facebook: { type: Boolean, default: true },
+      },
+      // Cómo se ve la carta pública (tarjetas "Destacados", "Categorías
+      // desplegables" y "Ocultar precios"). Default `false` a propósito, al
+      // revés que landingVisibility: las tres cambian cómo se ve una carta
+      // que ya está en uso, así que ninguna cuenta (nueva o vieja) las ve
+      // activadas sin haberlo elegido. Con hidePrices ni la carta pública
+      // (GET /:slug/menu) ni el PDF (GET /:slug/menu/pdf) envían precios
+      // (ver hideItemPrices en userController.js); el pedido por WhatsApp
+      // sigue, con productos y cantidades. El editor de menú sí los recibe.
+      menuDisplay: {
+        featuredSection: { type: Boolean, default: false }, // carrusel "Destacados" con los productos recommended
+        collapsibleCategories: { type: Boolean, default: false }, // categorías desplegables
+        hidePrices: { type: Boolean, default: false }, // carta, PDF y pedido por WhatsApp sin precios
       },
     },
   },
