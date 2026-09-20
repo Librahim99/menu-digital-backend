@@ -7,7 +7,8 @@ const Item = require("../src/models/Item");
 const PageView = require("../src/models/PageView");
 const CrmProfile = require("../src/models/CrmProfile");
 const { INITIAL_PLANS } = require("../src/services/planCatalog");
-const { useTemplate, fetchUserWithMenu, getAuthUser } = require("../src/controllers/userController");
+const { useTemplate, fetchUserWithMenu, fetchUser, getAuthUser } = require("../src/controllers/userController");
+const { MENU_STYLES, MENU_STYLE_LABELS } = require("../src/config/menuStyles");
 
 const response = () => ({
   statusCode: 200, body: null,
@@ -26,23 +27,25 @@ test("cuentas nuevas usan Clásico y el schema rechaza diseños desconocidos", (
   assert.ok(new User({ menuStyle: "unknown" }).validateSync().errors.menuStyle);
 });
 
-test("guarda Bistró con la paleta permitida y registra el cambio en CRM", async (t) => {
+for (const menuStyle of MENU_STYLES.filter(style => style !== "classic")) {
+test(`guarda ${menuStyle} con una paleta permitida y registra su nombre en CRM`, async (t) => {
   mockPlan(t);
   const user = owner();
   let event;
   t.mock.method(CrmProfile, "findOneAndUpdate", async (_, update) => { event = update; });
   t.mock.method(User, "findByIdAndUpdate", async (id, update, options) => {
     assert.equal(id, user._id);
-    assert.deepEqual(update, { template: 1, menuStyle: "bistro" });
+    assert.deepEqual(update, { template: 1, menuStyle });
     assert.equal(options.runValidators, true);
     return { ...user, ...update };
   });
   const res = response();
-  await useTemplate({ user, body: { template: 1, menuStyle: "bistro" } }, res);
+  await useTemplate({ user, body: { template: 1, menuStyle } }, res);
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.body, { template: 1, menuStyle: "bistro" });
-  assert.match(event.$push.notes.$each[0].text, /Bistró/);
+  assert.deepEqual(res.body, { template: 1, menuStyle });
+  assert.ok(event.$push.notes.$each[0].text.includes(MENU_STYLE_LABELS[menuStyle]));
 });
+}
 
 test("clientes anteriores pueden cambiar paleta sin sobrescribir el diseño", async (t) => {
   mockPlan(t);
@@ -64,9 +67,11 @@ test("rechaza estilos arbitrarios y no permite saltarse el gating de paletas", a
     await useTemplate({ user: owner(), body: { template: 1, menuStyle } }, res);
     assert.equal(res.statusCode, 400);
   }
-  const res = response();
-  await useTemplate({ user: owner(), body: { template: 6, menuStyle: "bistro" } }, res);
-  assert.equal(res.statusCode, 403);
+  for (const menuStyle of MENU_STYLES) {
+    const res = response();
+    await useTemplate({ user: owner(), body: { template: 6, menuStyle } }, res);
+    assert.equal(res.statusCode, 403);
+  }
 });
 
 test("la carta pública y el editor devuelven el diseño; cuentas viejas conservan Clásico", async (t) => {
@@ -75,18 +80,38 @@ test("la carta pública y el editor devuelven el diseño; cuentas viejas conserv
   t.mock.method(Item, "find", async () => []);
   t.mock.method(Item, "countDocuments", async () => 0);
   t.mock.method(PageView, "findOneAndUpdate", async () => ({}));
-  for (const menuStyle of [undefined, "bistro", "unknown"]) {
+  for (const menuStyle of [undefined, ...MENU_STYLES, "unknown"]) {
     const user = { ...owner(), menuStyle, toObject() { return { ...this }; } };
     t.mock.method(User, "findOne", async () => user);
     t.mock.method(User, "findByIdAndUpdate", async () => user);
     const menu = response();
     await fetchUserWithMenu({ params: { slug: "bistro-de-prueba" } }, menu);
     assert.equal(menu.statusCode, 200);
-    assert.equal(menu.body.user.menuStyle, menuStyle === "bistro" ? "bistro" : "classic");
+    assert.equal(menu.body.user.menuStyle, MENU_STYLES.includes(menuStyle) ? menuStyle : "classic");
     const panel = response();
     await getAuthUser({ user }, panel);
     assert.equal(panel.body.menuStyle, menu.body.user.menuStyle);
   }
+});
+
+test("la portada devuelve la misma familia sin eludir la disponibilidad por plan", async (t) => {
+  mockPlan(t);
+  for (const menuStyle of [undefined, ...MENU_STYLES, "unknown"]) {
+    t.mock.method(User, "findOne", async () => ({ ...owner(), subscription: "pro", menuStyle }));
+    const res = response();
+    await fetchUser({ params: { slug: "local-de-prueba" } }, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.menuStyle, MENU_STYLES.includes(menuStyle) ? menuStyle : "classic");
+  }
+  t.mock.method(User, "findOne", async () => ({ ...owner(), menuStyle: "premium" }));
+  t.mock.method(Plan, "findOne", async () => {
+    const plan = INITIAL_PLANS.find(value => value.name === "free");
+    return new Plan({ ...plan, features: { ...plan.features, landing_page: false } });
+  });
+  const res = response();
+  await fetchUser({ params: { slug: "local-de-prueba" } }, res);
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.code, "LANDING_NOT_INCLUDED");
 });
 
 test("informa si la cuenta desapareció antes de guardar", async (t) => {

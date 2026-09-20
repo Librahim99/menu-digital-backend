@@ -12,7 +12,7 @@ const {
   TEMPLATE_IDS,
 } = require("../config/plans");
 const { getPlanForUser, getRequestPlan } = require("../services/planCatalog");
-const { MENU_STYLES, getMenuStyle } = require("../config/menuStyles");
+const { MENU_STYLES, MENU_STYLE_LABELS, getMenuStyle } = require("../config/menuStyles");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { buildStatsPeriod } = require("../utils/statsPeriod");
 const { logCrmEvent } = require("../utils/crmEvents");
@@ -1114,6 +1114,7 @@ const fetchUser = async (req, res) => {
       hasDelivery: user.hasDelivery,
       template: getTemplateForFeatures(user.template, plan.features),
       schedule: landingVisibility.schedule ? user.schedule : undefined,
+      menuStyle: getMenuStyle(user.menuStyle),
       subscription: effectivePlan,
       features: plan.features,
       landingVisibility,
@@ -1467,7 +1468,7 @@ const useTemplate = async (req, res) => {
     }
 
     if (menuStyle !== undefined && getMenuStyle(req.user.menuStyle) !== menuStyle) {
-      await logCrmEvent(req.user._id, `Cambió el diseño de carta a ${menuStyle === "bistro" ? "Bistró" : "Clásico"}`);
+      await logCrmEvent(req.user._id, `Cambió el diseño de carta a ${MENU_STYLE_LABELS[menuStyle]}`);
     }
 
     res.json({ template: user.template, menuStyle: getMenuStyle(user.menuStyle) });

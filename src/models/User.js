@@ -125,7 +125,7 @@ const UserSchema = new mongoose.Schema(
       default: 1, // Template visual elegido para su landing/menú
     },
 
-    // Diseño de la carta; template sigue eligiendo la paleta de colores.
+    // Familia visual de portada y carta; template elige la paleta de colores.
     menuStyle: {
       type: String,
       enum: MENU_STYLES,
