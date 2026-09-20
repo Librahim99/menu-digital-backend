@@ -30,7 +30,10 @@ test("los tres planes iniciales validan sin alterar sus importes actuales", asyn
 test("features es obligatorio y rechaza límites o listas de templates inválidas", async () => {
   for (const features of [undefined, { ...catalog.INITIAL_PLANS[0].features, item_limit: undefined },
     { ...catalog.INITIAL_PLANS[0].features, templateIds: [] },
-    { ...catalog.INITIAL_PLANS[0].features, templateIds: [1, 16] }]) {
+    { ...catalog.INITIAL_PLANS[0].features, templateIds: [1, 16] },
+    // Prueba que menu_styles entró a BOOLEAN_FEATURES (de donde sale el schema)
+    // y no solo a INITIAL_PLANS: si faltara de la lista, esto no rechazaría.
+    { ...catalog.INITIAL_PLANS[0].features, menu_styles: undefined }]) {
     await assert.rejects(document("free", { features }).validate(), { name: "ValidationError" });
   }
 });
@@ -92,6 +95,11 @@ test("el DTO expone los permisos reales y no filtra metadatos internos", () => {
   assert.equal(dto._id, undefined);
   assert.equal(dto.__v, undefined);
   assert.deepEqual(catalog.planToDTO(document("free")).features.templateIds, [1]);
+  // Familias visuales: exclusivas de Pro al lanzarlas. Sin estos asserts,
+  // invertir el default en INITIAL_PLANS no rompería ninguna prueba.
+  assert.equal(dto.features.menu_styles, false);
+  assert.equal(catalog.planToDTO(document("free")).features.menu_styles, false);
+  assert.equal(catalog.planToDTO(document("pro")).features.menu_styles, true);
 });
 
 test("el DTO conserva los multiplicadores editados al serializar el mapa de MongoDB", () => {
@@ -320,11 +328,16 @@ test("inicializar completa features legadas sin tocar precios ni configuraciones
   assert.deepEqual([...custom.features.templateIds], [2, 8]);
 });
 
-test("inicializar completa una clave de feature nueva (ej: image_manager) en catálogos que ya tenían features, sin tocar el resto", async (t) => {
-  // Simula un plan guardado ANTES de agregar image_manager a BOOLEAN_FEATURES:
-  // ya tiene features, pero le falta justo esta clave.
+// Se recorre cada clave agregada después del lanzamiento: es la única prueba
+// de que un catálogo ya guardado en MongoDB (que no la tiene) se completa
+// solo al arrancar. Sin el backfill, featuresSchema la exige como required y
+// con strict:"throw" todo el catálogo deja de validar.
+for (const featureKey of ["image_manager", "menu_styles"]) {
+test(`inicializar completa la clave de feature ${featureKey} en catálogos que ya tenían features, sin tocar el resto`, async (t) => {
+  // Simula un plan guardado ANTES de agregar la clave a BOOLEAN_FEATURES:
+  // ya tiene features, pero le falta justo esa.
   const legacyFeatures = { ...catalog.INITIAL_PLANS[1].features };
-  delete legacyFeatures.image_manager;
+  delete legacyFeatures[featureKey];
   const legacyBasic = document("basic", { features: legacyFeatures, price: 55000, __v: 3 });
   const stored = [document("free"), legacyBasic, document("pro")];
   t.mock.method(Plan, "init", async () => {});
@@ -343,8 +356,12 @@ test("inicializar completa una clave de feature nueva (ej: image_manager) en cat
   await catalog.initializePlans();
   await catalog.initializePlans(); // repetir no debe volver a incrementar __v
 
-  assert.equal(legacyBasic.features.image_manager, false); // default de INITIAL_PLANS para basic
+  const [free, , pro] = catalog.INITIAL_PLANS;
+  // El default que se rellena es el de INITIAL_PLANS para ESE plan, no uno fijo.
+  assert.equal(legacyBasic.features[featureKey], catalog.INITIAL_PLANS[1].features[featureKey]);
   assert.equal(legacyBasic.price, 55000); // el resto del documento no se toca
   assert.equal(legacyBasic.__v, 4);
-  assert.equal(stored.find(plan => plan.name === "pro").features.image_manager, true);
+  assert.equal(stored.find(plan => plan.name === "pro").features[featureKey], pro.features[featureKey]);
+  assert.equal(stored.find(plan => plan.name === "free").features[featureKey], free.features[featureKey]);
 });
+}

@@ -12,7 +12,9 @@ const {
   TEMPLATE_IDS,
 } = require("../config/plans");
 const { getPlanForUser, getRequestPlan } = require("../services/planCatalog");
-const { MENU_STYLES, MENU_STYLE_LABELS, getMenuStyle } = require("../config/menuStyles");
+const {
+  MENU_STYLES, MENU_STYLE_LABELS, getMenuStyle, isVisualFamily, getMenuStyleForFeatures,
+} = require("../config/menuStyles");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { buildStatsPeriod } = require("../utils/statsPeriod");
 const { logCrmEvent } = require("../utils/crmEvents");
@@ -590,7 +592,7 @@ const getAuthUser = async (req, res) => {
       downgradedAt: subscriptionState.downgradedAt,
       features: plan.features,
       template: getTemplateForFeatures(user.template, plan.features),
-      menuStyle: getMenuStyle(user.menuStyle),
+      menuStyle: getMenuStyleForFeatures(user.menuStyle, plan.features),
       itemCount,
       categoryCount: categorias.length,
     });
@@ -699,7 +701,7 @@ const fetchUserWithMenu = async (req, res) => {
       subscription: effectivePlan,
       features: plan.features,
       menuDisplay,
-      menuStyle: getMenuStyle(user.menuStyle),
+      menuStyle: getMenuStyleForFeatures(user.menuStyle, plan.features),
     }
 
     const menuArmado = {
@@ -1114,7 +1116,7 @@ const fetchUser = async (req, res) => {
       hasDelivery: user.hasDelivery,
       template: getTemplateForFeatures(user.template, plan.features),
       schedule: landingVisibility.schedule ? user.schedule : undefined,
-      menuStyle: getMenuStyle(user.menuStyle),
+      menuStyle: getMenuStyleForFeatures(user.menuStyle, plan.features),
       subscription: effectivePlan,
       features: plan.features,
       landingVisibility,
@@ -1453,6 +1455,18 @@ const useTemplate = async (req, res) => {
       return res.status(403).json({ message: "Tu plan no incluye ese template." });
     }
 
+    // Las familias visuales son una feature de plan aparte de las paletas.
+    // Clásico y Bistró no pasan por acá: quedan abiertos a todos los planes.
+    // La guarda exige menuStyle definido; si no, cambiar solo de paleta daría
+    // un 403 espurio a quien ya tiene una familia guardada de un plan vencido.
+    if (menuStyle !== undefined && isVisualFamily(menuStyle) && !features.menu_styles) {
+      return res.status(403).json({
+        code: "FEATURE_NOT_INCLUDED",
+        feature: "menu_styles",
+        message: "Tu plan no incluye las familias visuales.",
+      });
+    }
+
     const previousTemplate = req.user.template;
 
     const user = await User.findByIdAndUpdate(
@@ -1471,7 +1485,14 @@ const useTemplate = async (req, res) => {
       await logCrmEvent(req.user._id, `Cambió el diseño de carta a ${MENU_STYLE_LABELS[menuStyle]}`);
     }
 
-    res.json({ template: user.template, menuStyle: getMenuStyle(user.menuStyle) });
+    // El template va crudo: la guarda de arriba ya probó que está permitido.
+    // El estilo se recorta igual porque el body puede no traerlo (cambio de
+    // paleta a secas) y el guardado en Mongo puede ser una familia de un plan
+    // ya vencido; sin recortar, el panel se contradiría con GET /me.
+    res.json({
+      template: user.template,
+      menuStyle: getMenuStyleForFeatures(user.menuStyle, features),
+    });
   } catch (error) {
     handleError(res, error);
   }

@@ -26,6 +26,11 @@ const INITIAL_PLANS = [
     // Tarjeta Trello "Plantillas de menúes": agiliza la carga inicial de
     // Basic y Pro, no incluido en Free (mismo criterio que carga_masiva_excel).
     menu_templates: plan.name !== "free",
+    // Familias visuales de portada y carta (ver config/menuStyles.js). Arranca
+    // exclusiva de Pro, igual que image_manager; el admin puede habilitarla en
+    // otros planes desde el panel. Clásico y Bistró no dependen de esta clave:
+    // siguen disponibles en todos los planes.
+    menu_styles: plan.name === "pro",
     item_limit: plan.name === "free" ? 15 : plan.name === "basic" ? 50 : null,
     templateIds: Array.from({ length: plan.name === "free" ? 1 : plan.name === "basic" ? 5 : 15 }, (_, i) => i + 1),
   },
