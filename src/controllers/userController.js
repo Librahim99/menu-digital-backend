@@ -1227,6 +1227,12 @@ const editUser = async (req, res) => {
           { new: true, runValidators: true }
         );
 
+    // Devuelve el documento entero, con template y menuStyle crudos. No se
+    // recortan a propósito: este endpoint no toca la apariencia (template
+    // queda fuera de allowedFields) y el panel ignora esos campos de la
+    // respuesta, así que recortarlos solo serviría para acoplar el guardado de
+    // "Información" al catálogo de planes y hacerlo fallar cuando el catálogo
+    // no responde. La apariencia vigente se lee de GET /me.
     res.json(user);
   } catch (error) {
     handleError(res, error);
