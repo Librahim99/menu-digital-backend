@@ -3,6 +3,7 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const User = require("../models/User");
 const { generateAutoCode } = require("../utils/autoCode");
+const { recycleDeletedItemImages, MAX_BULK_ITEMS } = require("./itemController");
 const {
   getNextOrder, menuContainerFilter, isObjectIdString, parseReorderIds, buildReorder,
 } = require("../utils/menuOrder");
@@ -253,9 +254,40 @@ const hideMenu = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
-// @desc    Eliminar una sección o categoría SOLO si está vacía.
+// Helper: borra secciones y categorías CON todo lo que tienen adentro (las
+// categorías de cada sección y los productos de cada categoría). Las imágenes
+// de los productos borrados vuelven a las pendientes del usuario, igual que
+// al borrar productos (ver recycleDeletedItemImages). `menus` son documentos
+// del usuario ya verificados (con _id y section).
+// ──────────────────────────────────────────────
+const deleteMenusCascade = async (menus, userID) => {
+  const sectionIds = menus.filter((menu) => menu.section).map((menu) => menu._id);
+  const childCategories = sectionIds.length > 0
+    ? await Menu.find({ userID, sectionID: { $in: sectionIds } }).select("_id")
+    : [];
+  const menuIds = [...new Set([
+    ...menus.map((menu) => String(menu._id)),
+    ...childCategories.map((category) => String(category._id)),
+  ])];
+
+  const items = await Item.find({ menuID: { $in: menuIds } }).select("_id image");
+  if (items.length > 0) await Item.deleteMany({ _id: { $in: items.map((item) => item._id) } });
+  await Menu.deleteMany({ _id: { $in: menuIds }, userID });
+  await recycleDeletedItemImages(items, userID);
+
+  return { deletedMenus: menuIds.length, deletedItems: items.length };
+};
+
+const DELETE_WITH_CONTENT_HINT =
+  "Para eliminarlas con todo su contenido, activá \"Eliminar secciones y categorías con contenido\" en Configuración.";
+
+// ──────────────────────────────────────────────
+// @desc    Eliminar una sección o categoría.
+//          Por defecto SOLO si está vacía:
 //          - Si es sección: no debe tener categorías hijas.
 //          - Si es categoría: no debe tener items.
+//          Con panelSettings.deleteMenusWithContent se elimina con todo su
+//          contenido (deleteMenusCascade).
 //          Para ocultar sin borrar, usar hideMenu.
 // @route   DELETE /api/menus/:menuID
 // @access  Private
@@ -268,13 +300,18 @@ const deleteMenu = async (req, res) => {
 
     const { error, status, menu } = await verifyOwnership(req.params.menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
- 
+
+    if (req.user.panelSettings?.deleteMenusWithContent === true) {
+      const result = await deleteMenusCascade([menu], req.user._id);
+      return res.json({ message: "Eliminado correctamente", ...result });
+    }
+
     if (menu.section) {
       // Es una sección: verifica que no tenga categorías hijas
       const categoriasHijas = await Menu.countDocuments({ sectionID: menu._id });
       if (categoriasHijas > 0) {
         return res.status(400).json({
-          message: `No se puede eliminar: esta sección tiene ${categoriasHijas} categoría(s). Eliminá o movelas primero.`,
+          message: `No se puede eliminar: esta sección tiene ${categoriasHijas} categoría(s). Eliminá o movelas primero. ${DELETE_WITH_CONTENT_HINT}`,
         });
       }
     } else {
@@ -282,7 +319,7 @@ const deleteMenu = async (req, res) => {
       const itemsHijos = await Item.countDocuments({ menuID: menu._id });
       if (itemsHijos > 0) {
         return res.status(400).json({
-          message: `No se puede eliminar: esta categoría tiene ${itemsHijos} producto(s). Eliminá o movalos primero.`,
+          message: `No se puede eliminar: esta categoría tiene ${itemsHijos} producto(s). Eliminá o movelos primero. ${DELETE_WITH_CONTENT_HINT}`,
         });
       }
     }
@@ -319,4 +356,99 @@ const uploadImage = async (req, res) => {
 };
 
 
-module.exports = { newMenu, editMenu, moveMenu, reorderMenus, hideMenu, deleteMenu, uploadImage };
+// ──────────────────────────────────────────────
+// Acciones en lote sobre secciones y categorías (selección múltiple del
+// editor). Mismo criterio que las de productos (itemController): tope de
+// MAX_BULK_ITEMS por pedido y ownership de todo el lote en una consulta.
+// Es todo o nada: si algún id no existe o no es del usuario, no se toca nada.
+// ──────────────────────────────────────────────
+const validateBulkMenuIds = (req, res) => {
+  const { menuIds } = req.body;
+  if (!Array.isArray(menuIds) || menuIds.length === 0 || !menuIds.every(isObjectIdString)) {
+    res.status(400).json({ message: "menuIds debe ser un array con al menos un id válido." });
+    return null;
+  }
+  const uniqueIds = [...new Set(menuIds)];
+  if (uniqueIds.length > MAX_BULK_ITEMS) {
+    res.status(400).json({ message: `No se pueden procesar más de ${MAX_BULK_ITEMS} secciones y categorías a la vez.` });
+    return null;
+  }
+  return uniqueIds;
+};
+
+const findOwnedMenus = async (menuIds, userID) => {
+  const menus = await Menu.find({ _id: { $in: menuIds }, userID }).select("_id section sectionID");
+  return menus.length === menuIds.length ? menus : null;
+};
+
+// ──────────────────────────────────────────────
+// @desc    Ocultar/mostrar varias secciones y categorías a la vez.
+// @route   PATCH /api/menus/bulk/hidden
+// @access  Private
+// @body    { menuIds: string[], hidden: boolean }
+// ──────────────────────────────────────────────
+const setMenusHiddenBulk = async (req, res) => {
+  try {
+    const { hidden } = req.body;
+    if (typeof hidden !== "boolean") return res.status(400).json({ message: "hidden debe ser un booleano" });
+    const menuIds = validateBulkMenuIds(req, res);
+    if (!menuIds) return;
+
+    const menus = await findOwnedMenus(menuIds, req.user._id);
+    if (!menus) return res.status(403).json({ message: "No autorizado sobre una de las secciones o categorías." });
+
+    await Menu.updateMany({ _id: { $in: menuIds }, userID: req.user._id }, { $set: { hidden } });
+    res.json({ hidden, updatedCount: menuIds.length });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Eliminar varias secciones y categorías a la vez.
+//          - Con panelSettings.deleteMenusWithContent: con todo su contenido
+//            (deleteMenusCascade).
+//          - Sin la opción: solo las que quedan vacías con este mismo pedido.
+//            Una categoría con productos no se elimina; una sección sí, si
+//            todas sus categorías también vienen en el lote (y están
+//            vacías). Si alguna no cumple, no se elimina nada.
+// @route   POST /api/menus/bulk/delete
+// @access  Private
+// @body    { menuIds: string[] }
+// ──────────────────────────────────────────────
+const deleteMenusBulk = async (req, res) => {
+  try {
+    if (req.user.panelSettings?.disableMenuDelete === true) {
+      return res.status(403).json({ message: "Eliminar categorías y secciones está deshabilitado desde Configuración." });
+    }
+    const menuIds = validateBulkMenuIds(req, res);
+    if (!menuIds) return;
+
+    const menus = await findOwnedMenus(menuIds, req.user._id);
+    if (!menus) return res.status(403).json({ message: "No autorizado sobre una de las secciones o categorías." });
+
+    if (req.user.panelSettings?.deleteMenusWithContent !== true) {
+      const inBatch = new Set(menuIds);
+      const categoryIds = menus.filter((menu) => !menu.section).map((menu) => menu._id);
+      const sectionIds = menus.filter((menu) => menu.section).map((menu) => menu._id);
+      const [itemCount, childCategories] = await Promise.all([
+        categoryIds.length > 0 ? Item.countDocuments({ menuID: { $in: categoryIds } }) : 0,
+        sectionIds.length > 0 ? Menu.find({ sectionID: { $in: sectionIds } }).select("_id") : [],
+      ]);
+      const sectionKeepsCategories = childCategories.some((category) => !inBatch.has(String(category._id)));
+      if (itemCount > 0 || sectionKeepsCategories) {
+        return res.status(400).json({
+          message: `Algunas de las secciones o categorías seleccionadas tienen contenido, y solo se pueden eliminar vacías. ${DELETE_WITH_CONTENT_HINT}`,
+        });
+      }
+    }
+
+    res.json(await deleteMenusCascade(menus, req.user._id));
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+module.exports = {
+  newMenu, editMenu, moveMenu, reorderMenus, hideMenu, deleteMenu, uploadImage, setMenusHiddenBulk, deleteMenusBulk,
+};

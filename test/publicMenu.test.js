@@ -273,16 +273,24 @@ test("item: el precio 0 es un precio (no se omite)", () => {
   assert.deepEqual(toPublicItem(raw, { features: FREE, now: LUNES_19 }), { _id: raw._id, title: "Cortesía", price: 0 });
 });
 
-test("item: oculto, agotado o fuera de horario no viajan (null)", () => {
+test("item: solo el oculto no viaja (null)", () => {
   const menuID = id();
   assert.equal(toPublicItem(leanItem(menuID, { hidden: true }), { features: PRO, now: LUNES_19 }), null);
-  assert.equal(toPublicItem(leanItem(menuID, { available: false }), { features: PRO, now: LUNES_19 }), null);
-  const nocturno = leanItem(menuID, { availabilitySchedule: schedule({ mon: [{ from: "20:00", to: "02:00" }] }) });
-  assert.equal(toPublicItem(nocturno, { features: PRO, now: LUNES_19 }), null);
-  assert.notEqual(toPublicItem(nocturno, { features: PRO, now: MARTES_01 }), null);
-  // Sin el permiso del plan el horario no aplica y el producto viaja.
-  assert.notEqual(toPublicItem(nocturno, { features: FREE, now: LUNES_19 }), null);
+  assert.equal(toPublicItem(leanItem(menuID, { hidden: true, available: false }), { features: PRO, now: LUNES_19 }), null);
   assert.equal(toPublicItem(null, { features: PRO, now: LUNES_19 }), null);
+});
+
+test("item: pausado o fuera de horario viaja con available: false; disponible, sin la clave", () => {
+  const menuID = id();
+  const pausado = toPublicItem(leanItem(menuID, { available: false }), { features: PRO, now: LUNES_19 });
+  assert.equal(pausado.available, false);
+  assert.equal(pausado.price, 1500);
+
+  const nocturno = leanItem(menuID, { availabilitySchedule: schedule({ mon: [{ from: "20:00", to: "02:00" }] }) });
+  assert.equal(toPublicItem(nocturno, { features: PRO, now: LUNES_19 }).available, false);
+  assert.equal("available" in toPublicItem(nocturno, { features: PRO, now: MARTES_01 }), false);
+  // Sin el permiso del plan el horario no aplica: está disponible.
+  assert.equal("available" in toPublicItem(nocturno, { features: FREE, now: LUNES_19 }), false);
 });
 
 test("item: la oferta viaja solo si rige AHORA y siempre junto con el precio", () => {
@@ -320,8 +328,10 @@ test("item con hidePrices: sin price ni offerPrice y options con las claves en 0
   assert.equal("options" in simple, false);
   assert.equal("price" in simple, false);
 
-  // hidePrices no cambia qué productos viajan.
-  assert.equal(toPublicItem(leanItem(id(), { available: false }), { features: PRO, hidePrices: true, now: LUNES_19 }), null);
+  // hidePrices no cambia qué productos viajan ni su disponibilidad.
+  const pausado = toPublicItem(leanItem(id(), { available: false }), { features: PRO, hidePrices: true, now: LUNES_19 });
+  assert.equal(pausado.available, false);
+  assert.equal("price" in pausado, false);
 });
 
 test("item: acepta documentos de Mongoose (options como Map) y no muta el original", () => {
@@ -399,7 +409,7 @@ test("carta: arma secciones -> categorías -> items y categorías sueltas, en el
   assert.deepEqual(Object.keys(menu.sinSeccion[0]), ["title", "items"]);
 });
 
-test("carta: se podan las categorías sin items y las secciones sin categorías", () => {
+test("carta: se podan las categorías sin items visibles y las secciones sin categorías", () => {
   const userID = id();
   const seccionLlena = leanMenu(userID, { title: "Llena", section: true });
   const seccionVacia = leanMenu(userID, { title: "Vacía", section: true });
@@ -422,9 +432,12 @@ test("carta: se podan las categorías sin items y las secciones sin categorías"
 
   const menu = build(menus, items);
 
-  assert.deepEqual(menu.secciones.map((s) => s.title), ["Llena"]);
+  // Los pausados viajan (como "No disponible"): sus categorías no se podan.
+  // Los ocultos no, así que "C" no aparece.
+  assert.deepEqual(menu.secciones.map((s) => s.title), ["Llena", "Solo agotados"]);
   assert.deepEqual(menu.secciones[0].categorias.map((c) => c.title), ["Con items"]);
-  assert.deepEqual(menu.sinSeccion.map((c) => c.title), ["Suelta llena"]);
+  assert.deepEqual(menu.secciones[1].categorias[0].items.map((i) => [i.title, i.available]), [["B", false]]);
+  assert.deepEqual(menu.sinSeccion.map((c) => c.title), ["Suelta agotada", "Suelta llena"]);
 });
 
 test("carta: si no queda nada, la respuesta es { secciones: [], sinSeccion: [] }", () => {
@@ -433,7 +446,7 @@ test("carta: si no queda nada, la respuesta es { secciones: [], sinSeccion: [] }
   assert.deepEqual(build([], []), { secciones: [], sinSeccion: [] });
   assert.deepEqual(build([categoria], []), { secciones: [], sinSeccion: [] });
   assert.deepEqual(
-    build([categoria], [leanItem(categoria._id, { available: false })]),
+    build([categoria], [leanItem(categoria._id, { hidden: true })]),
     { secciones: [], sinSeccion: [] },
   );
   assert.deepEqual(build(undefined, undefined), { secciones: [], sinSeccion: [] });
@@ -494,7 +507,10 @@ test("carta: aplica hidePrices y disponibilidad a todos los productos con un mis
   ];
 
   const conPrecios = build([categoria], items);
-  assert.deepEqual(conPrecios.sinSeccion[0].items.map((i) => i.title), ["Con variantes"]);
+  assert.deepEqual(
+    conPrecios.sinSeccion[0].items.map((i) => [i.title, i.available]),
+    [["Con variantes", undefined], ["Agotado", false], ["Nocturno", false]],
+  );
   assert.equal(conPrecios.sinSeccion[0].items[0].price, 1500);
   assert.equal(conPrecios.sinSeccion[0].items[0].offerPrice, 1200);
 
@@ -505,7 +521,10 @@ test("carta: aplica hidePrices y disponibilidad a todos los productos con un mis
 
   // A las 21 el producto nocturno ya está disponible: `now` es el único reloj.
   const nocturno = build([categoria], items, { now: LUNES_21 });
-  assert.deepEqual(nocturno.sinSeccion[0].items.map((i) => i.title), ["Con variantes", "Nocturno"]);
+  assert.deepEqual(
+    nocturno.sinSeccion[0].items.map((i) => [i.title, i.available]),
+    [["Con variantes", undefined], ["Agotado", false], ["Nocturno", undefined]],
+  );
 });
 
 test("carta: con muchas categorías e items cada producto queda en su categoría y en su orden", () => {

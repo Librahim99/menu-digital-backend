@@ -14,8 +14,10 @@ const { isOfferActive } = require("./offers");
 // acá el JSON solo lleva lo que la carta dibuja:
 //   - lo vacío se OMITE (description '', image '', recommended false,
 //     apt {}, options {}, offerPrice null...): el front lo tolera ausente.
-//   - `available` no viaja: los productos agotados o fuera de horario se
-//     EXCLUYEN, así que todo lo que llega está disponible ahora.
+//   - los productos pausados (interruptor manual) o fuera de su horario
+//     programado SÍ viajan, con `available: false`, y la carta los muestra
+//     como "No disponible" (igual que el legacy). Los disponibles ahora no
+//     llevan la clave. Solo `hidden` saca un producto de la carta.
 //   - offerRange/offerSchedule/availabilitySchedule no viajan: solo se manda
 //     offerPrice cuando la oferta rige AHORA (el front ya no la re-resuelve).
 //   - las secciones y categorías sin _id ni metadatos, y las que quedan
@@ -79,7 +81,8 @@ const resolveOfferPrice = (raw, features = {}, now = new Date()) => {
 // Item
 // ──────────────────────────────────────────────
 
-// Item v2 o null si no debe viajar (oculto, agotado o fuera de horario).
+// Item v2 o null si no debe viajar (solo si está oculto). Pausado o fuera de
+// horario viaja con `available: false`.
 // `_id` es imprescindible: las vistas por plato y el carrito se identifican
 // con él.
 // Con hidePrices no se manda price ni offerPrice, pero options conserva las
@@ -88,9 +91,9 @@ const resolveOfferPrice = (raw, features = {}, now = new Date()) => {
 const toPublicItem = (raw, { features = {}, hidePrices = false, now = new Date() } = {}) => {
   const item = plain(raw);
   if (!item || item.hidden === true) return null;
-  if (!isItemAvailableNow(item, features, now)) return null;
 
   const publicItem = { _id: item._id, title: item.title };
+  if (!isItemAvailableNow(item, features, now)) publicItem.available = false;
 
   if (!hidePrices && item.price != null) {
     publicItem.price = item.price;

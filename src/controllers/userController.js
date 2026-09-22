@@ -652,7 +652,7 @@ const getAuthUserSummary = async (req, res) => {
 // del local no se lee ni mail, redes, ubicación, horario, password ni
 // pendingMenuImages; de las secciones y categorías, título y jerarquía; del
 // producto, lo que hace falta para resolver oferta y disponibilidad AHORA
-// (offerRange, offerSchedule, availabilitySchedule, available: después no
+// (offerRange, offerSchedule, availabilitySchedule, available: después solo
 // viajan) más lo que la carta dibuja. `hidden` no se pide en items ni menús
 // porque el filtro de la query ya lo garantiza. subscription y
 // subscriptionExpiresAt solo sirven para resolver el plan vigente.
@@ -1017,6 +1017,10 @@ const fetchOwnMenu = async (req, res) => {
       // Configuración del panel (ver newItem/newMenu y las rutas /me/settings).
       autoGenerateCodes: req.user.panelSettings?.autoGenerateCodes === true,
       disableMenuDelete: req.user.panelSettings?.disableMenuDelete === true,
+      deleteMenusWithContent: req.user.panelSettings?.deleteMenusWithContent === true,
+      // Este backend acepta acciones en lote sobre secciones y categorías
+      // (/menus/bulk/*): sin la clave el front solo selecciona productos.
+      canBulkMenus: true,
     };
 
     res.json({ menu: menuArmado, limits });
@@ -1657,6 +1661,7 @@ const setActive = async (req, res) => {
 const getPanelSettingsValues = (user) => ({
   autoGenerateCodes: user?.panelSettings?.autoGenerateCodes === true,
   disableMenuDelete: user?.panelSettings?.disableMenuDelete === true,
+  deleteMenusWithContent: user?.panelSettings?.deleteMenusWithContent === true,
   landingVisibility: getLandingVisibility(user),
   menuDisplay: getMenuDisplay(user),
 });
@@ -1772,10 +1777,13 @@ const changePanelSettingsPassword = async (req, res) => {
 // ──────────────────────────────────────────────
 const updatePanelSettings = async (req, res) => {
   try {
-    const { autoGenerateCodes, disableMenuDelete } = req.body;
+    const { autoGenerateCodes, disableMenuDelete, deleteMenusWithContent } = req.body;
     const updates = {};
     if (typeof autoGenerateCodes === "boolean") updates["panelSettings.autoGenerateCodes"] = autoGenerateCodes;
     if (typeof disableMenuDelete === "boolean") updates["panelSettings.disableMenuDelete"] = disableMenuDelete;
+    if (typeof deleteMenusWithContent === "boolean") {
+      updates["panelSettings.deleteMenusWithContent"] = deleteMenusWithContent;
+    }
     // Edición parcial (el panel manda solo el toggle que cambió): se toman
     // únicamente las claves conocidas con valor booleano. landingVisibility y
     // menuDisplay siguen el mismo criterio.

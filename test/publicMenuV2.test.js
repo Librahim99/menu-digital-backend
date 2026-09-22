@@ -87,8 +87,9 @@ const withMenuDisplay = (menuDisplay, fields = {}) => owner({
 });
 
 // Carta de prueba. Devuelve los documentos tal como los guardaría Mongo:
-// con sus categorías huérfanas, ocultas, de otro local y sus items agotados
-// o fuera de horario, para que las queries y el serializador los descarten.
+// con sus categorías huérfanas, ocultas, de otro local (las queries y el
+// serializador las descartan) y sus items agotados o fuera de horario (viajan
+// con available: false).
 const buildCatalog = () => {
   const comidas = new Menu({ userID: USER_ID, title: "Comidas", section: true, code: "S-1", description: "Platos" });
   const seccionOculta = new Menu({ userID: USER_ID, title: "Sección oculta", section: true, hidden: true });
@@ -184,7 +185,7 @@ const collectKeys = (value, acc = new Set()) => {
 
 const FORBIDDEN_KEYS = [
   "code", "hidden", "createdAt", "updatedAt", "__v", "userID", "menuID", "sectionID",
-  "available", "offerRange", "offerSchedule", "availabilitySchedule", "isExtra",
+  "offerRange", "offerSchedule", "availabilitySchedule", "isExtra",
   "section", "subscription", "schedule",
 ];
 
@@ -262,7 +263,7 @@ test("v2: el bloque user es una whitelist y la carta trae solo lo que se dibuja"
 
 test("v2: la carta arma secciones y categorías sueltas, poda lo vacío y descarta lo que no se ve", async (t) => {
   const { catalog } = setup(t);
-  const [muzza, fugazzeta, , , , , agua] = catalog.items;
+  const [muzza, fugazzeta, agotada, nocturna, , flan, agua] = catalog.items;
 
   const res = await getMenuV2();
 
@@ -286,15 +287,22 @@ test("v2: la carta arma secciones y categorías sueltas, poda lo vacío y descar
           },
           // La oferta programada no rige todavía: el precio viaja sin offerPrice.
           { _id: fugazzeta._id, title: "Fugazzeta", price: 1800 },
+          // Pausada y fuera de horario (lunes 19:00, abre a las 20:00): viajan
+          // como no disponibles.
+          { _id: agotada._id, title: "Agotada", price: 999, available: false },
+          { _id: nocturna._id, title: "Nocturna", price: 1700, available: false },
         ],
+      }, {
+        title: "Postres",
+        items: [{ _id: flan._id, title: "Flan agotado", price: 700, available: false }],
       }],
     }],
     sinSeccion: [{ title: "Bebidas", items: [{ _id: agua._id, title: "Agua", price: 400 }] }],
   });
 
-  // "Postres" (todo agotado) y su categoría no viajan; tampoco la huérfana, la oculta ni la de otro local.
+  // No viajan la huérfana, la oculta, la de otro local ni el producto oculto.
   const titles = JSON.stringify(res.body.menu);
-  for (const hidden of ["Postres", "Huérfana", "oculta", "otro local", "Agotada", "Nocturna", "Escondida", "Ajeno"]) {
+  for (const hidden of ["Huérfana", "oculta", "otro local", "Escondida", "Ajeno"]) {
     assert.equal(titles.includes(hidden), false, `${hidden} no debe viajar`);
   }
 });
@@ -308,6 +316,10 @@ test("v2: la respuesta no contiene ninguna clave prohibida ni datos que la carta
 
   for (const forbidden of FORBIDDEN_KEYS) {
     assert.equal(keys.has(forbidden), false, `no debe viajar la clave ${forbidden}`);
+  }
+  // available solo viaja en false (los disponibles no llevan la clave).
+  for (const item of flattenItems(res.body.menu)) {
+    assert.ok(!("available" in item) || item.available === false, `${item.title}: available solo en false`);
   }
   assert.equal("_id" in res.body.user, false, "user no lleva _id");
   for (const category of [...res.body.menu.secciones.flatMap((s) => s.categorias), ...res.body.menu.sinSeccion]) {
@@ -503,7 +515,7 @@ test("v2: un fallo del contador de visitas no rompe la carta", async (t) => {
   const res = await getMenuV2();
 
   assert.equal(res.statusCode, 200);
-  assert.equal(flattenItems(res.body.menu).length, 3);
+  assert.equal(flattenItems(res.body.menu).length, 6);
 });
 
 // ──────────────────────────────────────────────
@@ -525,13 +537,13 @@ test("v2: plan Free recorta template, menuStyle y features, y no aplica la progr
 
   const items = flattenItems(res.body.menu);
   const byTitle = Object.fromEntries(items.map((item) => [item.title, item]));
-  // Sin programacion_productos el horario no restringe: la nocturna viaja...
-  assert.ok(byTitle.Nocturna, "sin el permiso el horario de disponibilidad se ignora");
+  // Sin programacion_productos el horario no restringe: la nocturna está disponible...
+  assert.equal("available" in byTitle.Nocturna, false, "sin el permiso el horario de disponibilidad se ignora");
   // ...la oferta programada se ignora, pero la manual (sin rango ni horario) rige.
   assert.equal("offerPrice" in byTitle.Fugazzeta, false);
   assert.equal(byTitle.Muzzarella.offerPrice, 1200);
   // El interruptor manual sigue mandando en cualquier plan.
-  assert.equal(byTitle.Agotada, undefined);
+  assert.equal(byTitle.Agotada.available, false);
 });
 
 test("v2: una suscripción paga vencida se sirve con las funciones de Free", async (t) => {
@@ -552,9 +564,9 @@ test("v2: plan Pro conserva template y familia visual, y aplica el horario de di
 
   assert.equal(res.body.user.template, 7);
   assert.equal(res.body.user.menuStyle, "coffee");
-  const titles = flattenItems(res.body.menu).map((item) => item.title);
+  const nocturna = flattenItems(res.body.menu).find((item) => item.title === "Nocturna");
   // Lunes 19:00: la nocturna (20:00-02:00) todavía no está disponible.
-  assert.equal(titles.includes("Nocturna"), false);
+  assert.equal(nocturna.available, false);
 });
 
 test("v2: el horario nocturno y la oferta programada cambian con la hora, sin estado escondido", async (t) => {
@@ -571,16 +583,16 @@ test("v2: el horario nocturno y la oferta programada cambian con la hora, sin es
 
   const lunes11 = await at("2026-08-17T11:00:00-03:00");
   assert.equal(lunes11.Fugazzeta.offerPrice, 1600);
-  assert.equal("Nocturna" in lunes11, false);
+  assert.equal(lunes11.Nocturna.available, false);
 
   const lunes21 = await at("2026-08-17T21:00:00-03:00");
   assert.equal("offerPrice" in lunes21.Fugazzeta, false);
-  assert.ok(lunes21.Nocturna);
+  assert.equal("available" in lunes21.Nocturna, false);
 
   const martes01 = await at("2026-08-18T01:00:00-03:00");
-  assert.ok(martes01.Nocturna, "el horario nocturno sigue vigente pasada la medianoche");
+  assert.equal("available" in martes01.Nocturna, false, "el horario nocturno sigue vigente pasada la medianoche");
   const martes03 = await at("2026-08-18T03:00:00-03:00");
-  assert.equal("Nocturna" in martes03, false);
+  assert.equal(martes03.Nocturna.available, false);
 });
 
 // Cada campo que decide vigencia o disponibilidad es lo ÚNICO que distingue a
@@ -608,9 +620,12 @@ test("v2: cada campo del select cumple su función (una proyección incompleta s
 
   const byTitle = Object.fromEntries(res.body.menu.sinSeccion[0].items.map((entry) => [entry.title, entry]));
   assert.deepEqual(Object.keys(byTitle), [
-    "Control", "Oferta por fechas", "Oferta por horario", "Oferta manual",
+    "Control", "Oferta por fechas", "Oferta por horario", "Oferta manual", "Agotado", "Fuera de horario",
     "Con variantes", "Recomendado", "Con apt", "Con descripción e imagen",
   ]);
+  assert.equal("available" in byTitle.Control, false);
+  assert.equal(byTitle.Agotado.available, false, "available");
+  assert.equal(byTitle["Fuera de horario"].available, false, "availabilitySchedule");
   assert.equal("offerPrice" in byTitle["Oferta por fechas"], false, "offerRange futuro");
   assert.equal("offerPrice" in byTitle["Oferta por horario"], false, "offerSchedule fuera de horario");
   assert.equal(byTitle["Oferta manual"].offerPrice, 800);
@@ -765,10 +780,12 @@ test("v2 y legacy muestran los mismos productos, con los mismos precios, en el m
   mockQuery(t, Item, "find", catalog.items);
   const v2 = await getMenuV2();
 
-  // Lo que el contrato v2 conserva del legacy: solo los disponibles ahora, con los
-  // campos que la carta dibuja, sin lo vacío y sin categorías ni secciones vacías.
+  // Lo que el contrato v2 conserva del legacy: los mismos productos (los no
+  // disponibles con available: false), con los campos que la carta dibuja, sin
+  // lo vacío y sin categorías ni secciones vacías.
   const fromLegacy = (item) => {
     const shown = { _id: item._id, title: item.title };
+    if (item.available === false) shown.available = false;
     if (item.price != null) {
       shown.price = item.price;
       if (item.offerPrice != null) shown.offerPrice = item.offerPrice;
@@ -780,7 +797,7 @@ test("v2 y legacy muestran los mismos productos, con los mismos precios, en el m
     if (item.apt && Object.keys(item.apt).length) shown.apt = item.apt;
     return shown;
   };
-  const category = (cat) => ({ title: cat.title, items: cat.items.filter((item) => item.available).map(fromLegacy) });
+  const category = (cat) => ({ title: cat.title, items: cat.items.map(fromLegacy) });
   const expected = {
     secciones: legacy.body.menu.secciones
       .map((sec) => ({ title: sec.title, categorias: sec.categorias.map(category).filter((cat) => cat.items.length) }))

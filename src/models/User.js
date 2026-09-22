@@ -276,6 +276,13 @@ const UserSchema = new mongoose.Schema(
         type: Boolean,
         default: false,
       },
+      // Permite eliminar secciones y categorías que tienen contenido, con
+      // todo lo que tienen adentro (categorías y productos). Apagado, solo se
+      // eliminan vacías (ver deleteMenu y deleteMenusBulk en menuController).
+      deleteMenusWithContent: {
+        type: Boolean,
+        default: false,
+      },
       // Qué datos de contacto se muestran en la landing pública (tarjeta
       // "Agregar config para mostrar opcionalmente la info de contacto en
       // landing page user"). Ocultar un dato no lo borra de contactInfo/

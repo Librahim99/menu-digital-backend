@@ -104,6 +104,23 @@ test("getPendingImages devuelve el array de pendientes del usuario", async () =>
   assert.deepEqual(res.body, { pendingImages: ["url-1", "url-2"] });
 });
 
+test("getPendingImages no devuelve prediseñadas ajenas y las saca de las pendientes del usuario", async () => {
+  User.findOne = () => ({ select: async () => ({ _id: "preset-owner", pendingMenuImages: ["url-preset"] }) });
+  User.findById = () => ({ select: async () => ({ pendingMenuImages: ["url-1", "url-preset"] }) });
+  let pullArgs;
+  User.findByIdAndUpdate = async (id, update) => {
+    pullArgs = { id, update };
+    return {};
+  };
+  const req = { user: { _id: "user-1" } };
+  const res = makeResponse();
+  await getPendingImages(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, { pendingImages: ["url-1"] });
+  assert.deepEqual(pullArgs, { id: "user-1", update: { $pull: { pendingMenuImages: { $in: ["url-preset"] } } } });
+});
+
 test("getPresetImages devuelve las pendingMenuImages del usuario marcado presetImagesUser", async () => {
   User.findOne = (filter) => {
     assert.deepEqual(filter, { presetImagesUser: true });
@@ -475,6 +492,54 @@ test("deleteItem NO devuelve la imagen a pendientes si otro item del usuario tod
 
   assert.equal(res.statusCode, 200);
   assert.equal(updateCalled, false);
+});
+
+test("deleteItem NO manda a pendientes una imagen prediseñada ajena (no es del usuario)", async () => {
+  User.findOne = () => ({ select: async () => ({ _id: "preset-owner", pendingMenuImages: ["url-preset"] }) });
+  Item.findById = () => ({
+    select: async () => ({ _id: "item-1", image: "url-preset", menuID: { toString: () => "menu-A" } }),
+  });
+  Item.findByIdAndDelete = async () => ({});
+  Menu.findById = () => ({ select: async () => ({ userID: { toString: () => "user-1" } }) });
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  Item.find = () => ({ select: async () => [] }); // nadie más la usa
+
+  let updateCalled = false;
+  User.findByIdAndUpdate = async () => {
+    updateCalled = true;
+    return {};
+  };
+
+  const req = { params: { itemID: "item-1" }, user: { _id: { toString: () => "user-1" } } };
+  const res = makeResponse();
+  await deleteItem(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(updateCalled, false);
+});
+
+test("deleteItem del dueño del banco sí devuelve su prediseñada a sus pendientes (es propia)", async () => {
+  User.findOne = () => ({ select: async () => ({ _id: "user-1", pendingMenuImages: [] }) });
+  Item.findById = () => ({
+    select: async () => ({ _id: "item-1", image: "url-preset", menuID: { toString: () => "menu-A" } }),
+  });
+  Item.findByIdAndDelete = async () => ({});
+  Menu.findById = () => ({ select: async () => ({ userID: { toString: () => "user-1" } }) });
+  Menu.find = () => ({ select: async () => [{ _id: "menu-A" }] });
+  Item.find = () => ({ select: async () => [] });
+
+  let addToSetArgs;
+  User.findByIdAndUpdate = async (id, update) => {
+    addToSetArgs = { id, update };
+    return {};
+  };
+
+  const req = { params: { itemID: "item-1" }, user: { _id: { toString: () => "user-1" } } };
+  const res = makeResponse();
+  await deleteItem(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(addToSetArgs.update, { $addToSet: { pendingMenuImages: { $each: ["url-preset"] } } });
 });
 
 test("deleteItemsBulk devuelve las imágenes de los items borrados a pendingMenuImages", async () => {

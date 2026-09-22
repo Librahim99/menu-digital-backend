@@ -4,7 +4,7 @@ const { protect, requireFeature } = require("../middleware/auth");
 const { imageUploadLimiter } = require("../middleware/rateLimiters");
 const { uploadItem, uploadItemLibrary } = require("../config/cloudinary");
 const {
-  newItem, editItem, moveItem, reorderItems, uploadImage, uploadDraftImage, setHidden, setAvailable, deleteItem,
+  newItem, duplicateItem, editItem, moveItem, reorderItems, uploadImage, uploadDraftImage, setHidden, setAvailable, deleteItem,
   setAvailableBulk, setHiddenBulk, deleteItemsBulk,
   getLiteItems, getPendingImages, getPresetImages, checkImageQuota, uploadLibraryImage, assignImages,
   deleteLibraryImage
@@ -37,6 +37,7 @@ router.post("/images/assign", protect, requireFeature("image_manager"), assignIm
 // de las rutas de arriba: si no, "images" se leería como itemID.
 router.delete("/images", protect, requireFeature("image_manager"), deleteLibraryImage);
 router.put("/:itemID", protect, requireFeature("menu_editor"), editItem);
+router.post("/:itemID/duplicate", protect, requireFeature("menu_editor"), duplicateItem);
 router.patch("/:itemID/move", protect, requireFeature("menu_editor"), moveItem);
 router.patch("/:itemID/hidden", protect, requireFeature("menu_editor"), setHidden);
 router.patch("/:itemID/available", protect, requireFeature("menu_editor"), setAvailable);

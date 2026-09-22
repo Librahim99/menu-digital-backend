@@ -83,6 +83,9 @@ const resolveOwnedItemIds = async (itemIds, userID) => {
 // item del mismo usuario siga usando exactamente esa misma URL (imagen
 // legacy compartida entre dos productos desde antes del Gestor); en ese
 // caso no se toca pendingMenuImages, para no dejarla ahí Y asignada a la vez.
+// Las imágenes prediseñadas ajenas tampoco se reciclan: no son del usuario,
+// y en sus pendientes se verían como propias en el Gestor (con "Eliminar",
+// que el backend igual rechaza) y le ocuparían cupo.
 // ──────────────────────────────────────────────
 const recycleDeletedItemImages = async (deletedItems, userID) => {
   const urls = [...new Set(deletedItems.map((item) => item.image).filter(Boolean))];
@@ -100,7 +103,8 @@ const recycleDeletedItemImages = async (deletedItems, userID) => {
     ).map((item) => item.image)
   );
 
-  const toRecycle = urls.filter((url) => !stillUsedUrls.has(url));
+  const foreignPresets = await getForeignPresetUrls(userID);
+  const toRecycle = urls.filter((url) => !stillUsedUrls.has(url) && !foreignPresets.has(url));
   if (toRecycle.length > 0) {
     await User.findByIdAndUpdate(userID, { $addToSet: { pendingMenuImages: { $each: toRecycle } } });
   }
@@ -199,6 +203,96 @@ const newItem = async (req, res) => {
     }
 
     res.status(201).json(item)
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// Código de una copia: el del original con "-COPIA" (y un número si ya
+// existe: -COPIA2, -COPIA3...). Se compara sin distinguir mayúsculas, así
+// nunca queda un código que a simple vista se confunda con otro.
+// ──────────────────────────────────────────────
+const buildCopyCode = (code, existingCodes) => {
+  const taken = new Set(existingCodes.filter(Boolean).map((c) => c.toUpperCase()));
+  const base = `${code}-COPIA`;
+  if (!taken.has(base.toUpperCase())) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}${n}`;
+    if (!taken.has(candidate.toUpperCase())) return candidate;
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Duplicar un producto: la copia queda en la misma categoría, justo
+//          debajo del original, igual en todo salvo el nombre ("Copia de
+//          ...") y el código (el del original + "-COPIA"). Comparte la URL
+//          de la imagen con el original: borrar uno de los dos no la recicla
+//          mientras el otro la siga usando (ver recycleDeletedItemImages).
+// @route   POST /api/items/:itemID/duplicate
+// @access  Private
+// ──────────────────────────────────────────────
+const duplicateItem = async (req, res) => {
+  try {
+    const original = await Item.findById(req.params.itemID);
+    if (!original) return res.status(404).json({ message: "Item no encontrado" });
+
+    const { error, status } = await verifyMenuOwnership(original.menuID, req.user._id);
+    if (error) return res.status(status).json({ message: error });
+
+    const userMenuIDs = (await Menu.find({ userID: req.user._id }).select("_id")).map((m) => m._id);
+
+    // Mismo tope del plan que newItem: duplicar también suma un producto.
+    const { features } = await getRequestPlan(req);
+    const itemLimit = features.item_limit;
+    if (itemLimit !== null) {
+      const itemCount = await Item.countDocuments({ menuID: { $in: userMenuIDs } });
+      if (itemCount >= itemLimit) {
+        return res.status(403).json({
+          message: `Alcanzaste el límite de ${itemLimit} productos de tu plan. Mejorá tu plan para agregar más productos.`,
+        });
+      }
+    }
+
+    const existingCodes = (await Item.find({ menuID: { $in: userMenuIDs } }).select("code")).map((i) => i.code);
+    const originalCode = (original.code || "").trim();
+    const autoGenerate = originalCode === "" && req.user.panelSettings?.autoGenerateCodes === true;
+
+    // Justo debajo del original: se corren un lugar los que le siguen. Un
+    // original sin `order` (anterior a ese campo) no tiene un "después"
+    // estable, así que la copia va al final de la categoría.
+    let order;
+    if (typeof original.order === "number" && Number.isFinite(original.order)) {
+      await Item.updateMany(
+        { menuID: original.menuID, order: { $gt: original.order } },
+        { $inc: { order: 1 } }
+      );
+      order = original.order + 1;
+    } else {
+      order = await getNextOrder(Item, { menuID: original.menuID });
+    }
+
+    const data = original.toObject();
+    delete data._id;
+    delete data.__v;
+    delete data.createdAt;
+    delete data.updatedAt;
+
+    const copy = await Item.create({
+      ...data,
+      title: `Copia de ${original.title}`,
+      // Sin código en el original: queda sin código, salvo que el local use
+      // códigos automáticos (se le asigna uno abajo, ya con el ID real).
+      code: autoGenerate ? String(Date.now()) : originalCode ? buildCopyCode(originalCode, existingCodes) : "",
+      order,
+    });
+
+    if (autoGenerate) {
+      copy.code = generateAutoCode(copy.title, copy._id.toString(), existingCodes);
+      await copy.save();
+    }
+
+    res.status(201).json(copy);
   } catch (err) {
     handleError(res, err);
   }
@@ -646,8 +740,7 @@ const getLiteItems = async (req, res) => {
 // ──────────────────────────────────────────────
 const getPendingImages = async (req, res) => {
   try {
-    const user = await User.findById(req.user._id).select("pendingMenuImages");
-    res.json({ pendingImages: user?.pendingMenuImages || [] });
+    res.json({ pendingImages: await getOwnPendingImages(req.user._id) });
   } catch (err) {
     handleError(res, err);
   }
@@ -659,6 +752,31 @@ const getPendingImages = async (req, res) => {
 // TODOS los usuarios como "Imágenes prediseñadas" en el Gestor de imágenes.
 // ──────────────────────────────────────────────
 const getPresetImagesOwner = () => User.findOne({ presetImagesUser: true }).select("pendingMenuImages");
+
+// Prediseñadas que NO son de este usuario (vacío si él es el banco): nunca
+// pueden ser pendientes propias ni borrarse desde su cuenta.
+const getForeignPresetUrls = async (userID) => {
+  const presetOwner = await getPresetImagesOwner();
+  return presetOwner && presetOwner._id.toString() !== userID.toString()
+    ? new Set(presetOwner.pendingMenuImages || [])
+    : new Set();
+};
+
+// Pendientes propias del usuario, sin prediseñadas ajenas. Antes, borrar un
+// producto que usaba una prediseñada la metía en las pendientes del usuario
+// (ver recycleDeletedItemImages): si quedó alguna así, se saca acá.
+const getOwnPendingImages = async (userID) => {
+  const [user, foreignPresets] = await Promise.all([
+    User.findById(userID).select("pendingMenuImages"),
+    getForeignPresetUrls(userID),
+  ]);
+  const pending = user?.pendingMenuImages || [];
+  const stray = pending.filter((url) => foreignPresets.has(url));
+  if (stray.length > 0) {
+    await User.findByIdAndUpdate(userID, { $pull: { pendingMenuImages: { $in: stray } } });
+  }
+  return pending.filter((url) => !foreignPresets.has(url));
+};
 
 // ──────────────────────────────────────────────
 // @desc    Gestor de imágenes: imágenes prediseñadas (genéricas) disponibles
@@ -722,8 +840,8 @@ const imageQuotaMessage = (effectiveLimit, isDynamic) => (isDynamic
 const checkImageQuota = async (req, res, next) => {
   try {
     const { effectiveLimit, assignedCount, isDynamic } = await getImageQuotaLimit(req);
-    const user = await User.findById(req.user._id).select("pendingMenuImages");
-    const totalImages = (user?.pendingMenuImages?.length || 0) + assignedCount;
+    const pendingImages = await getOwnPendingImages(req.user._id);
+    const totalImages = pendingImages.length + assignedCount;
 
     if (totalImages >= effectiveLimit) {
       return res.status(403).json({ message: imageQuotaMessage(effectiveLimit, isDynamic) });
@@ -1025,6 +1143,7 @@ const deleteLibraryImage = async (req, res) => {
 
 module.exports = {
   newItem,
+  duplicateItem,
   editItem,
   moveItem,
   reorderItems,
@@ -1043,5 +1162,6 @@ module.exports = {
   uploadLibraryImage,
   assignImages,
   deleteLibraryImage,
+  recycleDeletedItemImages,
   MAX_BULK_ITEMS
 };
