@@ -375,12 +375,13 @@ test("v2: user sin lean y con proyección mínima; menús e items lean, con proy
     assert.equal(field.startsWith("-") || field.startsWith("+"), false, "solo inclusión: nada de exclusiones ni +campos");
   }
 
-  // (b) menús: solo los visibles del local, con título/tipo/sección, en orden de creación.
+  // (b) menús: solo los visibles del local, con título/tipo/sección, en el
+  // orden que eligió el dueño (y a igualdad, el de creación).
   assert.equal(calls.menu.length, 1);
   const [menuCall] = calls.menu;
   assert.deepEqual(menuCall.filter, { userID: USER_ID, hidden: false });
   assert.equal(menuCall.select, "title section sectionID");
-  assert.deepEqual(menuCall.sort, { _id: 1 });
+  assert.deepEqual(menuCall.sort, { order: 1, _id: 1 });
   assert.equal(menuCall.lean, true);
 
   // (c) items: solo de las categorías alcanzables (no la huérfana ni la oculta).
@@ -393,7 +394,7 @@ test("v2: user sin lean y con proyección mínima; menús e items lean, con proy
   );
   assert.equal(itemCall.filter.hidden, false);
   assert.deepEqual(Object.keys(itemCall.filter).sort(), ["hidden", "menuID"]);
-  assert.deepEqual(itemCall.sort, { _id: 1 });
+  assert.deepEqual(itemCall.sort, { order: 1, _id: 1 });
   assert.equal(itemCall.lean, true);
   assert.equal(itemCall.batchSize, 2000, "un solo batch: sin getMore para cartas de cientos de productos");
 
@@ -407,6 +408,35 @@ test("v2: user sin lean y con proyección mínima; menús e items lean, con proy
   for (const field of ["code", "isExtra", "hidden", "createdAt", "updatedAt", "__v"]) {
     assert.equal(itemFields.includes(field), false, `el item no debe pedir ${field}`);
   }
+});
+
+test("v2: la carta sale en el orden que eligió el dueño, con lo anterior al campo primero", async (t) => {
+  const comidas = new Menu({ userID: USER_ID, title: "Comidas", section: true, order: 1 });
+  const bebidas = new Menu({ userID: USER_ID, title: "Bebidas", section: true, order: 0 });
+  const pizzas = new Menu({ userID: USER_ID, title: "Pizzas", sectionID: comidas._id, order: 1 });
+  const empanadas = new Menu({ userID: USER_ID, title: "Empanadas", sectionID: comidas._id, order: 0 });
+  const gaseosas = new Menu({ userID: USER_ID, title: "Gaseosas", sectionID: bebidas._id });
+  setup(t, {
+    menus: [comidas, bebidas, pizzas, empanadas, gaseosas],
+    items: [
+      new Item({ menuID: pizzas._id, title: "Última", price: 100, order: 2 }),
+      new Item({ menuID: pizzas._id, title: "Segunda", price: 100, order: 0 }),
+      new Item({ menuID: pizzas._id, title: "Primera, anterior al campo", price: 100 }),
+      new Item({ menuID: empanadas._id, title: "Carne", price: 100 }),
+      new Item({ menuID: gaseosas._id, title: "Agua", price: 100 }),
+    ],
+  });
+
+  const res = await getMenuV2();
+
+  assert.equal(res.statusCode, 200);
+  const { secciones } = res.body.menu;
+  assert.deepEqual(secciones.map((sec) => sec.title), ["Bebidas", "Comidas"]);
+  assert.deepEqual(secciones[1].categorias.map((cat) => cat.title), ["Empanadas", "Pizzas"]);
+  assert.deepEqual(
+    secciones[1].categorias[1].items.map((item) => item.title),
+    ["Primera, anterior al campo", "Segunda", "Última"],
+  );
 });
 
 test("v2: son 3 pasos (user, plan + menús en paralelo, items) y el plan se lee en cada petición", async (t) => {

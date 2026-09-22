@@ -3,14 +3,18 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const User = require("../models/User");
 const { generateAutoCode } = require("../utils/autoCode");
+const {
+  getNextOrder, menuContainerFilter, isObjectIdString, parseReorderIds, buildReorder,
+} = require("../utils/menuOrder");
 
 // ──────────────────────────────────────────────
 // Helper: verifica ownership del menú
 // ──────────────────────────────────────────────
 const verifyOwnership = async (menuID, userID) => {
   // select cubre la unión de lo que leen todos los callers: userID (el
-  // check de ownership acá abajo), code (editMenu) y section (deleteMenu).
-  const menu = await Menu.findById(menuID).select("userID code section");
+  // check de ownership acá abajo), code (editMenu), section (deleteMenu y
+  // moveMenu) y sectionID (moveMenu).
+  const menu = await Menu.findById(menuID).select("userID code section sectionID");
   if (!menu) return { error: "Menú no encontrado", status: 404 };
   if (menu.userID.toString() !== userID.toString())
     return { error: "No autorizado", status: 403 };
@@ -45,7 +49,10 @@ const newMenu = async (req, res) => {
       if (existingMenu) return res.status(400).json({ message: "Código de menú ya existe" });
     }
 
-    const menu = await Menu.create({
+    // Se arma antes de guardar para calcular la posición con `section` y
+    // `sectionID` ya casteados: va al final de su contenedor (las secciones,
+    // o las categorías de su sección). Ver utils/menuOrder.js.
+    const menu = new Menu({
       userID: req.user._id,
       title,
       description,
@@ -53,6 +60,8 @@ const newMenu = async (req, res) => {
       sectionID: sectionID || null,
       section: section || false,
     });
+    menu.order = await getNextOrder(Menu, menuContainerFilter(req.user._id, menu));
+    await menu.save();
 
     if (autoGenerate) {
       const siblingCodes = (await Menu.find({ userID: req.user._id, _id: { $ne: menu._id } }).select("code")).map((m) => m.code);
@@ -117,22 +126,100 @@ const moveMenu = async (req, res) => {
   try {
     const { sectionID: newSectionID } = req.body;
  
-    const { error, status } = await verifyOwnership(req.params.menuID, req.user._id);
+    const { error, status, menu } = await verifyOwnership(req.params.menuID, req.user._id);
     if (error) return res.status(status).json({ message: error });
- 
+
     // Si se manda un sectionID destino, verificamos que también pertenezca al user
     if (newSectionID) {
       const { error: errSec, status: stSec } = await verifyOwnership(newSectionID, req.user._id);
       if (errSec) return res.status(stSec).json({ message: errSec });
     }
- 
+
+    // Una categoría que cambia de sección va al final de la nueva.
+    const update = { sectionID: newSectionID || null };
+    if (menu.section !== true && String(menu.sectionID ?? "") !== String(newSectionID || "")) {
+      update.order = await getNextOrder(
+        Menu,
+        menuContainerFilter(req.user._id, { section: false, sectionID: newSectionID || null })
+      );
+    }
+
     const updated = await Menu.findByIdAndUpdate(
       req.params.menuID,
-      { sectionID: newSectionID || null },
+      update,
       { new: true }
     );
- 
+
     res.json(updated);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Ordenar secciones o categorías (arrastrar en el editor).
+//          Dos formas, según lo que se mande:
+//          - { sectionIds }: todas las secciones del local, en el nuevo orden.
+//          - { sectionID, categoryIds }: las categorías de esa sección
+//            (sectionID null = las que no tienen sección) en el nuevo orden.
+//            Una categoría que hoy está en otra sección pasa a esta, en esa
+//            posición: un solo pedido cubre ordenar y mover.
+//          Lo que ya estaba en el contenedor y no viene en la lista (algo
+//          creado desde otra pestaña) queda al final, en su orden. Es todo o
+//          nada: si algún id no existe o no es del usuario, no se escribe nada.
+// @route   PATCH /api/menus/reorder
+// @access  Private
+// ──────────────────────────────────────────────
+const reorderMenus = async (req, res) => {
+  try {
+    const reorderingSections = req.body.sectionIds !== undefined;
+    const requestedIds = parseReorderIds(reorderingSections ? req.body.sectionIds : req.body.categoryIds);
+    const targetSectionID = req.body.sectionID ?? null;
+    const validShape = reorderingSections
+      ? req.body.categoryIds === undefined
+      : targetSectionID === null || isObjectIdString(targetSectionID);
+    if (!requestedIds || !validShape) {
+      return res.status(400).json({ message: "El pedido para ordenar el menú no es válido." });
+    }
+
+    // Todo el menú del local en una consulta: son decenas de documentos, y
+    // alcanza para validar y para saber qué hay en cada contenedor.
+    const userMenus = await Menu.find({ userID: req.user._id }).select("_id section sectionID order").lean();
+    const userMenusById = new Map(userMenus.map((menu) => [String(menu._id), menu]));
+    const requestedMenus = requestedIds.map((id) => userMenusById.get(id));
+
+    if (reorderingSections) {
+      if (!requestedMenus.every((menu) => menu?.section === true)) {
+        return res.status(409).json({ message: "Alguna sección ya no existe. Recargá el menú e intentá de nuevo." });
+      }
+      const { orderedIds, operations } = buildReorder({
+        requestedIds,
+        containerDocs: userMenus.filter((menu) => menu.section === true),
+        docsById: userMenusById,
+        containerPatch: {},
+      });
+      if (operations.length > 0) await Menu.bulkWrite(operations);
+      return res.json({ sectionIds: orderedIds });
+    }
+
+    const targetSection = targetSectionID === null ? null : userMenusById.get(targetSectionID.toLowerCase());
+    if (targetSectionID !== null && targetSection?.section !== true) {
+      return res.status(404).json({ message: "Sección no encontrada." });
+    }
+    if (!requestedMenus.every((menu) => menu && menu.section !== true)) {
+      return res.status(409).json({ message: "Alguna categoría ya no existe. Recargá el menú e intentá de nuevo." });
+    }
+
+    const targetKey = targetSection ? String(targetSection._id) : null;
+    const { orderedIds, operations } = buildReorder({
+      requestedIds,
+      containerDocs: userMenus.filter((menu) => menu.section !== true
+        && (menu.sectionID ? String(menu.sectionID) : null) === targetKey),
+      docsById: userMenusById,
+      containerPatch: { sectionID: targetSection ? targetSection._id : null },
+    });
+    if (operations.length > 0) await Menu.bulkWrite(operations);
+    res.json({ sectionID: targetSection ? targetSection._id : null, categoryIds: orderedIds });
   } catch (error) {
     handleError(res, error);
   }
@@ -232,4 +319,4 @@ const uploadImage = async (req, res) => {
 };
 
 
-module.exports = { newMenu, editMenu, moveMenu, hideMenu, deleteMenu, uploadImage };
+module.exports = { newMenu, editMenu, moveMenu, reorderMenus, hideMenu, deleteMenu, uploadImage };

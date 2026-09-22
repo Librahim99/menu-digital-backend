@@ -4,6 +4,9 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const { getRequestPlan } = require("../services/planCatalog");
 const { normalizeOffer } = require("../utils/offers");
+const {
+  sortByMenuOrder, flattenMenusInOrder, createOrderAllocator, menuContainerKey, itemContainerKey,
+} = require("../utils/menuOrder");
 
 // ──────────────────────────────────────────────
 // Helper: normaliza SI/NO a boolean
@@ -54,10 +57,19 @@ const getTemplate = async (req, res) => {
   try {
     const userID = req.user._id;
 
-    const [menus, items] = await Promise.all([
+    const [rawMenus, rawItems] = await Promise.all([
       Menu.find({ userID }),
       Item.find({ menuID: { $in: (await Menu.find({ userID })).map((m) => m._id) } }),
     ]);
+
+    // Las filas salen en el orden de la carta: cada sección seguida de sus
+    // categorías, y los productos agrupados por categoría en ese mismo orden
+    // (ver utils/menuOrder.js). sort es estable: dentro de cada categoría
+    // queda el orden de sortByMenuOrder.
+    const menus = flattenMenusInOrder(rawMenus);
+    const menuPosition = new Map(menus.map((m, index) => [m._id.toString(), index]));
+    const positionOf = (item) => menuPosition.get(item.menuID.toString()) ?? Number.MAX_SAFE_INTEGER;
+    const items = sortByMenuOrder(rawItems).sort((a, b) => positionOf(a) - positionOf(b));
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = "Menú Digital";
@@ -397,6 +409,11 @@ const confirmMassive = async (req, res) => {
       productos:  { creados: [], actualizados: [], errores: [] },
     };
 
+    // Lo que se crea, o cambia de sección o de categoría, va al final de su
+    // nuevo contenedor, en el orden de las filas (ver utils/menuOrder.js).
+    const nextMenuOrder = createOrderAllocator(existingMenus, menuContainerKey);
+    const nextItemOrder = createOrderAllocator(existingItems, itemContainerKey);
+
     // ── Procesar categorías primero (los items dependen de ellas) ─────────
     for (const row of menusRows) {
       const codigo = row["codigo"]?.toString().trim();
@@ -417,8 +434,10 @@ const confirmMassive = async (req, res) => {
           hidden:      parseBool(row["oculto"]),
         };
 
+        const containerKey = menuContainerKey(data);
         if (menusByCode[codigo]) {
           // UPDATE
+          if (menuContainerKey(menusByCode[codigo]) !== containerKey) data.order = nextMenuOrder(containerKey);
           const updated = await Menu.findByIdAndUpdate(
             menusByCode[codigo]._id,
             { $set: data },
@@ -428,7 +447,7 @@ const confirmMassive = async (req, res) => {
           resultado.categorias.actualizadas.push({ fila: row._rowNumber, codigo });
         } else {
           // CREATE
-          const created = await Menu.create({ ...data, code: codigo, userID });
+          const created = await Menu.create({ ...data, code: codigo, userID, order: nextMenuOrder(containerKey) });
           menusByCode[codigo] = created;
           resultado.categorias.creadas.push({ fila: row._rowNumber, codigo });
         }
@@ -485,6 +504,9 @@ const confirmMassive = async (req, res) => {
         };
 
         if (itemsByCode[codigo]) {
+          if (menuDoc && String(itemsByCode[codigo].menuID) !== String(menuDoc._id)) {
+            data.order = nextItemOrder(itemContainerKey({ menuID: menuDoc._id }));
+          }
           // runValidators es obligatorio acá: sin él, findByIdAndUpdate se
           // saltea los validators del schema y esta rama quedaba como la
           // única puerta por la que entraba un precio negativo (el editor
@@ -504,7 +526,7 @@ const confirmMassive = async (req, res) => {
             });
             continue;
           }
-          await Item.create({ ...data, code: codigo });
+          await Item.create({ ...data, code: codigo, order: nextItemOrder(itemContainerKey({ menuID: menuDoc._id })) });
           resultado.productos.creados.push({ fila: row._rowNumber, codigo });
         }
       } catch (err) {

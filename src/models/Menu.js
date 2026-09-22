@@ -55,6 +55,15 @@ const MenuSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+
+    // Posición de una sección entre las secciones del local, o de una
+    // categoría dentro de su sección (o entre las que no tienen sección).
+    // Sin default a propósito: lo anterior a este campo se ordena primero,
+    // por orden de creación, como antes. Ver utils/menuOrder.js.
+    order: {
+      type: Number,
+      min: 0,
+    },
   },
   {
     timestamps: true,

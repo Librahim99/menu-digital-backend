@@ -168,7 +168,8 @@ const getReachableCategoryIds = (menus) => {
 // lista por cada categoría, y poda lo vacío: categorías sin items tras
 // filtrar, y secciones sin categorías.
 // El orden es el de los arrays de entrada (el handler los pide con
-// sort({ _id: 1 }), o sea el de creación), que es el que muestra la carta.
+// MENU_ORDER_SORT, el que eligió el dueño: ver utils/menuOrder.js), que es el
+// que muestra la carta.
 const buildPublicMenu = ({ menus, items, features = {}, hidePrices = false, now = new Date() }) => {
   const { sections, loose } = getReachableMenu(menus);
 

@@ -363,6 +363,23 @@ app.use((err, req, res, next) => {
 // ──────────────────────────────────────────────
 // Startup
 // ──────────────────────────────────────────────
+//
+// En Koyeb el proceso escucha en PORT dentro del
+// contenedor, pero desde afuera se entra por el
+// dominio público. Koyeb lo inyecta en runtime como
+// KOYEB_PUBLIC_DOMAIN; en local no existe y
+// mostramos localhost.
+//
+
+const getServerUrl = () => {
+  const publicDomain = process.env.KOYEB_PUBLIC_DOMAIN;
+
+  if (publicDomain) {
+    return `https://${publicDomain}`;
+  }
+
+  return `http://localhost:${PORT}`;
+};
 
 const printStartup = () => {
   const environment =
@@ -372,7 +389,7 @@ const printStartup = () => {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   🍽️  MENU DIGITAL API
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🚀 Server       http://localhost:${PORT}
+  🚀 Server       ${getServerUrl()}
   🌐 Environment  ${environment}
   🟢 MongoDB      connected
   📦 Plans        initialized

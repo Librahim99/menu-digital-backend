@@ -141,6 +141,14 @@ const ItemSchema = new mongoose.Schema(
       default: false, // Oculto del menú público sin eliminarlo
     },
 
+    // Posición dentro de su categoría (0, 1, 2...). Sin default a propósito:
+    // un producto anterior a este campo no lo tiene y se ordena primero, por
+    // orden de creación, como antes. Ver utils/menuOrder.js.
+    order: {
+      type: Number,
+      min: 0,
+    },
+
     /**
      * Información adicional libre.
      * Ej: { "alérgenos": "gluten", "calorias": 450 }

@@ -3,6 +3,9 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const User = require("../models/User");
 const { getRequestPlan } = require("../services/planCatalog");
+const {
+  sortByMenuOrder, createOrderAllocator, menuContainerKey, itemContainerKey,
+} = require("../utils/menuOrder");
 
 // Tarjeta Trello "Plantillas de menúes": el mismo user marcado
 // presetImagesUser (ver itemController.getPresetImagesOwner) actúa también
@@ -31,13 +34,17 @@ const pickItemFields = (item) => {
 };
 
 // Trae las categorías/secciones e items propios del usuario destino, para
-// poder detectar qué códigos de la plantilla ya fueron importados antes.
+// poder detectar qué códigos de la plantilla ya fueron importados antes. Con
+// lo mismo arma los repartidores de posiciones: lo copiado va al final de
+// cada contenedor del usuario (ver utils/menuOrder.js).
 const loadOwnCatalog = async (userID) => {
   const menus = await Menu.find({ userID });
   const items = await Item.find({ menuID: { $in: menus.map((m) => m._id) } });
   return {
     menuByCode: new Map(menus.filter((m) => m.code).map((m) => [m.code, m])),
     itemCodes: new Set(items.map((i) => i.code).filter(Boolean)),
+    nextMenuOrder: createOrderAllocator(menus, menuContainerKey),
+    nextItemOrder: createOrderAllocator(items, itemContainerKey),
   };
 };
 
@@ -58,9 +65,10 @@ const getMenuTemplates = async (req, res) => {
     const owner = await getPresetMenuOwner();
     if (!owner) return res.json({ secciones: [], sinSeccion: [] });
 
-    const menus = await Menu.find({ userID: owner._id, hidden: false });
+    // En el orden del menú plantilla (ver utils/menuOrder.js).
+    const menus = sortByMenuOrder(await Menu.find({ userID: owner._id, hidden: false }));
     const menuIDs = menus.map((m) => m._id);
-    const items = await Item.find({ menuID: { $in: menuIDs }, hidden: false });
+    const items = sortByMenuOrder(await Item.find({ menuID: { $in: menuIDs }, hidden: false }));
     const { itemCodes: ownItemCodes } = await loadOwnCatalog(req.user._id);
 
     const secciones = menus.filter((m) => m.section === true);
@@ -130,10 +138,13 @@ const copyMenuTemplates = async (req, res) => {
     if (!owner) return res.status(404).json({ message: "No hay un menú de plantillas configurado." });
 
     // Todo el menú plantilla en dos consultas — pensado para el tamaño de un
-    // catálogo curado a mano, no para un menú de miles de productos.
-    const ownerMenus = await Menu.find({ userID: owner._id, hidden: false });
+    // catálogo curado a mano, no para un menú de miles de productos. En el
+    // orden de la plantilla, que es el orden en que se copia.
+    const ownerMenus = sortByMenuOrder(await Menu.find({ userID: owner._id, hidden: false }));
     const ownerMenusById = new Map(ownerMenus.map((m) => [m._id.toString(), m]));
-    const ownerItems = await Item.find({ menuID: { $in: ownerMenus.map((m) => m._id) }, hidden: false });
+    const ownerItems = sortByMenuOrder(
+      await Item.find({ menuID: { $in: ownerMenus.map((m) => m._id) }, hidden: false })
+    );
 
     const selectedSections = ownerMenus.filter((m) => m.section && sectionIds.has(m._id.toString()));
 
@@ -151,7 +162,13 @@ const copyMenuTemplates = async (req, res) => {
     );
     const looseMenuIds = new Set(looseItems.map((item) => item.menuID.toString()));
 
-    const categoryIdsToCreate = new Set([...fullCategoryIds, ...looseMenuIds]);
+    // En el orden de las categorías de la plantilla, para que las copias
+    // queden en ese mismo orden.
+    const categoryIdsToCreate = new Set(
+      ownerMenus
+        .map((m) => m._id.toString())
+        .filter((id) => fullCategoryIds.has(id) || looseMenuIds.has(id))
+    );
     if (categoryIdsToCreate.size === 0) {
       return res.status(400).json({ message: "La selección no es válida o ya no está disponible." });
     }
@@ -167,7 +184,9 @@ const copyMenuTemplates = async (req, res) => {
 
     // Descarta lo que el usuario ya importó antes (mismo código) — evita
     // recrearlo y evita que una categoría ya existente cuente como "nueva".
-    const { menuByCode: ownMenuByCode, itemCodes: ownItemCodes } = await loadOwnCatalog(req.user._id);
+    const {
+      menuByCode: ownMenuByCode, itemCodes: ownItemCodes, nextMenuOrder, nextItemOrder,
+    } = await loadOwnCatalog(req.user._id);
     for (const [catId, catItems] of itemsByCategory) {
       itemsByCategory.set(catId, catItems.filter((item) => !item.code || !ownItemCodes.has(item.code)));
     }
@@ -203,7 +222,10 @@ const copyMenuTemplates = async (req, res) => {
         newSectionIdByOldId.set(sec._id.toString(), existing._id);
         continue;
       }
-      const created = await Menu.create({ userID: req.user._id, ...pickCategoryFields(sec), section: true, sectionID: null });
+      const created = await Menu.create({
+        userID: req.user._id, ...pickCategoryFields(sec), section: true, sectionID: null,
+        order: nextMenuOrder(menuContainerKey({ section: true })),
+      });
       newSectionIdByOldId.set(sec._id.toString(), created._id);
       createdSections += 1;
       if (sec.code) ownMenuByCode.set(sec.code, created);
@@ -220,7 +242,10 @@ const copyMenuTemplates = async (req, res) => {
       if (existingCat) {
         destCatId = existingCat._id;
       } else {
-        const created = await Menu.create({ userID: req.user._id, ...pickCategoryFields(origCat), section: false, sectionID: newSectionId });
+        const created = await Menu.create({
+          userID: req.user._id, ...pickCategoryFields(origCat), section: false, sectionID: newSectionId,
+          order: nextMenuOrder(menuContainerKey({ section: false, sectionID: newSectionId })),
+        });
         destCatId = created._id;
         createdCategories += 1;
         if (origCat.code) ownMenuByCode.set(origCat.code, created);
@@ -231,6 +256,7 @@ const copyMenuTemplates = async (req, res) => {
         const allowScheduling = features.programacion_productos === true;
         await Item.create({
           menuID: destCatId,
+          order: nextItemOrder(itemContainerKey({ menuID: destCatId })),
           ...fields,
           offerPrice: allowScheduling ? fields.offerPrice : null,
           offerRange: allowScheduling ? fields.offerRange : { from: null, to: null },

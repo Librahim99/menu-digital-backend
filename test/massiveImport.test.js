@@ -1,9 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { PassThrough } = require("node:stream");
 const ExcelJS = require("exceljs");
 const Menu = require("../src/models/Menu");
 const Item = require("../src/models/Item");
-const { confirmMassive, previewMassive } = require("../src/controllers/massiveController");
+const { confirmMassive, previewMassive, getTemplate } = require("../src/controllers/massiveController");
 
 function response() {
   return {
@@ -140,4 +141,87 @@ test("previewMassive responde 400 si el Excel no tiene las hojas correctas", asy
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.code, "INVALID_EXCEL_FILE");
   assert.match(res.body.message, /hojas correctas/i);
+});
+
+// ──────────────────────────────────────────────
+// Orden (tarjeta "Poder ordenar el menú"): lo que crea el Excel va al final
+// de su categoría, lo que cambia de categoría va al final de la nueva, y la
+// plantilla descargada sale en el orden de la carta.
+// ──────────────────────────────────────────────
+
+const OTHER_MENU_ID = "64f000000000000000000202";
+
+test("confirmMassive: los productos nuevos van al final de su categoría, en el orden de las filas", async (t) => {
+  const buffer = await buildWorkbook([
+    ["PROD-2", "Empanada", "", "CAT-1", 900, "", "", "", "NO", "NO", "NO", "SI"],
+    ["PROD-3", "Tarta", "", "CAT-1", 1200, "", "", "", "NO", "NO", "NO", "SI"],
+  ]);
+  t.mock.method(Menu, "find", async () => [{ _id: MENU_ID, code: "CAT-1" }]);
+  t.mock.method(Item, "find", async () => [{ _id: ITEM_ID, code: "PROD-1", menuID: MENU_ID, order: 4 }]);
+  const created = [];
+  t.mock.method(Item, "create", async (data) => { created.push(data); return data; });
+
+  const res = response();
+  await confirmMassive({ file: { buffer }, user: { _id: "u1" }, plan: { features: { item_limit: null } } }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(created.map((item) => [item.code, item.order]), [["PROD-2", 5], ["PROD-3", 6]]);
+});
+
+test("confirmMassive: un producto que el Excel cambia de categoría va al final de la nueva", async (t) => {
+  const buffer = await buildWorkbook([
+    ["PROD-1", "Milanesa", "", "CAT-2", 4500, "", "", "", "NO", "NO", "NO", "SI"],
+  ]);
+  t.mock.method(Menu, "find", async () => [
+    { _id: MENU_ID, code: "CAT-1" },
+    { _id: OTHER_MENU_ID, code: "CAT-2" },
+  ]);
+  t.mock.method(Item, "find", async () => [
+    { _id: ITEM_ID, code: "PROD-1", menuID: MENU_ID, order: 0 },
+    { _id: "64f000000000000000000302", code: "PROD-9", menuID: OTHER_MENU_ID, order: 2 },
+  ]);
+  let update;
+  t.mock.method(Item, "findByIdAndUpdate", async (_id, received) => { update = received; return {}; });
+
+  const res = response();
+  await confirmMassive({ file: { buffer }, user: { _id: "u1" }, plan: { features: { item_limit: null } } }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(String(update.$set.menuID), OTHER_MENU_ID);
+  assert.equal(update.$set.order, 3);
+});
+
+test("getTemplate exporta en el orden de la carta: cada sección con sus categorías y los productos agrupados", async (t) => {
+  const seccion = { _id: "64f000000000000000000401", code: "SEC", title: "Comidas", section: true, order: 0 };
+  const pizzas = { _id: "64f000000000000000000402", code: "PIZ", title: "Pizzas", sectionID: seccion._id, order: 1 };
+  const empanadas = { _id: "64f000000000000000000403", code: "EMP", title: "Empanadas", sectionID: seccion._id, order: 0 };
+  const suelta = { _id: "64f000000000000000000404", code: "SUE", title: "Sueltas" };
+  t.mock.method(Menu, "find", async () => [suelta, pizzas, empanadas, seccion]);
+  t.mock.method(Item, "find", async () => [
+    { _id: "64f000000000000000000501", code: "P2", title: "Napolitana", menuID: pizzas._id, order: 1 },
+    { _id: "64f000000000000000000502", code: "S1", title: "Suelto", menuID: suelta._id },
+    { _id: "64f000000000000000000503", code: "E1", title: "Carne", menuID: empanadas._id, order: 0 },
+    { _id: "64f000000000000000000504", code: "P1", title: "Muzzarella", menuID: pizzas._id, order: 0 },
+  ]);
+
+  // La respuesta es un stream: se junta lo escrito y se vuelve a leer como Excel.
+  const res = new PassThrough();
+  res.setHeader = () => {};
+  const chunks = [];
+  res.on("data", (chunk) => chunks.push(chunk));
+  const finished = new Promise((resolve) => res.on("end", resolve));
+  await getTemplate({ user: { _id: "u1" } }, res);
+  await finished;
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(Buffer.concat(chunks));
+  const codes = (sheetName) => {
+    const rows = [];
+    workbook.getWorksheet(sheetName).eachRow((row, rowNumber) => {
+      if (rowNumber > 1) rows.push(row.getCell(1).value);
+    });
+    return rows;
+  };
+  assert.deepEqual(codes("🟦 Categorías"), ["SEC", "EMP", "PIZ", "SUE"]);
+  assert.deepEqual(codes("🟩 Productos"), ["E1", "P1", "P2", "S1"]);
 });

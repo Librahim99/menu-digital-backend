@@ -123,8 +123,10 @@ const getPlan = async (name) => {
     if (!isValidFeatures(plan.features)) throw new Error("Funciones de plan inválidas");
     return plan;
   } catch (error) {
-  error.catalogCode = "PLAN_CATALOG_UNAVAILABLE";
-  throw error;
+    // `code` es lo que leen handleError (503 en vez de 500) y paymentRoutes
+    // (no cobrar sin catálogo). Con otro nombre nadie reconoce la marca.
+    error.code = "PLAN_CATALOG_UNAVAILABLE";
+    throw error;
   }
 };
 

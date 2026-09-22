@@ -30,6 +30,7 @@ const { getEmptyOfferSchedule, isOfferActive } = require("../utils/offers");
 const {
   buildPublicMenu, getReachableCategoryIds, toPublicContactInfo, toPublicMedia, toPublicFeatures,
 } = require("../utils/publicMenu");
+const { MENU_ORDER_SORT, sortByMenuOrder } = require("../utils/menuOrder");
 const { isValidEmail, isWeakPassword, isValidUsername, isValidPhone } = require("../utils/validators");
 const { escapeRegex } = require("../utils/regex");
 const {
@@ -702,7 +703,7 @@ const fetchPublicMenuV2 = async (req, res) => {
       getPlanForUser(user),
       Menu.find({ userID: user._id, hidden: false })
         .select(PUBLIC_MENU_MENU_SELECT)
-        .sort({ _id: 1 }) // orden de creación, explícito: no hay campo `order`
+        .sort(MENU_ORDER_SORT) // el orden que eligió el dueño (ver utils/menuOrder.js)
         .lean(),
     ]);
 
@@ -717,7 +718,7 @@ const fetchPublicMenuV2 = async (req, res) => {
       ? []
       : await Item.find({ menuID: { $in: categoryIds }, hidden: false })
         .select(PUBLIC_MENU_ITEM_SELECT)
-        .sort({ _id: 1 })
+        .sort(MENU_ORDER_SORT)
         .lean()
         .batchSize(PUBLIC_MENU_ITEMS_BATCH_SIZE);
 
@@ -771,12 +772,13 @@ const fetchUserWithMenu = async (req, res) => {
     // para no duplicar el conteo de una misma sesión de un cliente.
     trackView(user._id);
 
-    // Traemos todos los menus del user
-    const menus = await Menu.find({ userID: user._id, hidden: false });
+    // Traemos todos los menus del user, en el orden de la carta (ver
+    // utils/menuOrder.js): el armado de abajo conserva el orden de los arrays.
+    const menus = sortByMenuOrder(await Menu.find({ userID: user._id, hidden: false }));
     const menuIDs = menus.map((m) => m._id);
 
     // Traemos todos los items de esos menus
-    const allItems = await Item.find({ menuID: { $in: menuIDs }, hidden: false });
+    const allItems = sortByMenuOrder(await Item.find({ menuID: { $in: menuIDs }, hidden: false }));
  
     // Separamos secciones y categorías
     const secciones  = menus.filter((m) => m.section === true);
@@ -860,21 +862,22 @@ const downloadMenuPdf = async (req, res) => {
       return res.status(403).json({ message: "Tu plan no incluye exportar el menú a PDF." });
     }
 
-    const menus = await Menu.find({ userID: user._id, hidden: false });
+    // En el orden de la carta (ver utils/menuOrder.js).
+    const menus = sortByMenuOrder(await Menu.find({ userID: user._id, hidden: false }));
     const menuIDs = menus.map((m) => m._id);
 
     // Solo lo que realmente se ve en la carta: no ocultos, disponibles y
     // sin contar extras/adicionales (igual criterio que la ruta del menú PDF
     // que armamos antes, pensado para que el PDF no incluya salsas/bebidas
     // sueltas como si fueran platos del listado principal).
-    const allItems = (await Item.find({
+    const allItems = sortByMenuOrder((await Item.find({
       menuID: { $in: menuIDs },
       hidden: false,
       available: true,
       isExtra: false,
     }).select("-__v")).filter((item) =>
       getPublicItemForPlan(item, plan.features).available
-    );
+    ));
 
     const secciones  = menus.filter((m) => m.section === true);
     const categorias = menus.filter((m) => m.section === false);
@@ -961,10 +964,12 @@ res.send(pdfBuffer);
 // ──────────────────────────────────────────────
 const fetchOwnMenu = async (req, res) => {
   try {
-    const menus = await Menu.find({ userID: req.user._id });
+    // En el mismo orden que la carta (ver utils/menuOrder.js): el editor lo
+    // muestra tal cual y es lo que el dueño reordena arrastrando.
+    const menus = sortByMenuOrder(await Menu.find({ userID: req.user._id }));
     const menuIDs = menus.map((m) => m._id);
 
-    const allItems = await Item.find({ menuID: { $in: menuIDs } });
+    const allItems = sortByMenuOrder(await Item.find({ menuID: { $in: menuIDs } }));
 
     const secciones  = menus.filter((m) => m.section === true);
     const categorias = menus.filter((m) => m.section === false);
@@ -1004,6 +1009,11 @@ const fetchOwnMenu = async (req, res) => {
       canScheduleOffers: features.programacion_productos,
       canUseImageManager: features.image_manager,
       canUseTemplates: features.menu_templates,
+      // Ordenar arrastrando (PATCH /items/reorder y /menus/reorder) pide lo
+      // mismo que editar. La clave además avisa que este backend sabe
+      // ordenar: un front nuevo contra un backend anterior no la recibe y no
+      // muestra las manijas, así que el orden de despliegue da igual.
+      canReorder: features.menu_editor,
       // Configuración del panel (ver newItem/newMenu y las rutas /me/settings).
       autoGenerateCodes: req.user.panelSettings?.autoGenerateCodes === true,
       disableMenuDelete: req.user.panelSettings?.disableMenuDelete === true,

@@ -4,7 +4,7 @@ const { protect, requireFeature } = require("../middleware/auth");
 const { imageUploadLimiter } = require("../middleware/rateLimiters");
 const { uploadItem, uploadItemLibrary } = require("../config/cloudinary");
 const {
-  newItem, editItem, moveItem, uploadImage, uploadDraftImage, setHidden, setAvailable, deleteItem,
+  newItem, editItem, moveItem, reorderItems, uploadImage, uploadDraftImage, setHidden, setAvailable, deleteItem,
   setAvailableBulk, setHiddenBulk, deleteItemsBulk,
   getLiteItems, getPendingImages, getPresetImages, checkImageQuota, uploadLibraryImage, assignImages,
   deleteLibraryImage
@@ -20,6 +20,8 @@ router.post("/upload-image", protect, requireFeature("menu_editor"), uploadItem.
 router.patch("/bulk/available", protect, requireFeature("menu_editor"), setAvailableBulk);
 router.patch("/bulk/hidden", protect, requireFeature("menu_editor"), setHiddenBulk);
 router.post("/bulk/delete", protect, requireFeature("menu_editor"), deleteItemsBulk);
+// Mismo motivo: "reorder" no debe leerse como un itemID.
+router.patch("/reorder", protect, requireFeature("menu_editor"), reorderItems);
 // Gestor de imágenes — mismo motivo, van antes de /:itemID/*. Gateadas por
 // la feature "image_manager" (no "menu_editor": es su propio feature de
 // plan, configurable aparte desde el catálogo).

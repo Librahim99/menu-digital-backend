@@ -41,15 +41,15 @@ const fakeId = (id) => ({
   equals(other) { return id === (other && typeof other.toString === "function" ? other.toString() : String(other)); },
 });
 
-const fakeMenu = ({ id, code, title = "Categoría", description = "", image = "", section = false, sectionID = null, hidden = false }) => ({
-  _id: fakeId(id), title, description, image, section, hidden, code,
+const fakeMenu = ({ id, code, title = "Categoría", description = "", image = "", section = false, sectionID = null, hidden = false, order }) => ({
+  _id: fakeId(id), title, description, image, section, hidden, code, order,
   sectionID: sectionID ? fakeId(sectionID) : null,
   toObject() { return { title: this.title, description: this.description, image: this.image, section: this.section, sectionID: this.sectionID, code: this.code }; },
   save: async () => {},
 });
 
 const fakeItem = ({ id, menuID, code, title = "Producto", price = 100, hidden = false, ...rest }) => ({
-  _id: fakeId(id), menuID: fakeId(menuID), title, price, hidden, code,
+  _id: fakeId(id), menuID: fakeId(menuID), title, price, hidden, code, order: rest.order,
   description: rest.description ?? "",
   offerPrice: rest.offerPrice ?? null,
   offerRange: rest.offerRange ?? { from: null, to: null },
@@ -390,4 +390,38 @@ test("copyMenuTemplates devuelve 400 si toda la selección ya estaba importada",
   assert.equal(res.statusCode, 400);
   assert.equal(createdMenus.length, 0);
   assert.equal(createdItems.length, 0);
+});
+
+// ──────────────────────────────────────────────
+// copyMenuTemplates — orden (tarjeta "Poder ordenar el menú")
+// ──────────────────────────────────────────────
+
+test("copyMenuTemplates copia en el orden de la plantilla, al final del menú del usuario", async () => {
+  withOwner();
+  // En la plantilla "Postres" va antes que "Pizzas", y el flan antes que el helado.
+  const pizzas = fakeMenu({ id: "cat-1", title: "Pizzas", code: "PIZZ", order: 1 });
+  const postres = fakeMenu({ id: "cat-2", title: "Postres", code: "POST", order: 0 });
+  installCatalogs({
+    ownerMenus: [pizzas, postres],
+    ownerItems: [
+      fakeItem({ id: "item-1", menuID: "cat-2", title: "Helado", code: "HELA", order: 1 }),
+      fakeItem({ id: "item-2", menuID: "cat-1", title: "Muzzarella", code: "MUZZ", order: 0 }),
+      fakeItem({ id: "item-3", menuID: "cat-2", title: "Flan", code: "FLAN", order: 0 }),
+    ],
+    // Las categorías sueltas del usuario: la última está en la posición 2.
+    ownMenus: [fakeMenu({ id: "own-1", code: "MIA1", order: 2 }), fakeMenu({ id: "own-2", code: "MIA2" })],
+  });
+  const { createdMenus, createdItems } = installCreators();
+  User.findByIdAndUpdate = async () => {};
+
+  const req = { body: { categoryIds: ["cat-1", "cat-2"] }, user: { _id: fakeId("user-1") }, plan: { features: { item_limit: null, programacion_productos: true } } };
+  const res = makeResponse();
+  await copyMenuTemplates(req, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.deepEqual(createdMenus.map((m) => [m.title, m.order]), [["Postres", 3], ["Pizzas", 4]]);
+  assert.deepEqual(
+    createdItems.map((i) => [i.title, i.order]),
+    [["Flan", 0], ["Helado", 1], ["Muzzarella", 0]],
+  );
 });

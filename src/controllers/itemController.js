@@ -8,6 +8,7 @@ const { normalizeOffer } = require("../utils/offers");
 const { cloudinary } = require("../config/cloudinary");
 const { isValidImageUrl } = require("../utils/imageUrl");
 const { generateAutoCode } = require("../utils/autoCode");
+const { getNextOrder, isObjectIdString, parseReorderIds, buildReorder } = require("../utils/menuOrder");
 
 // ──────────────────────────────────────────────
 // Helper: verifica que el menuID pertenezca al user autenticado.
@@ -179,8 +180,11 @@ const newItem = async (req, res) => {
       if (existingItem) return res.status(400).json({ message: "Código de item ya existe en este menú" });
     }
 
+    // Va al final de su categoría (ver utils/menuOrder.js).
+    const order = await getNextOrder(Item, { menuID });
+
     const item = await Item.create({
-        menuID, title, description, price, image,
+        menuID, title, description, price, image, order,
         code: autoGenerate ? String(Date.now()) : cleanCode,
         offerPrice: normalizedOffer.offerPrice, offerRange: normalizedOffer.offerRange,
         offerSchedule: normalizedOffer.offerSchedule,
@@ -344,14 +348,76 @@ const moveItem = async (req, res) => {
     // Verifica ownership del menú destino
     const { error: errorDestino, status: statusDestino } = await verifyMenuOwnership(newMenuID, req.user._id);
     if (errorDestino) return res.status(statusDestino).json({ message: errorDestino });
- 
+
+    // Al pasar a otra categoría va al final de esa categoría.
+    const update = { menuID: newMenuID };
+    if (item.menuID.toString() !== String(newMenuID)) {
+      update.order = await getNextOrder(Item, { menuID: newMenuID });
+    }
+
     const updated = await Item.findByIdAndUpdate(
       req.params.itemID,
-      { menuID: newMenuID },
+      update,
       { new: true }
     );
- 
+
     res.json(updated);
+  } catch (err) {
+    handleError(res, err);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Ordenar los productos de una categoría (arrastrar en el editor).
+//          `itemIds` es la categoría entera en el nuevo orden. Un id que hoy
+//          está en otra categoría del mismo usuario se mueve a esta, en esa
+//          posición: un solo pedido cubre ordenar y mover. Lo que ya estaba
+//          en la categoría y no viene en la lista (algo creado desde otra
+//          pestaña) queda al final, en su orden. Es todo o nada: si algún id
+//          no existe o no es del usuario, no se escribe nada.
+// @route   PATCH /api/items/reorder
+// @access  Private
+// ──────────────────────────────────────────────
+const reorderItems = async (req, res) => {
+  try {
+    const { menuID } = req.body;
+    const itemIds = parseReorderIds(req.body.itemIds);
+    if (!isObjectIdString(menuID) || !itemIds) {
+      return res.status(400).json({ message: "El pedido para ordenar los productos no es válido." });
+    }
+
+    // Las tres lecturas no dependen entre sí: van en paralelo, una sola ida a
+    // Atlas. Nada de lo leído sale en la respuesta antes de validar ownership.
+    const [userMenus, requestedItems, categoryItems] = await Promise.all([
+      Menu.find({ userID: req.user._id }).select("_id section").lean(),
+      Item.find({ _id: { $in: itemIds } }).select("_id menuID order").lean(),
+      Item.find({ menuID }).select("_id menuID order").lean(),
+    ]);
+
+    const userMenusById = new Map(userMenus.map((menu) => [String(menu._id), menu]));
+    const category = userMenusById.get(menuID.toLowerCase());
+    if (!category) return res.status(404).json({ message: "Categoría no encontrada." });
+    if (category.section === true) {
+      return res.status(400).json({ message: "Los productos solo pueden ir dentro de una categoría." });
+    }
+
+    // Mismo criterio que resolveOwnedItemIds: no distingue "no existe" de "es
+    // de otro usuario", para no revelar items ajenos.
+    const allOwned = requestedItems.length === itemIds.length
+      && requestedItems.every((item) => userMenusById.has(String(item.menuID)));
+    if (!allOwned) {
+      return res.status(409).json({ message: "Algún producto ya no existe. Recargá el menú e intentá de nuevo." });
+    }
+
+    const { orderedIds, operations } = buildReorder({
+      requestedIds: itemIds,
+      containerDocs: categoryItems,
+      docsById: new Map([...categoryItems, ...requestedItems].map((item) => [String(item._id), item])),
+      containerPatch: { menuID: category._id },
+    });
+    if (operations.length > 0) await Item.bulkWrite(operations);
+
+    res.json({ menuID: category._id, itemIds: orderedIds });
   } catch (err) {
     handleError(res, err);
   }
@@ -961,6 +1027,7 @@ module.exports = {
   newItem,
   editItem,
   moveItem,
+  reorderItems,
   uploadImage,
   uploadDraftImage,
   setHidden,
