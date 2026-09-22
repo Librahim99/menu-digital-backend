@@ -27,6 +27,9 @@ const {
 } = require("../utils/slug");
 const { isScheduleAvailableAt } = require("../utils/itemAvailability");
 const { getEmptyOfferSchedule, isOfferActive } = require("../utils/offers");
+const {
+  buildPublicMenu, getReachableCategoryIds, toPublicContactInfo, toPublicMedia, toPublicFeatures,
+} = require("../utils/publicMenu");
 const { isValidEmail, isWeakPassword, isValidUsername, isValidPhone } = require("../utils/validators");
 const { escapeRegex } = require("../utils/regex");
 const {
@@ -644,6 +647,106 @@ const getAuthUserSummary = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
+// Carta pública v2: lo que se le pide a Mongo. Solo lo que usa la respuesta:
+// del local no se lee ni mail, redes, ubicación, horario, password ni
+// pendingMenuImages; de las secciones y categorías, título y jerarquía; del
+// producto, lo que hace falta para resolver oferta y disponibilidad AHORA
+// (offerRange, offerSchedule, availabilitySchedule, available: después no
+// viajan) más lo que la carta dibuja. `hidden` no se pide en items ni menús
+// porque el filtro de la query ya lo garantiza. subscription y
+// subscriptionExpiresAt solo sirven para resolver el plan vigente.
+// ──────────────────────────────────────────────
+const PUBLIC_MENU_USER_SELECT = [
+  "contactInfo.businessName", "contactInfo.number", "contactInfo.address", "contactInfo.orderMessage",
+  "media", "hasDelivery", "template", "menuStyle",
+  "subscription", "subscriptionExpiresAt", "panelSettings.menuDisplay",
+].join(" ");
+const PUBLIC_MENU_MENU_SELECT = "title section sectionID";
+const PUBLIC_MENU_ITEM_SELECT = [
+  "menuID", "title", "price", "offerPrice", "offerRange", "offerSchedule",
+  "available", "availabilitySchedule", "description", "image", "options", "recommended", "apt",
+].join(" ");
+
+// Los items vienen en un solo batch: con el batchSize por defecto del driver
+// (101 documentos) una carta de cientos de productos necesita un getMore, o
+// sea un round-trip más a Atlas (medido: ~66 ms con 639 items). 2000 cubre
+// de sobra una carta real; por encima de eso sigue funcionando, con getMore.
+const PUBLIC_MENU_ITEMS_BATCH_SIZE = 2000;
+
+// ──────────────────────────────────────────────
+// @desc    Carta pública en el contrato v2 (GET /:slug/menu?v=2): la misma
+//          carta que fetchUserWithMenu pero solo con lo que se dibuja, y
+//          resuelta en 3 pasos seriales en vez de 5 (ver utils/publicMenu.js
+//          para la forma de la respuesta). fetchUserWithMenu la despacha
+//          cuando llega ?v=2; sin el parámetro responde el contrato legacy,
+//          porque hay bundles viejos del front y el back y el front se
+//          despliegan por separado, en cualquier orden.
+//          Sin cache compartida: la respuesta depende de la hora (ofertas y
+//          disponibilidad programadas) y cada request cuenta una visita.
+// @route   GET /api/users/:slug/menu?v=2
+// @access  Public
+// ──────────────────────────────────────────────
+const fetchPublicMenuV2 = async (req, res) => {
+  try {
+    const slugNormalizado = generateSlug(req.params.slug);
+
+    // Sin lean a propósito: es un solo documento, y así siguen valiendo los
+    // defaults del schema, getContactInfo y getMenuDisplay como en el resto.
+    const user = await User.findOne({ slug: slugNormalizado, active: true })
+      .select(PUBLIC_MENU_USER_SELECT);
+    if (!user) return res.status(404).json({ message: "Local no encontrado" });
+
+    // El plan y los menús no dependen entre sí: van en paralelo. El Plan no se
+    // cachea (se lee por petición, ver planCatalog.js).
+    const [plan, menus] = await Promise.all([
+      getPlanForUser(user),
+      Menu.find({ userID: user._id, hidden: false })
+        .select(PUBLIC_MENU_MENU_SELECT)
+        .sort({ _id: 1 }) // orden de creación, explícito: no hay campo `order`
+        .lean(),
+    ]);
+
+    // Igual que en la carta legacy: se cuenta la visita una vez resuelto el
+    // plan, y sin esperarla (fire-and-forget).
+    trackView(user._id);
+
+    // Solo se piden los items de las categorías que la carta puede mostrar
+    // (sueltas o dentro de una sección visible), no los de huérfanas.
+    const categoryIds = getReachableCategoryIds(menus);
+    const items = categoryIds.length === 0
+      ? []
+      : await Item.find({ menuID: { $in: categoryIds }, hidden: false })
+        .select(PUBLIC_MENU_ITEM_SELECT)
+        .sort({ _id: 1 })
+        .lean()
+        .batchSize(PUBLIC_MENU_ITEMS_BATCH_SIZE);
+
+    const menuDisplay = getMenuDisplay(user);
+    const { features } = plan;
+    // La hora se toma UNA vez por request: todas las ofertas y horarios se
+    // resuelven contra el mismo instante.
+    const now = new Date();
+
+    res.json({
+      user: {
+        contactInfo: toPublicContactInfo(getContactInfo(user.contactInfo)),
+        media: toPublicMedia(user.media),
+        hasDelivery: user.hasDelivery === true,
+        template: getTemplateForFeatures(user.template, features),
+        menuStyle: getMenuStyleForFeatures(user.menuStyle, features),
+        features: toPublicFeatures(features),
+        menuDisplay,
+      },
+      menu: buildPublicMenu({
+        menus, items, features, hidePrices: menuDisplay.hidePrices, now,
+      }),
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
 // @desc    Obtener datos públicos de un local por slug + menú completo armado.
 //          Se ejecuta UNA sola vez cuando el cliente entra a /negocio/menu.
 //          Devuelve el user y el menú estructurado para que el front no necesite
@@ -652,6 +755,7 @@ const getAuthUserSummary = async (req, res) => {
 // @access  Public
 // ──────────────────────────────────────────────
 const fetchUserWithMenu = async (req, res) => {
+  if (req.query?.v === "2") return fetchPublicMenuV2(req, res);
   try {
     const { slug } = req.params
     const slugNormalizado = generateSlug(slug);

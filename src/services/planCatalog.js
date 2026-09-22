@@ -123,8 +123,8 @@ const getPlan = async (name) => {
     if (!isValidFeatures(plan.features)) throw new Error("Funciones de plan inválidas");
     return plan;
   } catch (error) {
-    error.code = "PLAN_CATALOG_UNAVAILABLE";
-    throw error;
+  error.catalogCode = "PLAN_CATALOG_UNAVAILABLE";
+  throw error;
   }
 };
 

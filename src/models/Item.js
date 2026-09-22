@@ -155,4 +155,13 @@ const ItemSchema = new mongoose.Schema(
   }
 );
 
+// Índice para las lecturas por categoría (Item.find / countDocuments con
+// { menuID: { $in }, hidden }): la carta pública, el editor, /me, el PDF y el
+// sitemap. Hoy esas queries son un COLLSCAN que cuesta ~1 ms porque la
+// colección es chica; el índice es para que el costo no crezca linealmente con
+// la cantidad de productos de todos los locales. Lo construye el autoIndex de
+// Mongoose al arrancar la app (config/db.js no lo desactiva); ningún script lo
+// crea. Las queries solo por menuID lo usan por prefijo.
+ItemSchema.index({ menuID: 1, hidden: 1 });
+
 module.exports = mongoose.model("Item", ItemSchema);

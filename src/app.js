@@ -1,8 +1,8 @@
 const express = require("express");
 const cors = require("cors");
-const path = require("path");
 const helmet = require("helmet");
 const mongoSanitize = require("express-mongo-sanitize");
+
 require("dotenv").config();
 
 const connectDB = require("./config/db");
@@ -10,154 +10,420 @@ const { validateEnvironment } = require("./config/environment");
 const { handleError } = require("./utils/handleError");
 const { apiLimiter } = require("./middleware/rateLimiters");
 const { getSitemap } = require("./controllers/sitemapController");
-
-// ──────────────────────────────────────────────
-// Validación de configuración y conexión a la base de datos
-// ──────────────────────────────────────────────
-// Fallar antes de abrir el puerto evita aceptar registros o pagos con una
-// configuración parcial, credenciales de prueba en producción o sin firma.
-validateEnvironment();
 const { initializePlans } = require("./services/planCatalog");
 
-const app = express();
 
-// Detrás de un proxy/balanceador (Koyeb) el request le llega a Express con
-// la IP del proxy, no la del cliente real — sin esto, express-rate-limit
-// contaría a TODOS los usuarios como si fueran una sola IP.
+// ──────────────────────────────────────────────
+// Validación de configuración
+// ──────────────────────────────────────────────
+
+validateEnvironment();
+
+
+// ──────────────────────────────────────────────
+// App
+// ──────────────────────────────────────────────
+
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+
+// ──────────────────────────────────────────────
+// Proxy
+// ──────────────────────────────────────────────
+//
+// Detrás de un proxy/balanceador (Koyeb), Express
+// recibe la IP del proxy. Esto permite que
+// express-rate-limit pueda identificar correctamente
+// la IP real del cliente.
+//
+
 app.set("trust proxy", 1);
 
+
 // ──────────────────────────────────────────────
-// Middlewares globales
+// Security headers
 // ──────────────────────────────────────────────
-// Headers de seguridad estándar (X-Content-Type-Options, X-Frame-Options,
-// HSTS, saca X-Powered-By, etc.). API pura sin vistas HTML propias, así que
-// el CSP por default de helmet no rompe nada — no servimos páginas.
-// crossOriginResourcePolicy en "same-origin" (el default) es para apps que
-// SIRVEN algo (imágenes, scripts) y no quieren que otros orígenes lo
-// carguen — achá es al revés: el frontend (otro origen) tiene que poder
-// consumir esta API sí o sí, eso ya lo gobierna el allowlist de CORS de
-// abajo, así que lo dejamos en "cross-origin" para no pisarlo.
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" },
-}));
-app.use(cors({
-  origin: [
-    'https://www.menudigitalapp.com.ar',
-    'http://localhost:5173',
-    'http://localhost:3000',
-  ],
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-}));
-app.options('*', cors());  // preflight
+
+app.use(
+  helmet({
+    crossOriginResourcePolicy: {
+      policy: "cross-origin",
+    },
+  })
+);
+
+
+// ──────────────────────────────────────────────
+// CORS
+// ──────────────────────────────────────────────
+
+app.use(
+  cors({
+    origin: [
+      "https://www.menudigitalapp.com.ar",
+      "http://localhost:5173",
+      "http://localhost:3000",
+    ],
+    credentials: true,
+    methods: [
+      "GET",
+      "POST",
+      "PUT",
+      "DELETE",
+      "PATCH",
+      "OPTIONS",
+    ],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+    ],
+  })
+);
+
+
+// ──────────────────────────────────────────────
+// Body parsing
+// ──────────────────────────────────────────────
+
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-// Saca claves tipo operador de Mongo ($ne, $regex, etc.) de body/query/params
-// — sin esto, mandar {"username": {"$ne": null}} en vez de un string hace
-// que Mongoose lo interprete como operador de la query en vez de un valor
-// literal (inyección NoSQL).
-// NO se aplica a /api/payments: el webhook de MercadoPago manda el
-// paymentId en un query param literal "data.id" (con punto) — el sanitizer
-// también saca claves con puntos (mismo criterio que las de $) y nos
-// rompía el webhook entero.
-app.use(["/api/users", "/api/menus", "/api/items", "/api/admin", "/api/massive", "/api/sellers", "/api/menu-templates"], mongoSanitize());
-// Red de contención general contra abuso/scraping — los límites más
-// estrictos de login/registro (authLimiter) se suman a este en sus rutas.
+
+app.use(
+  express.urlencoded({
+    extended: true,
+  })
+);
+
+
+// ──────────────────────────────────────────────
+// NoSQL injection protection
+// ──────────────────────────────────────────────
+//
+// Sanitizamos las rutas que trabajan directamente
+// con datos que pueden terminar en consultas MongoDB.
+//
+// /api/payments queda fuera porque Mercado Pago
+// utiliza parámetros como "data.id" en sus webhooks.
+// Ese endpoint debe validar específicamente los
+// datos recibidos de Mercado Pago.
+//
+
+app.use(
+  [
+    "/api/users",
+    "/api/menus",
+    "/api/items",
+    "/api/admin",
+    "/api/massive",
+    "/api/sellers",
+    "/api/menu-templates",
+  ],
+  mongoSanitize()
+);
+
+
+// ──────────────────────────────────────────────
+// General API rate limit
+// ──────────────────────────────────────────────
+//
+// Todos los endpoints bajo /api quedan protegidos
+// por el rate limiter general.
+//
+// Los endpoints sensibles, como login/registro,
+// pueden aplicar además un limiter específico.
+//
+
 app.use("/api", apiLimiter);
 
 
 // ──────────────────────────────────────────────
 // Rutas de la API
 // ──────────────────────────────────────────────
-// Las rutas admin específicas van ANTES de /api/admin para que no las
-// intercepte el GET /:userID de adminRoutes.
-app.use("/api/admin/payments", require("./routes/adminPaymentRoutes"));
-app.use("/api/admin/plans", require("./routes/adminPlanRoutes"));
-app.use("/api/admin/sellers", require("./routes/sellerRoutes"));
-app.use("/api/plans", require("./routes/planRoutes"));
-app.use("/api/admin", require("./routes/adminRoutes"))
-// El CRM lo maneja tanto un admin como cada vendedor sobre sus propios
-// clientes (ver crmRoutes) — vive bajo /api/sellers, no /api/admin, montado
-// ANTES de /api/sellers a secas por el mismo motivo que el bloque de arriba.
-app.use("/api/sellers/crm", require("./routes/crmRoutes"));
-app.use("/api/sellers", require("./routes/sellerPanelRoutes"));
-app.use("/api/users", require("./routes/userRoutes"));
-app.use("/api/menus", require("./routes/menuRoutes"));
-app.use("/api/items", require("./routes/itemRoutes"));
-app.use("/api/menu-templates", require("./routes/menuTemplateRoutes"));
-app.use("/api/massive", require("./routes/massiveRoutes"));
+//
+// Las rutas específicas deben ir antes de las rutas
+// generales para evitar que una ruta dinámica las
+// intercepte.
+//
+// Ejemplo:
+// /api/admin/payments
+// debe registrarse antes de:
+// /api/admin
+//
+
+app.use(
+  "/api/admin/payments",
+  require("./routes/adminPaymentRoutes")
+);
+
+app.use(
+  "/api/admin/plans",
+  require("./routes/adminPlanRoutes")
+);
+
+app.use(
+  "/api/admin/sellers",
+  require("./routes/sellerRoutes")
+);
+
+app.use(
+  "/api/plans",
+  require("./routes/planRoutes")
+);
+
+app.use(
+  "/api/admin",
+  require("./routes/adminRoutes")
+);
+
 
 // ──────────────────────────────────────────────
-// Ruta pública multi-tenant: /:businessName/menu
-// Ej: menudigital.com.ar/cafe-roma/menu
-// Esta ruta puede resolverse en el front con React Router,
-// o acá si queremos un SSR / redirect.
+// CRM
 // ──────────────────────────────────────────────
+//
+// El CRM lo utilizan tanto administradores como
+// vendedores sobre sus propios clientes.
+//
+// /api/sellers/crm debe montarse antes de:
+// /api/sellers
+//
+// para evitar que una ruta general intercepte
+// las rutas específicas del CRM.
+//
+
+app.use(
+  "/api/sellers/crm",
+  require("./routes/crmRoutes")
+);
+
+app.use(
+  "/api/sellers",
+  require("./routes/sellerPanelRoutes")
+);
 
 
 // ──────────────────────────────────────────────
-// Sitemap dinámico
+// Users
+// ──────────────────────────────────────────────
+
+app.use(
+  "/api/users",
+  require("./routes/userRoutes")
+);
+
+
+// ──────────────────────────────────────────────
+// Menus
+// ──────────────────────────────────────────────
+
+app.use(
+  "/api/menus",
+  require("./routes/menuRoutes")
+);
+
+
+// ──────────────────────────────────────────────
+// Items
+// ──────────────────────────────────────────────
+
+app.use(
+  "/api/items",
+  require("./routes/itemRoutes")
+);
+
+
+// ──────────────────────────────────────────────
+// Menu templates
+// ──────────────────────────────────────────────
+
+app.use(
+  "/api/menu-templates",
+  require("./routes/menuTemplateRoutes")
+);
+
+
+// ──────────────────────────────────────────────
+// Massive operations
+// ──────────────────────────────────────────────
+
+app.use(
+  "/api/massive",
+  require("./routes/massiveRoutes")
+);
+
+
+// ──────────────────────────────────────────────
+// Sitemap
 // ──────────────────────────────────────────────
 
 app.get("/sitemap.xml", getSitemap);
 
-app.get('/ping', (req, res) => {
-  console.log(`running... ${new Date().toLocaleString()}`)
-  res.json({ status: 'ok' }); 
+
+// ──────────────────────────────────────────────
+// Ping / monitoring
+// ──────────────────────────────────────────────
+//
+// Endpoint simple para health checks.
+//
+// No hacemos console.log acá porque servicios como
+// Koyeb o monitores externos pueden consultar este
+// endpoint frecuentemente y llenar la terminal.
+//
+
+app.get("/ping", (req, res) => {
+  res.json({
+    status: "ok",
+  });
 });
+
+
+// ──────────────────────────────────────────────
+// Ruta pública multi-tenant
+// ──────────────────────────────────────────────
+//
+// Ejemplo:
+// /cafe-roma/menu
+//
+// En producción el frontend puede manejar esta ruta
+// mediante React Router.
+//
+// Por ahora redirigimos al endpoint público de la API.
+//
 
 app.get("/:businessName/menu", (req, res) => {
-  // Por ahora redirige al endpoint público de la API.
-  // En producción esto lo maneja el frontend (React).
-  res.redirect(`/api/menus/public/${req.params.businessName}`);
+  res.redirect(
+    `/api/menus/public/${req.params.businessName}`
+  );
 });
 
-//Mercado Pago
+
+// ──────────────────────────────────────────────
+// Mercado Pago
+// ──────────────────────────────────────────────
+//
+// Esta ruta queda fuera de mongoSanitize() porque
+// los webhooks pueden utilizar parámetros como:
+//
+// data.id
+//
+// El contenido recibido debe validarse específicamente
+// dentro de paymentRoutes.
+//
+
 const paymentRoutes = require("./routes/paymentRoutes");
-app.use("/api/payments", paymentRoutes);
+
+app.use(
+  "/api/payments",
+  paymentRoutes
+);
+
 
 // ──────────────────────────────────────────────
-// Health check
+// Health check principal
 // ──────────────────────────────────────────────
-app.get("/", (req, res) => res.json({ status: "API corriendo ✅" }));
 
-// ──────────────────────────────────────────────
-// Manejo de rutas no encontradas
-// ──────────────────────────────────────────────
-app.use((req, res) => {
-  res.status(404).json({ message: "Ruta no encontrada" });
+app.get("/", (req, res) => {
+  res.json({
+    status: "API corriendo ✅",
+  });
 });
 
+
 // ──────────────────────────────────────────────
-// Manejo de errores no capturados — SIEMPRE al final, después de todas las
-// rutas. Antes de esto no existía, así que un error que se escapara de un
-// try/catch (ej. JSON malformado, que body-parser rechaza antes de que
-// cualquier controller lo vea) caía en el handler default de Express, que
-// devuelve el stack trace completo — incluida la ruta real del filesystem
-// del servidor — a quien sea que hizo el request.
+// 404
 // ──────────────────────────────────────────────
+//
+// Si ninguna ruta anterior coincide, devolvemos
+// una respuesta controlada.
+//
+
+app.use((req, res) => {
+  res.status(404).json({
+    message: "Ruta no encontrada",
+  });
+});
+
+
+// ──────────────────────────────────────────────
+// Error handler global
+// ──────────────────────────────────────────────
+//
+// Debe estar SIEMPRE después de todas las rutas.
+//
+// Esto permite capturar errores que escapen de los
+// controllers/middlewares y devolver una respuesta
+// controlada sin exponer stack traces ni rutas
+// internas del servidor.
+//
+
 app.use((err, req, res, next) => {
   handleError(res, err);
 });
 
+
 // ──────────────────────────────────────────────
-// Inicio del servidor
+// Startup
 // ──────────────────────────────────────────────
-const PORT = process.env.PORT || 5000;
-const start = async () => {
-  await connectDB();
-  await initializePlans();
-  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    console.warn(
-      "⚠️  SMTP_USER/SMTP_PASS no configurados: los códigos de confirmación de /baja y /arrepentimiento no se van a poder enviar."
-    );
-  }
-  app.listen(PORT, () => {
-    console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  });
+
+const printStartup = () => {
+  const environment =
+    process.env.NODE_ENV || "development";
+
+  console.log(`
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🍽️  MENU DIGITAL API
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  🚀 Server       http://localhost:${PORT}
+  🌐 Environment  ${environment}
+  🟢 MongoDB      connected
+  📦 Plans        initialized
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✓ API ready
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+`);
 };
-start().catch(error => {
-  console.error("No se pudo iniciar la API con un catálogo válido:", error);
-  process.exit(1);
-});
+
+
+// ──────────────────────────────────────────────
+// Start server
+// ──────────────────────────────────────────────
+
+const start = async () => {
+  try {
+    // Conectar MongoDB
+    await connectDB();
+
+    // Inicializar catálogo de planes
+    await initializePlans();
+
+    // SMTP es opcional para levantar la API.
+    // Si falta, mostramos un warning pero no detenemos
+    // el servidor.
+    if (
+      !process.env.SMTP_USER ||
+      !process.env.SMTP_PASS
+    ) {
+      console.warn(
+        "⚠️  SMTP no configurado: emails de confirmación deshabilitados."
+      );
+    }
+
+    // Iniciar HTTP server
+    app.listen(PORT, () => {
+      printStartup();
+    });
+  } catch (error) {
+    console.error(
+      "❌ No se pudo iniciar la API con un catálogo válido:",
+      error
+    );
+
+    process.exit(1);
+  }
+};
+
+
+// ──────────────────────────────────────────────
+// Boot
+// ──────────────────────────────────────────────
+
+start();

@@ -61,4 +61,12 @@ const MenuSchema = new mongoose.Schema(
   }
 );
 
+// Índice para las lecturas por local (Menu.find({ userID, hidden })): la carta
+// pública, el editor, /me, el PDF y el sitemap. Hoy esas queries son un
+// COLLSCAN que cuesta ~1 ms porque la colección es chica; el índice es para
+// que el costo no crezca linealmente con la cantidad de locales. Lo construye
+// el autoIndex de Mongoose al arrancar la app (config/db.js no lo desactiva);
+// ningún script lo crea. Las queries solo por userID lo usan por prefijo.
+MenuSchema.index({ userID: 1, hidden: 1 });
+
 module.exports = mongoose.model("Menu", MenuSchema);
