@@ -29,6 +29,7 @@ const {
   encryptPendingPassword,
 } = require("../utils/pendingCredentials");
 const { isValidEmail, isWeakPassword, isValidUsername, isValidPhone } = require("../utils/validators");
+const { toStoredPhone } = require("../utils/phone");
 const Seller = require("../models/Seller");
 
 // Cada operación recibe su propia configuración: el SDK muta `options`
@@ -486,7 +487,7 @@ router.post("/crear-preferencia-registro", async (req, res) => {
         contactInfo: {
           mail: cleanMail,
           businessName: cleanBusinessName,
-          number: contactInfo.number,
+          number: toStoredPhone(contactInfo.number),
         },
         acceptedTerms: true,
         planId,

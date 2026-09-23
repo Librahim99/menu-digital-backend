@@ -163,6 +163,23 @@ const UserSchema = new mongoose.Schema(
         },
       },
       number: { type: Number, default: null },
+      // Números de WhatsApp para pedidos y reservas (uno por sucursal). Cada
+      // número va como código de área + número, sin 54/9/0/15 (ver
+      // utils/phone.js). Vacío = pedidos y reservas usan `number`. Con más
+      // de uno, la carta y la landing le piden al cliente que elija a cuál
+      // escribir, así que ahí el nombre es obligatorio (lo valida editUser).
+      whatsappNumbers: {
+        type: [{
+          _id: false,
+          name: { type: String, trim: true, default: "", maxlength: 40 },
+          number: { type: String, required: true, match: /^[1-9]\d{9}$/ },
+        }],
+        default: [],
+        validate: {
+          validator: (arr) => Array.isArray(arr) && arr.length <= 10,
+          message: "No se pueden cargar más de 10 números de WhatsApp.",
+        },
+      },
       location: { type: Object, default: {} }, // Ej: { lat, lng }
       address: { type: String, default: "" },
       social: { type: Object, default: {} }, // Ej: { instagram: "", facebook: "" }

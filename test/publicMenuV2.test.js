@@ -840,3 +840,12 @@ for (const [name, model, method] of [
     assert.doesNotMatch(JSON.stringify(res.body), /mongo interno|E11000/);
   });
 }
+
+test("v2: contactInfo incluye los WhatsApp por sucursal y omite la lista vacía", () => {
+  const { toPublicContactInfo } = require("../src/utils/publicMenu");
+  assert.deepEqual(
+    toPublicContactInfo({ businessName: "X", whatsappNumbers: [{ name: "Centro", number: "1133334444" }] }),
+    { businessName: "X", whatsappNumbers: [{ name: "Centro", number: "1133334444" }] },
+  );
+  assert.deepEqual(toPublicContactInfo({ businessName: "X", whatsappNumbers: [] }), { businessName: "X" });
+});

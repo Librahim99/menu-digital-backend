@@ -210,10 +210,11 @@ const buildPublicMenu = ({ menus, items, features = {}, hidePrices = false, now 
 
 const PUBLIC_CONTACT_FIELDS = ["businessName", "number", "address", "orderMessage"];
 
-// Whitelist de contactInfo para la carta: nombre, número (pedidos por
-// WhatsApp), dirección y mensaje de pedido. Sin mail, redes, ubicación ni
-// reservationMessage: la carta no los muestra. Las claves ausentes o vacías
-// se omiten (number puede ser null); el objeto siempre existe porque el front
+// Whitelist de contactInfo para la carta: nombre, número y números de
+// WhatsApp por sucursal (pedidos por WhatsApp), dirección y mensaje de
+// pedido. Sin mail, redes, ubicación ni reservationMessage: la carta no los
+// muestra. Las claves ausentes o vacías se omiten (number puede ser null,
+// whatsappNumbers una lista vacía); el objeto siempre existe porque el front
 // lee user.contactInfo.businessName sin optional chaining.
 // Recibe el contactInfo ya pasado por getContactInfo (contrato vigente).
 const toPublicContactInfo = (contactInfo) => {
@@ -222,6 +223,9 @@ const toPublicContactInfo = (contactInfo) => {
   for (const field of PUBLIC_CONTACT_FIELDS) {
     const value = source[field];
     if (value !== undefined && value !== null && value !== "") info[field] = value;
+  }
+  if (Array.isArray(source.whatsappNumbers) && source.whatsappNumbers.length > 0) {
+    info.whatsappNumbers = source.whatsappNumbers.map(({ name, number }) => ({ name: name || "", number }));
   }
   return info;
 };

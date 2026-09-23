@@ -86,8 +86,119 @@ test("editar contacto conserva datos vigentes y descarta campos de clientes anti
 
 test("las cuentas nuevas no incorporan campos de reseñas desde un payload antiguo", () => {
   const user = new User({ contactInfo: { ...activeContact, ...retiredContact } });
-  // orderMessage aparece por el default del schema, no por el payload.
-  assert.deepEqual(user.toObject().contactInfo, { ...activeContact, orderMessage: "" });
+  // orderMessage y whatsappNumbers aparecen por el default del schema, no por el payload.
+  assert.deepEqual(user.toObject().contactInfo, { ...activeContact, orderMessage: "", whatsappNumbers: [] });
+});
+
+// ──────────────────────────────────────────────
+// WhatsApp por sucursal y formato de teléfono (código de área + número)
+// ──────────────────────────────────────────────
+
+const editContact = async (t, contactInfo) => {
+  t.mock.method(User, "exists", async () => false);
+  let saved;
+  t.mock.method(User, "findByIdAndUpdate", async (_id, update) => {
+    saved = update.$set;
+    return saved;
+  });
+  const res = response();
+  await editUser({
+    user: { _id: "64f000000000000000000123", subscription: "pro", contactInfo: activeContact },
+    body: { contactInfo },
+  }, res);
+  return { res, saved };
+};
+
+test("editUser normaliza teléfono y WhatsApps a código de área + número", async (t) => {
+  const { res, saved } = await editContact(t, {
+    number: "+54 9 11 2345-6789",
+    whatsappNumbers: [
+      { name: " Centro ", number: "011 15 3333-4444" },
+      { name: "Córdoba", number: "54 351 555 6666" },
+    ],
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(saved.contactInfo.number, 1123456789);
+  assert.deepEqual(saved.contactInfo.whatsappNumbers, [
+    { name: "Centro", number: "1133334444" },
+    { name: "Córdoba", number: "3515556666" },
+  ]);
+});
+
+test("editUser acepta un único WhatsApp sin nombre y la lista vacía", async (t) => {
+  let { res, saved } = await editContact(t, { whatsappNumbers: [{ name: "", number: "1133334444" }] });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(saved.contactInfo.whatsappNumbers, [{ name: "", number: "1133334444" }]);
+
+  t.mock.restoreAll();
+  ({ res, saved } = await editContact(t, { whatsappNumbers: [] }));
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(saved.contactInfo.whatsappNumbers, []);
+});
+
+test("editUser rechaza WhatsApps inválidos o varios sin nombre", async (t) => {
+  const cases = [
+    [{ name: "Centro", number: "12345" }],
+    [{ name: "Centro", number: "" }],
+    [{ name: "A", number: "1133334444" }, { name: " ", number: "1144445555" }],
+    [{ name: "x".repeat(41), number: "1133334444" }],
+    Array.from({ length: 11 }, (_, i) => ({ name: `S${i}`, number: "1133334444" })),
+    "1133334444",
+  ];
+  for (const whatsappNumbers of cases) {
+    t.mock.restoreAll();
+    const { res, saved } = await editContact(t, { whatsappNumbers });
+    assert.equal(res.statusCode, 400, JSON.stringify(whatsappNumbers));
+    assert.equal(saved, undefined);
+  }
+});
+
+test("el modelo valida el formato de cada WhatsApp", () => {
+  const ok = new User({ contactInfo: { ...activeContact, whatsappNumbers: [{ name: "Centro", number: "1133334444" }] } });
+  assert.equal(ok.validateSync()?.errors["contactInfo.whatsappNumbers.0.number"], undefined);
+  const bad = new User({ contactInfo: { ...activeContact, whatsappNumbers: [{ name: "Centro", number: "5491133334444" }] } });
+  assert.ok(bad.validateSync()?.errors["contactInfo.whatsappNumbers.0.number"]);
+});
+
+test("landing y carta exponen los WhatsApps; ocultar reservas los saca de la landing", async (t) => {
+  t.mock.method(Plan, "findOne", async ({ name }) => new Plan(INITIAL_PLANS.find(plan => plan.name === name)));
+  const whatsappNumbers = [{ name: "Centro", number: "1133334444" }, { name: "Norte", number: "1144445555" }];
+  const user = {
+    _id: "64f000000000000000000123",
+    slug: "cafe-de-prueba",
+    template: 1,
+    subscription: "pro",
+    subscriptionExpiresAt: new Date("2099-01-01"),
+    contactInfo: { ...activeContact, whatsappNumbers },
+    panelSettings: { landingVisibility: {} },
+  };
+  t.mock.method(User, "findOne", async () => user);
+  t.mock.method(Menu, "find", async () => []);
+  t.mock.method(Item, "find", async () => []);
+  t.mock.method(PageView, "findOneAndUpdate", async () => ({}));
+
+  let res = response();
+  await fetchUser({ params: { slug: user.slug } }, res);
+  assert.deepEqual(res.body.contactInfo.whatsappNumbers, whatsappNumbers);
+
+  res = response();
+  await fetchUserWithMenu({ params: { slug: user.slug }, query: {} }, res);
+  assert.deepEqual(res.body.user.contactInfo.whatsappNumbers, whatsappNumbers);
+
+  // Reservas ocultas: sin WhatsApps en la landing. El teléfono sigue si su fila está visible.
+  user.panelSettings.landingVisibility = { whatsappReserve: false };
+  res = response();
+  await fetchUser({ params: { slug: user.slug } }, res);
+  assert.deepEqual(res.body.contactInfo.whatsappNumbers, []);
+  assert.equal(res.body.contactInfo.number, activeContact.number);
+
+  // Con WhatsApps cargados, el teléfono ya no alimenta las reservas: si su
+  // fila está oculta, no viaja aunque el botón de reservas esté visible.
+  user.panelSettings.landingVisibility = { phone: false };
+  res = response();
+  await fetchUser({ params: { slug: user.slug } }, res);
+  assert.equal(res.body.contactInfo.number, null);
+  assert.deepEqual(res.body.contactInfo.whatsappNumbers, whatsappNumbers);
 });
 
 // ──────────────────────────────────────────────

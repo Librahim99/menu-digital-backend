@@ -33,6 +33,7 @@ const {
 const { MENU_ORDER_SORT, sortByMenuOrder } = require("../utils/menuOrder");
 const { isValidEmail, isWeakPassword, isValidUsername, isValidPhone } = require("../utils/validators");
 const { escapeRegex } = require("../utils/regex");
+const { normalizeArPhone, isValidArLocalPhone, toStoredPhone } = require("../utils/phone");
 const {
   maskEmail,
   createPendingServiceAction,
@@ -92,7 +93,7 @@ const trackItemView = (userID, itemID) => {
 // todavía conserve campos que ya no forman parte del producto.
 const getContactInfo = (contactInfo) => {
   const source = contactInfo?.toObject?.() ?? contactInfo ?? {};
-  const fields = ["mail", "number", "location", "address", "social", "businessName", "reservationMessage", "orderMessage"];
+  const fields = ["mail", "number", "whatsappNumbers", "location", "address", "social", "businessName", "reservationMessage", "orderMessage"];
   return Object.fromEntries(fields
     .filter(field => Object.prototype.hasOwnProperty.call(source, field))
     .map(field => [field, source[field]]));
@@ -101,6 +102,39 @@ const getContactInfo = (contactInfo) => {
 // Tope de contactInfo.orderMessage (ver editUser); el modelo repite el mismo
 // número como red de contención.
 const ORDER_MESSAGE_MAX_LENGTH = 500;
+
+// Topes de contactInfo.whatsappNumbers; el modelo repite los mismos.
+const WHATSAPP_NUMBERS_MAX = 10;
+const WHATSAPP_NAME_MAX_LENGTH = 40;
+
+// Valida y normaliza la lista de números de WhatsApp que manda el panel.
+// Devuelve { value } o { error } con el mensaje para el dueño.
+const parseWhatsappNumbers = (raw) => {
+  if (!Array.isArray(raw)) return { error: "Los números de WhatsApp no son válidos." };
+  if (raw.length > WHATSAPP_NUMBERS_MAX) {
+    return { error: `Podés cargar hasta ${WHATSAPP_NUMBERS_MAX} números de WhatsApp.` };
+  }
+  const value = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") return { error: "Los números de WhatsApp no son válidos." };
+    const name = typeof entry.name === "string" ? entry.name.trim() : "";
+    if (name.length > WHATSAPP_NAME_MAX_LENGTH) {
+      return { error: `El nombre de cada WhatsApp no puede superar los ${WHATSAPP_NAME_MAX_LENGTH} caracteres.` };
+    }
+    const number = normalizeArPhone(entry.number);
+    if (!isValidArLocalPhone(number)) {
+      return {
+        error: `El WhatsApp${name ? ` "${name}"` : ""} no es válido: ingresá código de área y número, sin 0 ni 15 (ej: 11 2345-6789).`,
+      };
+    }
+    value.push({ name, number });
+  }
+  // Con más de un número el cliente elige por nombre: tiene que haber uno.
+  if (value.length > 1 && value.some(entry => !entry.name)) {
+    return { error: "Si cargás más de un WhatsApp, ponele un nombre a cada uno (ej: la sucursal)." };
+  }
+  return { value };
+};
 
 // Datos que el dueño puede ocultar de la landing pública desde el panel de
 // Configuración (ver panelSettings.landingVisibility en models/User.js).
@@ -124,8 +158,11 @@ const hideContactInfo = (contactInfo, visibility, keys = LANDING_VISIBILITY_KEYS
   };
 
   // El número alimenta dos cosas en la landing (la fila de teléfono y el
-  // botón de reservas): solo deja de enviarse si las dos están ocultas.
-  if (isHidden("phone") && isHidden("whatsappReserve")) blank("number", null);
+  // botón de reservas, cuando no hay números de WhatsApp cargados): solo
+  // deja de enviarse si ninguna de las dos lo usa.
+  const hasWhatsappNumbers = Array.isArray(info.whatsappNumbers) && info.whatsappNumbers.length > 0;
+  if (isHidden("phone") && (isHidden("whatsappReserve") || hasWhatsappNumbers)) blank("number", null);
+  if (isHidden("whatsappReserve")) blank("whatsappNumbers", []);
   if (isHidden("mail")) blank("mail", "");
   // location (lat/lng) ubica el local igual que la dirección.
   if (isHidden("address")) { blank("address", ""); blank("location", {}); }
@@ -266,7 +303,7 @@ if (acceptedTerms !== true) {
     const user = await createUserWithUniqueSlug({
       username: cleanUsername,
       password,
-      contactInfo,
+      contactInfo: { ...contactInfo, number: toStoredPhone(contactInfo.number) },
       acceptedTerms: true,
       acceptedTermsAt: new Date(),
       acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
@@ -365,7 +402,7 @@ const registerTrial = async (req, res) => {
     const user = await createUserWithUniqueSlug({
       username: cleanUsername,
       password,
-      contactInfo: { ...contactInfo, mail: cleanMail },
+      contactInfo: { ...contactInfo, mail: cleanMail, number: toStoredPhone(contactInfo.number) },
       acceptedTerms: true,
       acceptedTermsAt: now,
       acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
@@ -658,7 +695,7 @@ const getAuthUserSummary = async (req, res) => {
 // subscriptionExpiresAt solo sirven para resolver el plan vigente.
 // ──────────────────────────────────────────────
 const PUBLIC_MENU_USER_SELECT = [
-  "contactInfo.businessName", "contactInfo.number", "contactInfo.address", "contactInfo.orderMessage",
+  "contactInfo.businessName", "contactInfo.number", "contactInfo.whatsappNumbers", "contactInfo.address", "contactInfo.orderMessage",
   "media", "hasDelivery", "template", "menuStyle",
   "subscription", "subscriptionExpiresAt", "panelSettings.menuDisplay",
 ].join(" ");
@@ -1307,6 +1344,21 @@ const editUser = async (req, res) => {
           });
         }
         updates.contactInfo.orderMessage = orderMessage;
+      }
+
+      // Teléfono y WhatsApps se guardan como código de área + número (ver
+      // utils/phone.js), aunque el dueño los tipee con 54, 0 o 15.
+      if (Object.prototype.hasOwnProperty.call(incomingContactInfo, "number")) {
+        const number = incomingContactInfo.number;
+        if (number !== null && number !== "" && !isValidPhone(number)) {
+          return res.status(400).json({ message: "El teléfono no es válido." });
+        }
+        updates.contactInfo.number = toStoredPhone(number);
+      }
+      if (Object.prototype.hasOwnProperty.call(incomingContactInfo, "whatsappNumbers")) {
+        const parsed = parseWhatsappNumbers(incomingContactInfo.whatsappNumbers);
+        if (parsed.error) return res.status(400).json({ message: parsed.error });
+        updates.contactInfo.whatsappNumbers = parsed.value;
       }
     }
 
