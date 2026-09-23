@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { protect, requireFeature } = require("../middleware/auth");
 const { authLimiter } = require("../middleware/rateLimiters");
-const { uploadUser } = require("../config/cloudinary");
+const { uploadUser, uploadFavicon: faviconUpload, FAVICON_MAX_BYTES } = require("../config/cloudinary");
 const {
   newUser,
   registerTrial,
@@ -23,8 +23,10 @@ const {
   confirmEmailChange,
   uploadImage,
   uploadBackground,
+  uploadFavicon,
   removeImage,
   deleteBackground,
+  deleteFavicon,
   useTemplate,
   setActive,
   getPanelSettingsStatus,
@@ -32,6 +34,22 @@ const {
   changePanelSettingsPassword,
   updatePanelSettings,
 } = require("../controllers/userController");
+
+// El favicon responde 400 con un mensaje claro si el archivo pesa de más o
+// no es una imagen, en vez de caer en el handler global (500 genérico).
+const acceptFavicon = (req, res, next) => {
+  faviconUpload.single("image")(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === "LIMIT_FILE_SIZE") {
+      const maxMb = FAVICON_MAX_BYTES / (1024 * 1024);
+      return res.status(400).json({ message: `El logo no puede pesar más de ${maxMb} MB.` });
+    }
+    if (err.message === "Solo se permiten imágenes JPG, PNG o WebP") {
+      return res.status(400).json({ message: err.message });
+    }
+    next(err);
+  });
+};
 
 // ──────────────────────────────────────────────
 // Rutas públicas
@@ -65,6 +83,8 @@ router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.post("/upload-background", protect, uploadUser.single("image"), uploadBackground);
 router.delete("/remove-image", protect, removeImage);
 router.delete("/background", protect, deleteBackground);
+router.post("/upload-favicon", protect, acceptFavicon, uploadFavicon);
+router.delete("/favicon", protect, deleteFavicon);
 router.patch("/template", protect, useTemplate);
 router.patch("/active", protect, setActive);
 // Panel de "Configuración" del dashboard — ver comentario en userController.js.

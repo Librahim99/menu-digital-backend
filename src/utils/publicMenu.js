@@ -230,12 +230,14 @@ const toPublicContactInfo = (contactInfo) => {
   return info;
 };
 
-// Imágenes del local: la portada y SOLO la primera foto (BusinessSEO usa
-// pictures[0] para las metas). Lo vacío se omite; media siempre existe.
+// Imágenes del local: la portada, el favicon y SOLO la primera foto
+// (BusinessSEO usa pictures[0] para las metas). Lo vacío se omite; media
+// siempre existe.
 const toPublicMedia = (media) => {
   const source = media ?? {};
   const publicMedia = {};
   if (source.backgroundPicture) publicMedia.backgroundPicture = source.backgroundPicture;
+  if (source.favicon) publicMedia.favicon = source.favicon;
   const [firstPicture] = Array.isArray(source.pictures) ? source.pictures : [];
   if (firstPicture) publicMedia.pictures = [firstPicture];
   return publicMedia;

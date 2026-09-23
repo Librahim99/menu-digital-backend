@@ -201,6 +201,9 @@ const UserSchema = new mongoose.Schema(
     media: {
       pictures: { type: [String], default: [] }, // Array de URLs
       backgroundPicture: { type: String, default: "" },
+      // Logo que la landing y la carta pública usan como favicon (ícono de
+      // la pestaña). Vacío = se sigue viendo el favicon de Menú Digital.
+      favicon: { type: String, default: "" },
     },
 
     // Imágenes subidas desde el Gestor de imágenes del editor de menú que

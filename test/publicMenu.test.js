@@ -646,7 +646,8 @@ test("media pública: la portada y solo la primera foto; lo vacío se omite", ()
     toPublicMedia({ backgroundPicture: "https://x/fondo.jpg", pictures: ["https://x/1.jpg", "https://x/2.jpg", "https://x/3.jpg"] }),
     { backgroundPicture: "https://x/fondo.jpg", pictures: ["https://x/1.jpg"] },
   );
-  assert.deepEqual(toPublicMedia({ backgroundPicture: "", pictures: [] }), {});
+  assert.deepEqual(toPublicMedia({ backgroundPicture: "", favicon: "", pictures: [] }), {});
+  assert.deepEqual(toPublicMedia({ favicon: "https://x/logo.png" }), { favicon: "https://x/logo.png" });
   assert.deepEqual(toPublicMedia({ pictures: ["https://x/1.jpg"] }), { pictures: ["https://x/1.jpg"] });
   assert.deepEqual(toPublicMedia(undefined), {});
 });

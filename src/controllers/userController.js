@@ -1606,6 +1606,52 @@ const deleteBackground = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
+// @desc    Subir el logo que la landing y la carta usan como favicon.
+//          El tamaño (1MB) y el tipo los valida multer en la ruta.
+// @route   POST /api/users/upload-favicon
+// @access  Private
+// ──────────────────────────────────────────────
+const uploadFavicon = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No se recibió ningún archivo" });
+    }
+
+    const imageUrl = req.file.path;
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { "media.favicon": imageUrl },
+      { new: true }
+    );
+
+    res.json({ imageUrl, media: user.media });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Quitar el logo del favicon: la landing y la carta vuelven al
+//          favicon de Menú Digital. Mismo criterio que deleteBackground:
+//          solo quita la referencia, no borra el archivo en Cloudinary.
+// @route   DELETE /api/users/favicon
+// @access  Private
+// ──────────────────────────────────────────────
+const deleteFavicon = async (req, res) => {
+  try {
+    const user = await User.findByIdAndUpdate(
+      req.user._id,
+      { "media.favicon": "" },
+      { new: true }
+    );
+
+    res.json({ media: user.media });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
 // @desc    Cambiar el template visual del local
 // @route   PATCH /api/users/template
 // @access  Private
@@ -1892,8 +1938,10 @@ module.exports = {
   confirmEmailChange,
   uploadImage,
   uploadBackground,
+  uploadFavicon,
   removeImage,
   deleteBackground,
+  deleteFavicon,
   useTemplate,
   setActive,
   getPanelSettingsStatus,

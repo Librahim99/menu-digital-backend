@@ -19,6 +19,11 @@ cloudinary.config({
 // 8MB — suficiente para foto de celular, evita abuso de memoria/cuota
 const IMAGE_SIZE_LIMIT = { fileSize: 8 * 1024 * 1024 };
 
+// 1MB para el favicon: es un logo, no una foto. El front ya lo achica a
+// 256 px antes de subirlo (pesa pocos KB); esto corta lo que llegue por
+// otro camino. El mismo número está en el front (FAVICON_MAX_BYTES).
+const FAVICON_MAX_BYTES = 1024 * 1024;
+
 // Filtro de mimetype (primera línea de defensa)
 const imageFilter = (req, file, cb) => {
   const allowed = ["image/jpeg", "image/png", "image/webp"];
@@ -68,6 +73,20 @@ const sellerStorage = new CloudinaryStorage({
   },
 });
 
+// Logo del local para el favicon de la landing y la carta. El ícono de una
+// pestaña se dibuja a 16-48 px: se guarda como PNG de 256 px como máximo
+// (conserva la transparencia del logo) para que el navegador no tenga que
+// bajar y achicar una foto pesada solo para eso.
+const faviconStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: "menu-digital/favicons",
+    allowed_formats: ["jpg", "jpeg", "png", "webp"],
+    format: "png",
+    transformation: [{ width: 256, height: 256, crop: "limit" }],
+  },
+});
+
 // Storage del Gestor de imágenes: mismo folder que itemStorage, pero con
 // public_id propio (userID + número) para no depender del auto-generado de
 // Cloudinary — así se puede reconocer de quién es cada imagen si algún día
@@ -109,6 +128,12 @@ module.exports = {
   uploadSeller: multer({
     storage: sellerStorage,
     limits: IMAGE_SIZE_LIMIT,
+    fileFilter: imageFilter,
+  }),
+  FAVICON_MAX_BYTES,
+  uploadFavicon: multer({
+    storage: faviconStorage,
+    limits: { fileSize: FAVICON_MAX_BYTES },
     fileFilter: imageFilter,
   }),
   uploadItemLibrary: multer({
