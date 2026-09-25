@@ -115,7 +115,7 @@ const validateAvailabilitySchedule = (value, { withDateRange = true } = {}) => {
 
   for (let index = 1; index < normalizedSegments.length; index += 1) {
     if (normalizedSegments[index][0] < normalizedSegments[index - 1][1]) {
-      return { error: "Los horarios de disponibilidad no pueden superponerse." };
+      return { error: "Los horarios no pueden superponerse." };
     }
   }
 
