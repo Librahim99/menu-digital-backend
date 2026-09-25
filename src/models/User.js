@@ -3,6 +3,15 @@ const bcrypt = require("bcryptjs");
 const { isValidImageUrl } = require("../utils/imageUrl");
 const { MENU_STYLES } = require("../config/menuStyles");
 
+// Un turno del horario de atención; mismo shape que los rangos de Item.
+const TimeRangeSchema = new mongoose.Schema(
+  {
+    from: { type: String, required: true },
+    to: { type: String, required: true },
+  },
+  { _id: false }
+);
+
 const UserSchema = new mongoose.Schema(
   {
     username: {
@@ -231,44 +240,53 @@ const UserSchema = new mongoose.Schema(
     // Horario de atención, un DayHours por día de la semana. Sin `default`
     // a propósito: si el dueño nunca lo cargó, el campo queda `undefined`
     // (no un horario 09:00-18:00 inventado) — el front trata su ausencia
-    // como "sin horario cargado" y no muestra la sección. `open`/`close`
-    // son strings "HH:mm"; no se valida el formato acá, se valida en
-    // editUser (userController.js), mismo criterio que contactInfo.
+    // como "sin horario cargado" y no muestra la sección. `ranges` son los
+    // turnos del día (hasta 4, para horarios cortados); `open`/`close` copian
+    // el primero y son lo único que tienen los horarios guardados antes de
+    // los turnos. Strings "HH:mm"; no se valida el formato acá, se valida en
+    // editUser (utils/businessSchedule.js), mismo criterio que contactInfo.
     schedule: {
       mon: {
         enabled: { type: Boolean },
         open: { type: String },
         close: { type: String },
+        ranges: { type: [TimeRangeSchema], default: undefined },
       },
       tue: {
         enabled: { type: Boolean },
         open: { type: String },
         close: { type: String },
+        ranges: { type: [TimeRangeSchema], default: undefined },
       },
       wed: {
         enabled: { type: Boolean },
         open: { type: String },
         close: { type: String },
+        ranges: { type: [TimeRangeSchema], default: undefined },
       },
       thu: {
         enabled: { type: Boolean },
         open: { type: String },
         close: { type: String },
+        ranges: { type: [TimeRangeSchema], default: undefined },
       },
       fri: {
         enabled: { type: Boolean },
         open: { type: String },
         close: { type: String },
+        ranges: { type: [TimeRangeSchema], default: undefined },
       },
       sat: {
         enabled: { type: Boolean },
         open: { type: String },
         close: { type: String },
+        ranges: { type: [TimeRangeSchema], default: undefined },
       },
       sun: {
         enabled: { type: Boolean },
         open: { type: String },
         close: { type: String },
+        ranges: { type: [TimeRangeSchema], default: undefined },
       },
     },
 

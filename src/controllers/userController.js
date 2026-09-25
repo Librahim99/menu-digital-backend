@@ -26,6 +26,7 @@ const {
   updateUserWithUniqueSlug,
 } = require("../utils/slug");
 const { isScheduleAvailableAt } = require("../utils/itemAvailability");
+const { normalizeBusinessSchedule } = require("../utils/businessSchedule");
 const { getEmptyOfferSchedule, isOfferActive } = require("../utils/offers");
 const {
   buildPublicMenu, getReachableCategoryIds, toPublicContactInfo, toPublicMedia, toPublicFeatures,
@@ -1362,28 +1363,14 @@ const editUser = async (req, res) => {
       }
     }
 
-    // Validación liviana del horario para que la carta pública no reciba datos que rompan
-    // el cálculo de "abierto ahora" (ver ScheduleSection en UserHome.tsx).
-    // El front (UserEditor.tsx) ya valida esto mismo antes de mandar, esto
-    // es la segunda barrera del lado del servidor.
-    const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
-    const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+    // Valida y normaliza el horario para que la carta pública no reciba datos
+    // que rompan el cálculo de "abierto ahora" (ver ScheduleSection en
+    // UserHome.tsx). El front (UserEditor.tsx) ya valida el formato antes de
+    // mandar; las superposiciones entre turnos las rechaza solo el servidor.
     if (updates.schedule !== undefined) {
-      const sched = updates.schedule;
-      const isValid =
-        sched && typeof sched === "object" &&
-        DAY_KEYS.every((day) => {
-          const d = sched[day];
-          if (!d || typeof d !== "object") return false;
-          if (typeof d.enabled !== "boolean") return false;
-          if (!d.enabled) return true; // open/close no importan si está cerrado
-          // Cierre <= apertura termina al día siguiente; iguales son 24 horas.
-          return typeof d.open === "string" && typeof d.close === "string" &&
-            HHMM_RE.test(d.open) && HHMM_RE.test(d.close);
-        });
-      if (!isValid) {
-        return res.status(400).json({ message: "El horario cargado no es válido." });
-      }
+      const { schedule, error } = normalizeBusinessSchedule(updates.schedule);
+      if (error) return res.status(400).json({ message: error });
+      updates.schedule = schedule;
     }
 
     // Si hay nombre de negocio, la actualización también reintenta ante una
