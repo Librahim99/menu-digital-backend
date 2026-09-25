@@ -13,7 +13,7 @@ const {
 } = require("../config/plans");
 const { getPlanForUser, getRequestPlan } = require("../services/planCatalog");
 const {
-  MENU_STYLES, MENU_STYLE_LABELS, getMenuStyle, isVisualFamily, getMenuStyleForFeatures,
+  MENU_STYLES, MENU_STYLE_LABELS, getMenuStyle, getMenuStyleFeature, getMenuStyleForFeatures,
 } = require("../config/menuStyles");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { buildStatsPeriod } = require("../utils/statsPeriod");
@@ -1677,15 +1677,19 @@ const useTemplate = async (req, res) => {
       return res.status(403).json({ message: "Tu plan no incluye ese template." });
     }
 
-    // Las familias visuales son una feature de plan aparte de las paletas.
+    // Las familias visuales son una feature de plan aparte de las paletas, y
+    // los diseños premium tienen la suya (premium_menu_styles).
     // Clásico y Bistró no pasan por acá: quedan abiertos a todos los planes.
     // La guarda exige menuStyle definido; si no, cambiar solo de paleta daría
     // un 403 espurio a quien ya tiene una familia guardada de un plan vencido.
-    if (menuStyle !== undefined && isVisualFamily(menuStyle) && !features.menu_styles) {
+    const styleFeature = menuStyle !== undefined ? getMenuStyleFeature(menuStyle) : null;
+    if (styleFeature && features[styleFeature] !== true) {
       return res.status(403).json({
         code: "FEATURE_NOT_INCLUDED",
-        feature: "menu_styles",
-        message: "Tu plan no incluye las familias visuales.",
+        feature: styleFeature,
+        message: styleFeature === "premium_menu_styles"
+          ? "Tu plan no incluye los diseños premium."
+          : "Tu plan no incluye las familias visuales.",
       });
     }
 

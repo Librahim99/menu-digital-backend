@@ -9,7 +9,8 @@ const CrmProfile = require("../src/models/CrmProfile");
 const { INITIAL_PLANS } = require("../src/services/planCatalog");
 const { useTemplate, fetchUserWithMenu, fetchUser, getAuthUser } = require("../src/controllers/userController");
 const {
-  MENU_STYLES, MENU_STYLE_LABELS, LEGACY_MENU_STYLES, VISUAL_FAMILIES,
+  MENU_STYLES, MENU_STYLE_LABELS, LEGACY_MENU_STYLES, VISUAL_FAMILIES, PREMIUM_MENU_STYLES,
+  getMenuStyleFeature,
 } = require("../src/config/menuStyles");
 
 const response = () => ({
@@ -88,7 +89,7 @@ test("un plan sin familias visuales las rechaza sin escribir nada", async (t) =>
     // gating de familias y no del de paletas.
     await useTemplate({ user: owner(), body: { template: 1, menuStyle } }, res);
     assert.equal(res.statusCode, 403);
-    assert.equal(res.body.feature, "menu_styles");
+    assert.equal(res.body.feature, getMenuStyleFeature(menuStyle));
   }
 });
 
@@ -119,6 +120,64 @@ test("las familias se habilitan por documento del catálogo, no por el nombre de
   const retirado = response();
   await useTemplate({ user: owner("pro"), body: { template: 1, menuStyle: "grill" } }, retirado);
   assert.equal(retirado.statusCode, 403);
+});
+
+// Espejo de PREMIUM_MENU_STYLES del frontend: si divergen, el selector ofrece
+// un diseño que el PATCH rechaza (o candadea uno que el plan ya incluye).
+test("los diseños premium son familias con su propia feature", () => {
+  assert.deepEqual(PREMIUM_MENU_STYLES, ["neo-brutalism", "tactile"]);
+  for (const style of PREMIUM_MENU_STYLES) {
+    assert.ok(VISUAL_FAMILIES.includes(style));
+    assert.equal(getMenuStyleFeature(style), "premium_menu_styles");
+  }
+  for (const style of VISUAL_FAMILIES.filter(value => !PREMIUM_MENU_STYLES.includes(value))) {
+    assert.equal(getMenuStyleFeature(style), "menu_styles");
+  }
+  for (const style of LEGACY_MENU_STYLES) assert.equal(getMenuStyleFeature(style), null);
+});
+
+// Las dos claves son independientes: tener las familias comunes no habilita
+// las premium, y tener las premium no habilita las comunes.
+test("los diseños premium se habilitan con premium_menu_styles y no con menu_styles", async (t) => {
+  t.mock.method(CrmProfile, "findOneAndUpdate", async () => ({}));
+  mockPlanWith(t, "basic", { menu_styles: true, premium_menu_styles: false });
+  t.mock.method(User, "findByIdAndUpdate", async () => assert.fail("No debe escribir"));
+  for (const menuStyle of PREMIUM_MENU_STYLES) {
+    const res = response();
+    await useTemplate({ user: owner("basic"), body: { template: 1, menuStyle } }, res);
+    assert.equal(res.statusCode, 403);
+    assert.equal(res.body.feature, "premium_menu_styles");
+  }
+
+  mockPlanWith(t, "basic", { menu_styles: false, premium_menu_styles: true });
+  t.mock.method(User, "findByIdAndUpdate", async (_, update) => ({ ...owner("basic"), ...update }));
+  for (const menuStyle of PREMIUM_MENU_STYLES) {
+    const res = response();
+    await useTemplate({ user: owner("basic"), body: { template: 1, menuStyle } }, res);
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.menuStyle, menuStyle);
+  }
+  const comun = response();
+  await useTemplate({ user: owner("basic"), body: { template: 1, menuStyle: "grill" } }, comun);
+  assert.equal(comun.statusCode, 403);
+  assert.equal(comun.body.feature, "menu_styles");
+});
+
+test("la lectura recorta un diseño premium si el plan solo incluye las familias comunes", async (t) => {
+  readMocks(t);
+  mockPlanWith(t, "basic", { menu_styles: true, premium_menu_styles: false });
+  for (const menuStyle of [...PREMIUM_MENU_STYLES, "grill"]) {
+    const user = { ...owner("basic"), menuStyle, toObject() { return { ...this }; } };
+    t.mock.method(User, "findOne", async () => user);
+    t.mock.method(User, "findByIdAndUpdate", async () => user);
+    const esperado = PREMIUM_MENU_STYLES.includes(menuStyle) ? "classic" : menuStyle;
+    const carta = response();
+    await fetchUserWithMenu({ params: { slug: "bistro-de-prueba" } }, carta);
+    assert.equal(carta.body.user.menuStyle, esperado);
+    const panel = response();
+    await getAuthUser({ user }, panel);
+    assert.equal(panel.body.menuStyle, esperado);
+  }
 });
 
 test("clientes anteriores pueden cambiar paleta sin sobrescribir el diseño", async (t) => {
