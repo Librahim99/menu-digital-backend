@@ -28,6 +28,19 @@ const formatter = new Intl.DateTimeFormat("en-CA", {
  */
 const buenosAiresDateStr = (date = new Date()) => formatter.format(date);
 
+const hourFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: TZ,
+  hour: "numeric",
+  hourCycle: "h23",
+});
+
+/**
+ * Hora (0-23) del instante `date` en horario de Buenos Aires. Es la que usan
+ * los horarios pico de las estadísticas, con el mismo corte que
+ * buenosAiresDateStr.
+ */
+const buenosAiresHour = (date = new Date()) => Number(hourFormatter.format(date)) % 24;
+
 /**
  * Instante (Date) de las 00:00 del primer día del mes de `date` (default:
  * ahora), leído en horario de Buenos Aires. A diferencia de
@@ -64,4 +77,4 @@ const addCalendarMonths = (date, months) => {
   return result;
 };
 
-module.exports = { addCalendarMonths, buenosAiresDateStr, startOfMonthBA, TIMEZONE_BA: TZ };
+module.exports = { addCalendarMonths, buenosAiresDateStr, buenosAiresHour, startOfMonthBA, TIMEZONE_BA: TZ };

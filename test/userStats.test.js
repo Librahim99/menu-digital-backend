@@ -7,7 +7,8 @@ const Item = require("../src/models/Item");
 const User = require("../src/models/User");
 const Menu = require("../src/models/Menu");
 const { buildStatsPeriod } = require("../src/utils/statsPeriod");
-const { fetchStats, fetchItemStats, trackItemViewEndpoint } = require("../src/controllers/userController");
+const { fetchStats, fetchItemStats, trackItemViewEndpoint, trackMenuEvent } = require("../src/controllers/userController");
+const { summarizeWindow } = require("../src/utils/menuAnalytics");
 
 const user = { _id: new mongoose.Types.ObjectId(), createdAt: new Date("2026-01-01T12:00:00Z") };
 const now = new Date("2026-09-16T15:00:00Z").getTime();
@@ -66,25 +67,153 @@ test("ranking: agrupa ambos períodos del mismo local, excluye hoy y conserva pr
   t.mock.timers.enable({ apis: ["Date"], now });
   const itemId = new mongoose.Types.ObjectId();
   const deletedId = new mongoose.Types.ObjectId();
+  const orderedOnlyId = new mongoose.Types.ObjectId();
   t.mock.method(ItemView, "aggregate", async pipeline => {
     assert.deepEqual(pipeline[0].$match, {
       userID: user._id, date: { $gte: "2026-09-02", $lte: "2026-09-15" },
     });
     assert.deepEqual(pipeline[1].$group.totalViews.$sum.$cond, [{ $gte: ["$date", "2026-09-09"] }, "$count", 0]);
     assert.deepEqual(pipeline[1].$group.previousViews.$sum.$cond, [{ $lt: ["$date", "2026-09-09"] }, "$count", 0]);
-    assert.deepEqual(pipeline[2], { $match: { totalViews: { $gt: 0 } } });
+    assert.deepEqual(pipeline[1].$group.orders.$sum.$cond, [{ $gte: ["$date", "2026-09-09"] }, { $ifNull: ["$orders", 0] }, 0]);
     assert.deepEqual(pipeline.at(-1), { $limit: 10 });
-    return [{ _id: itemId, totalViews: 20, previousViews: 8 }, { _id: deletedId, totalViews: 5, previousViews: 0 }];
+    if (pipeline[2].$match.orders) {
+      assert.deepEqual(pipeline[3], { $sort: { orders: -1, totalViews: -1, _id: 1 } });
+      return [{ _id: orderedOnlyId, totalViews: 0, previousViews: 0, orders: 4 }, { _id: itemId, totalViews: 20, previousViews: 8, orders: 3 }];
+    }
+    assert.deepEqual(pipeline[2], { $match: { totalViews: { $gt: 0 } } });
+    return [{ _id: itemId, totalViews: 20, previousViews: 8, orders: 3 }, { _id: deletedId, totalViews: 5, previousViews: 0, orders: 0 }];
   });
   t.mock.method(Item, "find", query => {
-    assert.deepEqual(query._id.$in, [itemId, deletedId]);
-    return { select: async () => [{ _id: itemId, title: "Empanadas", image: "" }] };
+    // Una sola búsqueda para los dos rankings, sin repetir productos.
+    assert.deepEqual(query._id.$in, [itemId, deletedId, orderedOnlyId]);
+    return { select: async () => [
+      { _id: itemId, title: "Empanadas", image: "" },
+      { _id: orderedOnlyId, title: "Flan", image: "flan.jpg" },
+    ] };
   });
   const res = response();
   await fetchItemStats({ user, query: { days: "7", userID: "otro-local" } }, res);
   assert.equal(res.body.topItems[0].previousViews, 8);
+  assert.equal(res.body.topItems[0].orders, 3);
   assert.equal(res.body.topItems[1].title, "(producto eliminado)");
+  assert.deepEqual(res.body.topOrdered.map(item => [item.title, item.orders]), [["Flan", 4], ["Empanadas", 3]]);
   assert.equal(res.body.windowDays, 7);
+});
+
+test("resumen del período: horas y embudo solo de días completos del período, con desde cuándo se miden", () => {
+  const dates = ["2026-09-13", "2026-09-14", "2026-09-15"];
+  const summary = summarizeWindow([
+    // Día anterior al período y hoy: no entran.
+    { date: "2026-09-12", count: 9, hours: { 20: 9 }, tracked: 9, visitors: 9 },
+    { date: "2026-09-16", count: 4, hours: { 12: 4 }, tracked: 4 },
+    // Día viejo, sin horas ni protocolo nuevo.
+    { date: "2026-09-13", count: 7 },
+    // Horas de un bundle anterior (sin tracked) y claves basura.
+    { date: "2026-09-14", count: 3, hours: { 20: 2, 21: 1, 24: 5, x: 1, 13: -2 } },
+    { date: "2026-09-15", count: 6, hours: { "20": 4, "13": 2 }, tracked: 5, visitors: 4, returning: 1, qr: 3, engaged: 3, carts: 2, orders: 1 },
+  ], dates);
+  assert.equal(summary.hours.length, 24);
+  assert.equal(summary.hours[20], 6);
+  assert.equal(summary.hours[21], 1);
+  assert.equal(summary.hours[13], 2);
+  assert.equal(summary.hours.reduce((a, b) => a + b, 0), 9);
+  assert.equal(summary.hoursFrom, "2026-09-14");
+  assert.deepEqual(summary.audience, {
+    from: "2026-09-15", visits: 5, visitors: 4, returning: 1, qr: 3, engaged: 3, carts: 2, orders: 1,
+  });
+
+  const empty = summarizeWindow([{ date: "2026-09-14", count: 3 }], dates);
+  assert.equal(empty.hoursFrom, null);
+  assert.equal(empty.audience.from, null);
+});
+
+test("estadísticas: la respuesta suma horas y embudo del período", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now });
+  t.mock.method(PageView, "find", async () => [
+    { date: "2026-09-15", count: 3, hours: { 21: 3 }, tracked: 3, visitors: 2, qr: 1 },
+    { date: "2026-09-16", count: 5, hours: { 11: 5 }, tracked: 5 },
+  ]);
+  const res = response();
+  await fetchStats({ user, query: { days: "7" } }, res);
+  assert.equal(res.body.hours[21], 3);
+  assert.equal(res.body.hours[11], 0);
+  assert.equal(res.body.hoursFrom, "2026-09-15");
+  assert.equal(res.body.audience.visits, 3);
+  assert.equal(res.body.audience.qr, 1);
+});
+
+const eventUser = { _id: new mongoose.Types.ObjectId() };
+const mockEventUser = (t, found = eventUser) => t.mock.method(User, "findOne", query => {
+  assert.equal(query.active, true);
+  return { select: async () => found };
+});
+
+test("eventos del embudo: suma el campo del día y siempre responde 204", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now });
+  mockEventUser(t);
+  const update = t.mock.method(PageView, "findOneAndUpdate", async () => ({}));
+  t.mock.method(Menu, "find", () => assert.fail("sin productos no consulta menús"));
+  for (const [type, field] of [["engaged", "engaged"], ["cart", "carts"], ["order", "orders"]]) {
+    const res = response();
+    await trackMenuEvent({ params: { slug: "Local" }, body: { type } }, res);
+    assert.equal(res.statusCode, 204);
+    const [filter, inc, options] = update.mock.calls.at(-1).arguments;
+    assert.deepEqual(filter, { userID: eventUser._id, date: "2026-09-16" });
+    assert.deepEqual(inc, { $inc: { [field]: 1 } });
+    assert.deepEqual(options, { upsert: true });
+  }
+  assert.equal(update.mock.callCount(), 3);
+});
+
+test("eventos del embudo: tipos desconocidos, sin body o de un local inexistente no escriben", async (t) => {
+  const update = t.mock.method(PageView, "findOneAndUpdate", () => assert.fail("no debe escribir"));
+  mockEventUser(t, null);
+  for (const body of [undefined, {}, { type: "toString" }, { type: "__proto__" }, { type: ["order"] }, { type: "order" }]) {
+    const res = response();
+    await trackMenuEvent({ params: { slug: "local" }, body }, res);
+    assert.equal(res.statusCode, 204);
+  }
+  assert.equal(update.mock.callCount(), 0);
+});
+
+test("pedido: suma solo los productos del local, sin repetir, e ignora ids inválidos", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now });
+  mockEventUser(t);
+  t.mock.method(PageView, "findOneAndUpdate", async () => ({}));
+  const menuId = new mongoose.Types.ObjectId();
+  const mine = new mongoose.Types.ObjectId();
+  const foreign = new mongoose.Types.ObjectId();
+  t.mock.method(Menu, "find", query => {
+    assert.equal(query.userID, eventUser._id);
+    return { select: async () => [{ _id: menuId }] };
+  });
+  t.mock.method(Item, "find", query => {
+    assert.deepEqual(query._id.$in, [mine.toString(), foreign.toString()]);
+    assert.deepEqual(query.menuID.$in, [menuId]);
+    return { select: async () => [{ _id: mine }] };
+  });
+  const bulk = t.mock.method(ItemView, "bulkWrite", async () => ({}));
+  const res = response();
+  await trackMenuEvent({ params: { slug: "local" }, body: {
+    type: "order",
+    items: [mine.toString(), mine.toString(), foreign.toString(), "aaaaaaaaaaaa", { $gt: "" }, 7],
+  } }, res);
+  assert.equal(res.statusCode, 204);
+  const [ops, options] = bulk.mock.calls[0].arguments;
+  assert.deepEqual(ops, [{ updateOne: {
+    filter: { userID: eventUser._id, itemID: mine, date: "2026-09-16" },
+    update: { $inc: { orders: 1 } },
+    upsert: true,
+  } }]);
+  assert.deepEqual(options, { ordered: false });
+});
+
+test("pedido: un error de base no se propaga a la carta", async (t) => {
+  mockEventUser(t);
+  t.mock.method(PageView, "findOneAndUpdate", async () => { throw new Error("caído"); });
+  const res = response();
+  await trackMenuEvent({ params: { slug: "local" }, body: { type: "order", items: [] } }, res);
+  assert.equal(res.statusCode, 204);
 });
 
 test("períodos inválidos se rechazan sin consultar datos", async (t) => {
