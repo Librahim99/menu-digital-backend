@@ -86,8 +86,8 @@ test("editar contacto conserva datos vigentes y descarta campos de clientes anti
 
 test("las cuentas nuevas no incorporan campos de reseñas desde un payload antiguo", () => {
   const user = new User({ contactInfo: { ...activeContact, ...retiredContact } });
-  // orderMessage y whatsappNumbers aparecen por el default del schema, no por el payload.
-  assert.deepEqual(user.toObject().contactInfo, { ...activeContact, orderMessage: "", whatsappNumbers: [] });
+  // orderMessage, takeAwayMessage y whatsappNumbers aparecen por el default del schema, no por el payload.
+  assert.deepEqual(user.toObject().contactInfo, { ...activeContact, orderMessage: "", takeAwayMessage: "", whatsappNumbers: [] });
 });
 
 // ──────────────────────────────────────────────

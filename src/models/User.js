@@ -129,6 +129,15 @@ const UserSchema = new mongoose.Schema(
       default: false,
     },
 
+    // Retiro en el local. Junto con hasDelivery define qué modalidades ofrece
+    // el pedido por WhatsApp: con las dos, la carta le pregunta al cliente
+    // cuál quiere antes de abrir el chat. Default false: las cuentas previas
+    // siguen tomando pedidos solo con delivery, como hasta ahora.
+    hasTakeAway: {
+      type: Boolean,
+      default: false,
+    },
+
     template: {
       type: Number,
       default: 1, // Template visual elegido para su landing/menú
@@ -197,12 +206,21 @@ const UserSchema = new mongoose.Schema(
       // Texto libre que la carta suma al final del mensaje de pedido por
       // WhatsApp, debajo del total (o de los productos, si la carta oculta
       // los precios). Vacío = el pedido sale igual que antes.
+      // orderMessage va en los pedidos con delivery (y en los que salen sin
+      // modalidad): existía antes que el take away y lo cargado ahí
+      // (dirección, entre calles) es para envíos. takeAwayMessage va en los
+      // pedidos para retirar.
       // El tipo, el trim y el largo se validan en editUser; el maxlength es
       // la red de contención, mismo criterio que el password.
       orderMessage: {
         type: String,
         default: "",
         maxlength: [500, "El mensaje de pedido no puede superar los 500 caracteres."],
+      },
+      takeAwayMessage: {
+        type: String,
+        default: "",
+        maxlength: [500, "El mensaje de pedido take away no puede superar los 500 caracteres."],
       },
     },
 

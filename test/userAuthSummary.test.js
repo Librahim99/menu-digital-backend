@@ -28,13 +28,14 @@ function userFindByIdQuery(user, calls) {
   };
 }
 
-test("getAuthUserSummary devuelve solo los 7 campos livianos del dashboard, sin password ni el resto del user", async (t) => {
+test("getAuthUserSummary devuelve solo los 8 campos livianos del dashboard, sin password ni el resto del user", async (t) => {
   t.mock.method(Plan, "findOne", async ({ name }) => new Plan(INITIAL_PLANS.find(plan => plan.name === name)));
 
   const user = {
     _id: "64f000000000000000000123",
     slug: "cafe-de-prueba",
     hasDelivery: true,
+    hasTakeAway: true,
     template: 1,
     subscription: "pro",
     subscriptionExpiresAt: null,
@@ -56,6 +57,7 @@ test("getAuthUserSummary devuelve solo los 7 campos livianos del dashboard, sin 
   assert.deepEqual(res.body, {
     slug: "cafe-de-prueba",
     hasDelivery: true,
+    hasTakeAway: true,
     template: 1,
     itemCount: 4,
     categoryCount: 1,

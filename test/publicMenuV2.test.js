@@ -51,6 +51,7 @@ const owner = (fields = {}) => new User({
   subscription: "pro",
   subscriptionExpiresAt: new Date("2099-01-01T00:00:00Z"),
   hasDelivery: true,
+  hasTakeAway: true,
   template: 3,
   menuStyle: "bistro",
   contactInfo: {
@@ -250,6 +251,7 @@ test("v2: el bloque user es una whitelist y la carta trae solo lo que se dibuja"
       pictures: ["https://res.cloudinary.com/demo/image/upload/1.jpg"],
     },
     hasDelivery: true,
+    hasTakeAway: true,
     template: 3,
     menuStyle: "bistro",
     features: { sin_publicidad: true, landing_page: true, pedido_whatsapp: true },
@@ -257,7 +259,7 @@ test("v2: el bloque user es una whitelist y la carta trae solo lo que se dibuja"
   });
   assert.deepEqual(
     Object.keys(res.body.user).sort(),
-    ["contactInfo", "features", "hasDelivery", "media", "menuDisplay", "menuStyle", "template"],
+    ["contactInfo", "features", "hasDelivery", "hasTakeAway", "media", "menuDisplay", "menuStyle", "template"],
   );
 });
 
@@ -378,7 +380,7 @@ test("v2: user sin lean y con proyección mínima; menús e items lean, con proy
   const userFields = userCall.select.split(/\s+/);
   for (const field of [
     "contactInfo.businessName", "contactInfo.number", "contactInfo.address", "contactInfo.orderMessage",
-    "media", "hasDelivery", "template", "menuStyle", "subscription", "subscriptionExpiresAt", "panelSettings.menuDisplay",
+    "media", "hasDelivery", "hasTakeAway", "template", "menuStyle", "subscription", "subscriptionExpiresAt", "panelSettings.menuDisplay",
   ]) {
     assert.ok(userFields.includes(field), `el user debe pedir ${field}`);
   }
@@ -681,6 +683,7 @@ test("v2: un local sin nada guardado en panelSettings ni en el resto de los camp
     contactInfo: { businessName: "Mínimo" },
     media: {},
     hasDelivery: false,
+    hasTakeAway: false,
     template: 1,
     menuStyle: "classic",
     features: { sin_publicidad: false, landing_page: true, pedido_whatsapp: true },

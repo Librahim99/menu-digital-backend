@@ -208,11 +208,11 @@ const buildPublicMenu = ({ menus, items, features = {}, hidePrices = false, now 
 // Datos del local (bloque `user` de la respuesta)
 // ──────────────────────────────────────────────
 
-const PUBLIC_CONTACT_FIELDS = ["businessName", "number", "address", "orderMessage"];
+const PUBLIC_CONTACT_FIELDS = ["businessName", "number", "address", "orderMessage", "takeAwayMessage"];
 
 // Whitelist de contactInfo para la carta: nombre, número y números de
-// WhatsApp por sucursal (pedidos por WhatsApp), dirección y mensaje de
-// pedido. Sin mail, redes, ubicación ni reservationMessage: la carta no los
+// WhatsApp por sucursal (pedidos por WhatsApp), dirección y mensajes de
+// pedido (delivery y take away). Sin mail, redes, ubicación ni reservationMessage: la carta no los
 // muestra. Las claves ausentes o vacías se omiten (number puede ser null,
 // whatsappNumbers una lista vacía); el objeto siempre existe porque el front
 // lee user.contactInfo.businessName sin optional chaining.
