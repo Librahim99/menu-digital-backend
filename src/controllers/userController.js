@@ -94,14 +94,14 @@ const trackItemView = (userID, itemID) => {
 // todavía conserve campos que ya no forman parte del producto.
 const getContactInfo = (contactInfo) => {
   const source = contactInfo?.toObject?.() ?? contactInfo ?? {};
-  const fields = ["mail", "number", "whatsappNumbers", "location", "address", "social", "businessName", "reservationMessage", "orderMessage"];
+  const fields = ["mail", "number", "whatsappNumbers", "location", "address", "social", "businessName", "reservationMessage", "orderMessage", "takeAwayMessage"];
   return Object.fromEntries(fields
     .filter(field => Object.prototype.hasOwnProperty.call(source, field))
     .map(field => [field, source[field]]));
 };
 
-// Tope de contactInfo.orderMessage (ver editUser); el modelo repite el mismo
-// número como red de contención.
+// Tope de contactInfo.orderMessage y takeAwayMessage (ver editUser); el
+// modelo repite el mismo número como red de contención.
 const ORDER_MESSAGE_MAX_LENGTH = 500;
 
 // Topes de contactInfo.whatsappNumbers; el modelo repite los mismos.
@@ -645,7 +645,7 @@ const getAuthUser = async (req, res) => {
 
 // ──────────────────────────────────────────────
 // @desc    Versión liviana de GET /me para el dashboard, que solo necesita
-//          7 campos y no el usuario completo (ver getAuthUser para el
+//          8 campos y no el usuario completo (ver getAuthUser para el
 //          editor de perfil, que sí necesita el objeto entero).
 // @route   GET /api/users/me/summary
 // @access  Private
@@ -653,7 +653,7 @@ const getAuthUser = async (req, res) => {
 const getAuthUserSummary = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select(
-      "slug hasDelivery template subscription subscriptionExpiresAt contactInfo.businessName media.backgroundPicture"
+      "slug hasDelivery hasTakeAway template subscription subscriptionExpiresAt contactInfo.businessName media.backgroundPicture"
     );
     if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
 
@@ -674,6 +674,7 @@ const getAuthUserSummary = async (req, res) => {
     res.json({
       slug: user.slug,
       hasDelivery: user.hasDelivery,
+      hasTakeAway: user.hasTakeAway === true,
       template: getTemplateForFeatures(user.template, plan.features),
       itemCount,
       categoryCount: categorias.length,
@@ -696,8 +697,8 @@ const getAuthUserSummary = async (req, res) => {
 // subscriptionExpiresAt solo sirven para resolver el plan vigente.
 // ──────────────────────────────────────────────
 const PUBLIC_MENU_USER_SELECT = [
-  "contactInfo.businessName", "contactInfo.number", "contactInfo.whatsappNumbers", "contactInfo.address", "contactInfo.orderMessage",
-  "media", "hasDelivery", "template", "menuStyle",
+  "contactInfo.businessName", "contactInfo.number", "contactInfo.whatsappNumbers", "contactInfo.address", "contactInfo.orderMessage", "contactInfo.takeAwayMessage",
+  "media", "hasDelivery", "hasTakeAway", "template", "menuStyle",
   "subscription", "subscriptionExpiresAt", "panelSettings.menuDisplay",
 ].join(" ");
 const PUBLIC_MENU_MENU_SELECT = "title section sectionID";
@@ -771,6 +772,7 @@ const fetchPublicMenuV2 = async (req, res) => {
         contactInfo: toPublicContactInfo(getContactInfo(user.contactInfo)),
         media: toPublicMedia(user.media),
         hasDelivery: user.hasDelivery === true,
+        hasTakeAway: user.hasTakeAway === true,
         template: getTemplateForFeatures(user.template, features),
         menuStyle: getMenuStyleForFeatures(user.menuStyle, features),
         features: toPublicFeatures(features),
@@ -1270,6 +1272,7 @@ const fetchUser = async (req, res) => {
       contactInfo: hideContactInfo(getContactInfo(user.contactInfo), landingVisibility),
       media: user.media,
       hasDelivery: user.hasDelivery,
+      hasTakeAway: user.hasTakeAway === true,
       template: getTemplateForFeatures(user.template, plan.features),
       schedule: landingVisibility.schedule ? user.schedule : undefined,
       menuStyle: getMenuStyleForFeatures(user.menuStyle, plan.features),
@@ -1295,7 +1298,7 @@ const editUser = async (req, res) => {
     // PATCH /api/users/template (useTemplate), que valida el nivel requerido.
     // Si "template" estuviera acá, cualquiera
     // podría mandarlo por este endpoint y saltarse esa validación.
-    const allowedFields = ["contactInfo", "hasDelivery", "media", "schedule"];
+    const allowedFields = ["contactInfo", "hasDelivery", "hasTakeAway", "media", "schedule"];
 
     const updates = {};
     allowedFields.forEach((field) => {
@@ -1330,21 +1333,22 @@ const editUser = async (req, res) => {
         });
       }
 
-      // El texto extra del pedido por WhatsApp termina dentro de un link
-      // wa.me que arma la carta: se exige string y se acota el largo para
-      // que un texto enorme no rompa ese link. Solo se valida si llegó en
-      // esta edición; si no, queda el que ya estaba guardado.
-      if (Object.prototype.hasOwnProperty.call(incomingContactInfo, "orderMessage")) {
-        if (typeof incomingContactInfo.orderMessage !== "string") {
-          return res.status(400).json({ message: "El mensaje de pedido no es válido." });
+      // Los textos extra del pedido por WhatsApp (delivery y take away)
+      // terminan dentro de un link wa.me que arma la carta: se exige string
+      // y se acota el largo para que un texto enorme no rompa ese link. Solo
+      // se valida el que llegó en esta edición; si no, queda el guardado.
+      for (const [field, name] of [["orderMessage", "El mensaje de pedido"], ["takeAwayMessage", "El mensaje de pedido take away"]]) {
+        if (!Object.prototype.hasOwnProperty.call(incomingContactInfo, field)) continue;
+        if (typeof incomingContactInfo[field] !== "string") {
+          return res.status(400).json({ message: `${name} no es válido.` });
         }
-        const orderMessage = incomingContactInfo.orderMessage.trim();
-        if (orderMessage.length > ORDER_MESSAGE_MAX_LENGTH) {
+        const text = incomingContactInfo[field].trim();
+        if (text.length > ORDER_MESSAGE_MAX_LENGTH) {
           return res.status(400).json({
-            message: `El mensaje de pedido no puede superar los ${ORDER_MESSAGE_MAX_LENGTH} caracteres.`,
+            message: `${name} no puede superar los ${ORDER_MESSAGE_MAX_LENGTH} caracteres.`,
           });
         }
-        updates.contactInfo.orderMessage = orderMessage;
+        updates.contactInfo[field] = text;
       }
 
       // Teléfono y WhatsApps se guardan como código de área + número (ver
