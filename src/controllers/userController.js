@@ -17,6 +17,9 @@ const {
 } = require("../config/menuStyles");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { buildStatsPeriod } = require("../utils/statsPeriod");
+const {
+  parseVisit, buildVisitUpdate, summarizeWindow, MENU_EVENTS, ORDER_ITEMS_MAX,
+} = require("../utils/menuAnalytics");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { buildMenuHTML, buildFooterTemplate } = require("../utils/menuPdfTemplate");
 const { getBrowser } = require("../utils/pdfBrowser");
@@ -62,17 +65,21 @@ const sendEmailVerificationCode = async (user) => {
 };
 
 // ──────────────────────────────────────────────
-// Helper: suma 1 a la visita de hoy del local (upsert, no bloqueante).
-// Se llama desde la carta pública — nunca debe romper ni frenar esa
-// respuesta si falla, por eso no se hace "await" en el caller.
+// Helper: suma la visita de hoy del local (upsert, no bloqueante) si la
+// carta dice que es una visita nueva (ver utils/menuAnalytics: el dueño,
+// la vista previa y las recargas no cuentan). Se llama desde la carta
+// pública — nunca debe romper ni frenar esa respuesta si falla, por eso no
+// se hace "await" en el caller.
 // El "hoy" se calcula en horario de Buenos Aires (ver utils/dates): así el
 // contador diario corta a la medianoche local y no a las 21:00 (medianoche UTC).
 // ──────────────────────────────────────────────
-const trackView = (userID) => {
-  const today = buenosAiresDateStr(); // "YYYY-MM-DD" en horario argentino
+const trackView = (userID, query) => {
+  const visit = parseVisit(query);
+  if (!visit.count) return;
+  const now = new Date();
   PageView.findOneAndUpdate(
-    { userID, date: today },
-    { $inc: { count: 1 } },
+    { userID, date: buenosAiresDateStr(now) }, // "YYYY-MM-DD" en horario argentino
+    buildVisitUpdate(visit, now),
     { upsert: true }
   ).catch(() => {});
 };
@@ -748,7 +755,7 @@ const fetchPublicMenuV2 = async (req, res) => {
 
     // Igual que en la carta legacy: se cuenta la visita una vez resuelto el
     // plan, y sin esperarla (fire-and-forget).
-    trackView(user._id);
+    trackView(user._id, req.query);
 
     // Solo se piden los items de las categorías que la carta puede mostrar
     // (sueltas o dentro de una sección visible), no los de huérfanas.
@@ -810,7 +817,7 @@ const fetchUserWithMenu = async (req, res) => {
     // el QR de la mesa), así que es el lugar correcto para contar la
     // visita — no se cuenta la landing pública (fetchUser) por separado,
     // para no duplicar el conteo de una misma sesión de un cliente.
-    trackView(user._id);
+    trackView(user._id, req.query);
 
     // Traemos todos los menus del user, en el orden de la carta (ver
     // utils/menuOrder.js): el armado de abajo conserva el orden de los arrays.
@@ -1097,6 +1104,9 @@ const fetchStats = async (req, res) => {
         totalViews: days.reduce((sum, day) => sum + day.count, 0),
         previousTotalViews: previousDays.reduce((sum, day) => sum + day.count, 0),
         todayViews: byDate.get(period.todayDate) || 0,
+        // Horarios pico y embudo del período (campos nuevos: un front
+        // anterior los ignora). Ver utils/menuAnalytics.summarizeWindow.
+        ...summarizeWindow(rows, dates),
       });
     }
     // Compatibilidad para clientes anteriores que no envían days.
@@ -1167,6 +1177,54 @@ const trackItemViewEndpoint = async (req, res) => {
   }
 };
 
+const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
+
+// ──────────────────────────────────────────────
+// @desc    Embudo de la carta pública (ver utils/menuAnalytics): el cliente
+//          abrió un producto ("engaged"), armó un pedido ("cart") o lo
+//          mandó a WhatsApp ("order"). La carta manda cada uno una vez por
+//          sesión y el pedido una vez por pedido distinto. Con "order" llegan
+//          los productos del pedido: cuentan solo los que son de este local,
+//          igual que en trackItemViewEndpoint. Siempre responde 204: es
+//          analítica y la carta no espera la respuesta.
+// @route   POST /api/users/:slug/menu/events
+// @access  Public
+// ──────────────────────────────────────────────
+const trackMenuEvent = async (req, res) => {
+  try {
+    const { type, items } = req.body ?? {};
+    const field = typeof type === "string" && Object.prototype.hasOwnProperty.call(MENU_EVENTS, type)
+      ? MENU_EVENTS[type] : null;
+    if (!field) return res.sendStatus(204);
+
+    const user = await User.findOne({ slug: generateSlug(req.params.slug), active: true }).select("_id");
+    if (!user) return res.sendStatus(204);
+
+    const date = buenosAiresDateStr();
+    await PageView.findOneAndUpdate({ userID: user._id, date }, { $inc: { [field]: 1 } }, { upsert: true });
+
+    const ids = type === "order" && Array.isArray(items)
+      ? [...new Set(items.filter(id => typeof id === "string" && OBJECT_ID_PATTERN.test(id)))].slice(0, ORDER_ITEMS_MAX)
+      : [];
+    if (ids.length > 0) {
+      const menus = await Menu.find({ userID: user._id }).select("_id");
+      const owned = await Item.find({ _id: { $in: ids }, menuID: { $in: menus.map(menu => menu._id) } }).select("_id");
+      if (owned.length > 0) {
+        await ItemView.bulkWrite(owned.map(item => ({
+          updateOne: {
+            filter: { userID: user._id, itemID: item._id, date },
+            update: { $inc: { orders: 1 } },
+            upsert: true,
+          },
+        })), { ordered: false });
+      }
+    }
+    res.sendStatus(204);
+  } catch {
+    res.sendStatus(204);
+  }
+};
+
 // ──────────────────────────────────────────────
 // @desc    Top de productos más vistos en los últimos 30 días. Mismo gate
 //          de plan que fetchStats. Agrega ItemView por itemID y después
@@ -1185,28 +1243,48 @@ const fetchItemStats = async (req, res) => {
     if (requestedDays !== undefined) {
       const periodData = buildStatsPeriod(Number(requestedDays), req.user.createdAt);
       const { dates: _dates, previousDates: _previousDates, ...period } = periodData;
-      const rows = await ItemView.aggregate([
+      // Los dos rankings (más vistos y más pedidos) agrupan igual; cambia
+      // qué filtran y por qué ordenan. `orders` solo cuenta el período
+      // actual: los pedidos se miden desde el protocolo de sesiones.
+      const current = { $gte: ["$date", period.periodStart] };
+      const grouped = [
         { $match: { userID: req.user._id, date: { $gte: period.previousStart, $lte: period.periodEnd } } },
         { $group: {
           _id: "$itemID",
-          totalViews: { $sum: { $cond: [{ $gte: ["$date", period.periodStart] }, "$count", 0] } },
+          totalViews: { $sum: { $cond: [current, "$count", 0] } },
           previousViews: { $sum: { $cond: [{ $lt: ["$date", period.periodStart] }, "$count", 0] } },
+          orders: { $sum: { $cond: [current, { $ifNull: ["$orders", 0] }, 0] } },
         } },
-        { $match: { totalViews: { $gt: 0 } } },
-        { $sort: { totalViews: -1, _id: 1 } },
-        { $limit: 10 },
+      ];
+      const [rows, orderedRows] = await Promise.all([
+        ItemView.aggregate([
+          ...grouped,
+          { $match: { totalViews: { $gt: 0 } } },
+          { $sort: { totalViews: -1, _id: 1 } },
+          { $limit: 10 },
+        ]),
+        ItemView.aggregate([
+          ...grouped,
+          { $match: { orders: { $gt: 0 } } },
+          { $sort: { orders: -1, totalViews: -1, _id: 1 } },
+          { $limit: 10 },
+        ]),
       ]);
-      const items = await Item.find({ _id: { $in: rows.map(row => row._id) } }).select("title image");
+      const ids = [...new Map([...rows, ...orderedRows].map(row => [row._id.toString(), row._id])).values()];
+      const items = await Item.find({ _id: { $in: ids } }).select("title image");
       const byId = new Map(items.map(item => [item._id.toString(), item]));
+      const toStat = row => ({
+        itemID: row._id,
+        title: byId.get(row._id.toString())?.title || "(producto eliminado)",
+        image: byId.get(row._id.toString())?.image || "",
+        totalViews: row.totalViews,
+        previousViews: row.previousViews,
+        orders: row.orders ?? 0,
+      });
       return res.json({
         ...period,
-        topItems: rows.map(row => ({
-          itemID: row._id,
-          title: byId.get(row._id.toString())?.title || "(producto eliminado)",
-          image: byId.get(row._id.toString())?.image || "",
-          totalViews: row.totalViews,
-          previousViews: row.previousViews,
-        })),
+        topItems: rows.map(toStat),
+        topOrdered: orderedRows.map(toStat),
       });
     }
     // Compatibilidad para clientes anteriores que no envían days.
@@ -1926,6 +2004,7 @@ module.exports = {
   fetchOwnMenu,
   fetchStats,
   trackItemViewEndpoint,
+  trackMenuEvent,
   fetchItemStats,
   fetchUser,
   editUser,

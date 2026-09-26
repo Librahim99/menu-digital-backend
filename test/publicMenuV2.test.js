@@ -167,9 +167,9 @@ const setup = (t, { user = owner(), menus, items } = {}) => {
   };
 };
 
-const getMenuV2 = async (slug = SLUG) => {
+const getMenuV2 = async (slug = SLUG, query = {}) => {
   const res = response();
-  await fetchUserWithMenu({ params: { slug }, query: { v: "2" } }, res);
+  await fetchUserWithMenu({ params: { slug }, query: { v: "2", ...query } }, res);
   return res;
 };
 
@@ -496,7 +496,7 @@ test("v2: el plan y los menús se piden en paralelo, y los items recién cuando 
   assert.ok(order.indexOf("items:start") > order.indexOf("menu:start"));
 });
 
-test("v2: cuenta una visita del local por petición, con upsert y sin esperarla", async (t) => {
+test("v2: sin track (bundle anterior) cuenta cada carga, con su hora, upsert y sin esperarla", async (t) => {
   const { track } = setup(t);
 
   const res = await getMenuV2();
@@ -505,9 +505,35 @@ test("v2: cuenta una visita del local por petición, con upsert y sin esperarla"
   assert.equal(track.mock.callCount(), 1);
   const [filter, update, options] = track.mock.calls[0].arguments;
   assert.equal(String(filter.userID), String(USER_ID));
-  assert.match(filter.date, /^\d{4}-\d{2}-\d{2}$/);
-  assert.deepEqual(update, { $inc: { count: 1 } });
+  assert.equal(filter.date, "2026-08-17");
+  assert.deepEqual(update, { $inc: { count: 1, "hours.19": 1 } });
   assert.deepEqual(options, { upsert: true });
+});
+
+test("v2: track=0 (dueño, vista previa o recarga) no cuenta la visita", async (t) => {
+  for (const value of ["0", "x", ["1", "1"]]) {
+    const { track } = setup(t);
+    const res = await getMenuV2(SLUG, { track: value, nv: "1", src: "qr" });
+    assert.equal(res.statusCode, 200);
+    assert.equal(track.mock.callCount(), 0);
+    t.mock.reset();
+  }
+});
+
+test("v2: track=1 suma la visita medida con visitante, recurrente y origen QR", async (t) => {
+  const { track } = setup(t);
+  await getMenuV2(SLUG, { track: "1", nv: "1", ret: "1", src: "qr" });
+  assert.deepEqual(track.mock.calls[0].arguments[1], {
+    $inc: { count: 1, "hours.19": 1, tracked: 1, visitors: 1, returning: 1, qr: 1 },
+  });
+
+  t.mock.reset();
+  const again = setup(t);
+  // ret sin nv no suma: "vuelve" se mide sobre los visitantes del día.
+  await getMenuV2(SLUG, { track: "1", ret: "1", src: "link" });
+  assert.deepEqual(again.track.mock.calls[0].arguments[1], {
+    $inc: { count: 1, "hours.19": 1, tracked: 1 },
+  });
 });
 
 test("v2: un fallo del contador de visitas no rompe la carta", async (t) => {

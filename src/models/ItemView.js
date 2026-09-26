@@ -29,6 +29,11 @@ const ItemViewSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+
+  // Pedidos enviados a WhatsApp que incluían el producto (uno por pedido,
+  // sin importar la cantidad de unidades). Un pedido puede crear la fila
+  // del día con count 0: se pidió sin abrir el detalle.
+  orders: Number,
 });
 
 ItemViewSchema.index({ userID: 1, itemID: 1, date: 1 }, { unique: true });
