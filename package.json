@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
-    "test": "node --test"
+    "test": "node --test",
+    "orders:migrate": "node src/orders/db/migrate.js"
   },
   "dependencies": {
     "@sparticuz/chromium": "^149.0.0",
@@ -24,6 +25,7 @@
     "mongoose": "^7.3.1",
     "multer": "^1.4.5-lts.1",
     "nodemailer": "^10.0.0",
+    "pg": "^8.23.0",
     "puppeteer": "^25.5.0",
     "puppeteer-core": "^25.10.0"
   },

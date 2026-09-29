@@ -71,6 +71,14 @@ const validateEnvironment = (env = process.env) => {
     errors.push("MONGODB_URI debe comenzar con mongodb:// o mongodb+srv://");
   }
 
+  // DATABASE_URL (Neon) es opcional: solo validamos el formato si está presente.
+  if (
+    isNonEmptyString(env.DATABASE_URL)
+    && !/^postgres(?:ql)?:\/\//.test(env.DATABASE_URL)
+  ) {
+    errors.push("DATABASE_URL debe comenzar con postgres:// o postgresql://");
+  }
+
   if (isNonEmptyString(env.JWT_SECRET) && env.JWT_SECRET.length < 32) {
     errors.push("JWT_SECRET debe tener al menos 32 caracteres");
   }

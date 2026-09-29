@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const mongoSanitize = require("express-mongo-sanitize");
+const connectPostgres = require("./config/postgres").connectPostgres;
 
 require("dotenv").config();
 
@@ -252,6 +253,22 @@ app.use(
 
 
 // ──────────────────────────────────────────────
+// Gestión de pedidos (Postgres / Neon)
+// ──────────────────────────────────────────────
+//
+// Módulo aparte en src/orders/: su propia base SQL,
+// sin tocar los modelos de MongoDB (solo los lee).
+// Sin DATABASE_URL estas rutas responden 503 y el
+// resto de la API funciona igual.
+//
+
+app.use(
+  "/api/orders",
+  require("./orders/routes")
+);
+
+
+// ──────────────────────────────────────────────
 // Sitemap
 // ──────────────────────────────────────────────
 
@@ -381,7 +398,7 @@ const getServerUrl = () => {
   return `http://localhost:${PORT}`;
 };
 
-const printStartup = () => {
+const printStartup = ({ postgresReady }) => {
   const environment =
     process.env.NODE_ENV || "development";
 
@@ -392,6 +409,7 @@ const printStartup = () => {
   🚀 Server       ${getServerUrl()}
   🌐 Environment  ${environment}
   🟢 MongoDB      connected
+  🐘 Postgres     ${postgresReady ? "connected" : "disabled"}
   📦 Plans        initialized
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ✓ API ready
@@ -408,6 +426,11 @@ const start = async () => {
   try {
     // Conectar MongoDB
     await connectDB();
+
+    // Conectar Postgres (Neon) — opcional, en prueba.
+    // Si falta DATABASE_URL o la conexión falla, la API
+    // sigue funcionando solo con MongoDB.
+    const postgresReady = await connectPostgres();
 
     // Inicializar catálogo de planes
     await initializePlans();
@@ -426,7 +449,7 @@ const start = async () => {
 
     // Iniciar HTTP server
     app.listen(PORT, () => {
-      printStartup();
+      printStartup({ postgresReady });
     });
   } catch (error) {
     console.error(
