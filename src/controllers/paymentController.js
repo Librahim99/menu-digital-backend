@@ -14,6 +14,7 @@ const {
 } = require("../config/plans");
 const { getExpectedPaymentLiveMode } = require("../config/environment");
 const { logCrmEvent } = require("../utils/crmEvents");
+const { notifyAdmins } = require("../services/adminPushService");
 const { addCalendarMonths } = require("../utils/dates");
 const { handleError } = require("../utils/handleError");
 const { isValidEmail } = require("../utils/validators");
@@ -190,6 +191,34 @@ const markPaymentNotApplied = ({
   },
   withSession({ new: true, runValidators: true }, session)
 );
+
+const OPERATION_LABELS = {
+  registration: "Alta nueva",
+  upgrade: "Cambio de plan",
+  renewal: "Renovación",
+};
+
+// Push a los admins cuando un pago de MP queda acreditado. Se llama solo con
+// la transacción que devolvió markPaymentApplied (o applyExistingUserEntitlement
+// con appliedNow), así que cada pago avisa una única vez aunque MP reenvíe
+// el webhook. Sin `await` desde processPaymentEvent a propósito, por el mismo
+// motivo que el email de verificación: el 200 a MercadoPago no puede quedar
+// atado a la latencia de Firebase. notifyAdmins atrapa sus propios errores.
+// El username llega desde quien la llama para no sumar otra lectura de User.
+const notifyAdminsPaymentApproved = (transaction, username) => {
+  const amount = Number(transaction.amount);
+  const amountText = Number.isFinite(amount)
+    ? `$${amount.toLocaleString("es-AR")}${transaction.currency && transaction.currency !== "ARS" ? ` ${transaction.currency}` : ""}`
+    : "monto desconocido";
+  const plan = transaction.appliedPlanId || transaction.planId || "plan";
+  const months = transaction.appliedMonths || transaction.months;
+
+  return notifyAdmins({
+    title: `💰 Pago aprobado — ${OPERATION_LABELS[transaction.operation] || "Mercado Pago"}`,
+    body: `${username || "Usuario"} · ${plan}${months ? ` × ${months} mes(es)` : ""} · ${amountText}`,
+    url: "/admin/payments",
+  });
+};
 
 const amountsMatch = (actual, expected) => (
   Number.isFinite(Number(actual))
@@ -399,6 +428,7 @@ const applyExistingUserEntitlement = async ({
     isRenewal: targetRank === currentRank,
     subscriptionExpiresAt: durableExpiry,
     transaction: appliedTransaction,
+    username: updatedUser.username,
   };
 });
 
@@ -916,6 +946,7 @@ const processPaymentEvent = async (paymentId) => {
           `Alta por pago MP — plan ${mappedPlan} × ${completedMonths} mes(es), vigente hasta ${completedExpiry.toISOString()}`
         );
         await recordSaleFromTransaction(newlyApplied);
+        notifyAdminsPaymentApproved(newlyApplied, pending.username);
       }
       return;
     }
@@ -1054,6 +1085,7 @@ const processPaymentEvent = async (paymentId) => {
           `Alta por pago MP — plan ${mappedPlan} × ${recoveredMonths} mes(es), vigente hasta ${recoveredExpiry.toISOString()}`
         );
         await recordSaleFromTransaction(newlyApplied);
+        notifyAdminsPaymentApproved(newlyApplied, pending.username);
       }
       return;
     }
@@ -1147,6 +1179,7 @@ const processPaymentEvent = async (paymentId) => {
         `Alta por pago MP — plan ${mappedPlan} × ${entitlementMonths} mes(es)${pending.sellerID ? " · ref. vendedor" : ""}, vigente hasta ${entitlementExpiresAt.toISOString()}`
       );
       await recordSaleFromTransaction(newlyApplied);
+      notifyAdminsPaymentApproved(newlyApplied, user.username);
     }
 
     return;
@@ -1186,6 +1219,7 @@ const processPaymentEvent = async (paymentId) => {
       `Pago MP aprobado — ${entitlementResult.isRenewal ? `renovación ${mappedPlan}` : `plan ${entitlementResult.previousPlan} → ${mappedPlan}`} × ${metadataMonths} mes(es), vigente hasta ${entitlementResult.subscriptionExpiresAt.toISOString()}`
     );
     await recordSaleFromTransaction(entitlementResult.transaction);
+    notifyAdminsPaymentApproved(entitlementResult.transaction, entitlementResult.username);
   }
 };
 
