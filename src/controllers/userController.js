@@ -45,6 +45,7 @@ const {
 } = require("../utils/serviceActionCodes");
 const Seller = require("../models/Seller");
 const { nextLeadSeller } = require("../services/leadAssignmentService");
+const { notifyAdmins } = require("../services/adminPushService");
 
 // Manda el código de verificación de email: al registrarse (newUser) y cada
 // vez que cambia el mail real de la cuenta (editUser). Best-effort a
@@ -320,6 +321,13 @@ if (acceptedTerms !== true) {
 
     await sendEmailVerificationCode(user);
 
+    // Sin await: el alta no espera a Firebase (notifyAdmins atrapa sus errores).
+    notifyAdmins({
+      title: "🆕 Nuevo registro",
+      body: `${user.username} se registró con el plan gratuito.`,
+      url: "/admin",
+    });
+
     res.status(201).json({
       _id: user._id,
       username: user.username,
@@ -425,6 +433,12 @@ const registerTrial = async (req, res) => {
     });
 
     await sendEmailVerificationCode(user);
+
+    notifyAdmins({
+      title: "🆕 Nuevo registro (prueba Pro)",
+      body: `${user.username} activó la prueba de 7 días con el código ${code}.`,
+      url: "/admin",
+    });
 
     res.status(201).json({
       _id: user._id,

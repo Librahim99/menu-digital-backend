@@ -162,6 +162,11 @@ app.use(
 );
 
 app.use(
+  "/api/admin/push",
+  require("./routes/adminPushRoutes")
+);
+
+app.use(
   "/api/admin/sellers",
   require("./routes/sellerRoutes")
 );
