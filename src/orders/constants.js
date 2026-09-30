@@ -33,6 +33,20 @@ const NOT_BILLED_STATUSES = ["cancelled", "returned"];
 // mesa); take away y delivery pueden llevar datos de quien retira / recibe.
 const SERVICE_TYPES = ["table", "counter", "takeaway", "delivery"];
 
+// Comandas: estados de la parte de un pedido que prepara un sector y los
+// cambios que puede hacer el sector (anular es cosa del pedido).
+const TICKET_STATUSES = ["new", "preparing", "done", "cancelled"];
+const TICKET_TRANSITIONS = {
+  new: ["preparing", "done"],
+  preparing: ["done", "new"],
+  done: ["preparing"],
+  cancelled: [],
+};
+
+// Cómo imprime un sector sus comandas (ver migración 003).
+const PRINT_MODES = ["none", "browser", "escpos"];
+const PAPER_WIDTHS = [58, 80];
+
 const LIMITS = {
   linesPerOrder: 40,
   quantityPerLine: 20,
@@ -55,6 +69,13 @@ const LIMITS = {
   cashierNameLength: 60,
   registerNameLength: 40,
   maxGuests: 200,
+  sectorNameLength: 40,
+  maxSectors: 12,
+  // El código de un sector se tipea (puede ser una PC): más vida que el QR.
+  sectorPairingTtlMs: 10 * 60_000,
+  // Comandas preparadas o anuladas que el sector sigue viendo (para consultar).
+  recentTicketsWindowMs: 2 * 60 * 60_000,
+  recentTicketsLimit: 20,
 };
 
 module.exports = {
@@ -64,5 +85,9 @@ module.exports = {
   STATUS_TIMESTAMPS,
   NOT_BILLED_STATUSES,
   SERVICE_TYPES,
+  TICKET_STATUSES,
+  TICKET_TRANSITIONS,
+  PRINT_MODES,
+  PAPER_WIDTHS,
   LIMITS,
 };

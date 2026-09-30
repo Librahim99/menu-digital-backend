@@ -3,6 +3,7 @@
 //
 //   /api/orders/public/:slug/*  carta pública (comensal en el local, sin sesión)
 //   /api/orders/waiter/*        tomador de pedidos (dispositivo del operador)
+//   /api/orders/station/*       pantalla de un sector (equipo vinculado con código)
 //   /api/orders/*               panel del dueño (JWT + plan PRO)
 //
 // Todo este árbol usa Postgres (Neon); si no está configurado responde 503
@@ -14,8 +15,9 @@ const rateLimit = require("express-rate-limit");
 const { protect } = require("../middleware/auth");
 const { authLimiter } = require("../middleware/rateLimiters");
 const {
-  requireOrdersDb, requireProPlan, loadSettings, protectWaiter,
+  requireOrdersDb, requireProPlan, loadSettings, protectWaiter, protectStation,
 } = require("./middleware");
+const sectors = require("./controllers/sectorController");
 const owner = require("./controllers/ownerController");
 const publicOrders = require("./controllers/publicController");
 const waiter = require("./controllers/waiterController");
@@ -49,6 +51,14 @@ router.get("/waiter/tables", protectWaiter, waiter.myTables);
 router.patch("/waiter/tables/:id", protectWaiter, waiter.updateTable);
 router.post("/waiter/tables/:id/close", protectWaiter, waiter.closeTable);
 router.get("/waiter/history", protectWaiter, waiter.myHistory);
+
+// ── Pantalla de un sector (equipo vinculado) ──
+router.post("/station/pair", authLimiter, sectors.pair);
+router.get("/station/me", protectStation, sectors.me);
+router.post("/station/logout", protectStation, sectors.logout);
+router.get("/station/tickets", protectStation, sectors.stationTickets);
+router.patch("/station/tickets/:id/status", protectStation, sectors.stationTicketStatus);
+router.post("/station/tickets/:id/printed", protectStation, sectors.stationTicketPrinted);
 
 // ── Panel del dueño ──────────────────────────
 const ownerOnly = [protect, requireProPlan, loadSettings];
@@ -96,5 +106,19 @@ router.post("/waiters/:id/pairing-code", ownerOnly, owner.issuePairingCode);
 router.get("/waiters/:id/sessions", ownerOnly, owner.listWaiterSessions);
 router.delete("/waiters/:id/sessions", ownerOnly, owner.revokeWaiterSessions);
 router.delete("/waiters/:id/sessions/:sessionId", ownerOnly, owner.revokeWaiterSession);
+
+// Sectores y comandas. /sectors/assignments antes de /sectors/:id.
+router.get("/sectors", ownerOnly, sectors.listSectors);
+router.post("/sectors", ownerOnly, sectors.createSector);
+router.put("/sectors/assignments", ownerOnly, sectors.setAssignment);
+router.put("/sectors/:id", ownerOnly, sectors.updateSector);
+router.delete("/sectors/:id", ownerOnly, sectors.deleteSector);
+router.post("/sectors/:id/pairing-code", ownerOnly, sectors.issuePairingCode);
+router.delete("/sectors/:id/sessions", ownerOnly, sectors.revokeSessions);
+router.delete("/sectors/:id/sessions/:sessionId", ownerOnly, sectors.revokeSession);
+// El dueño puede usar la pantalla de cualquier sector desde su sesión.
+router.get("/sectors/:id/tickets", ownerOnly, sectors.ownerTickets);
+router.patch("/sectors/:id/tickets/:ticketId/status", ownerOnly, sectors.ownerTicketStatus);
+router.post("/sectors/:id/tickets/:ticketId/printed", ownerOnly, sectors.ownerTicketPrinted);
 
 module.exports = router;

@@ -25,6 +25,11 @@ test("reserva la ruta del blog y resuelve colisiones del sufijo", async (t) => {
   assert.deepEqual(queries.map((query) => query.slug), ["blog-2", "blog-3"]);
 });
 
+test("reserva la ruta de la pantalla de comandas", async (t) => {
+  t.mock.method(User, "exists", async () => false);
+  assert.equal(await generateUniqueSlug("Comandas"), "comandas-2");
+});
+
 test("reintenta la creación si el índice detecta una carrera de slug", async (t) => {
   const existence = [false, true, false];
   t.mock.method(User, "exists", async () => existence.shift());
