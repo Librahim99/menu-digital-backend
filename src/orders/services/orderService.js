@@ -11,6 +11,7 @@ const { lockOrOpenCashSession } = require("./cashService");
 const { lockOrOpenTableSession } = require("./tableSessionService");
 const { priceOrderLines } = require("./menuCatalog");
 const { toOrderDTO, withItems } = require("./orderDTO");
+const { syncTicketsWithOrder } = require("./ticketService");
 
 // Huella del contenido: mismos productos, variantes, cantidades, aclaraciones
 // y mesa = mismo pedido.
@@ -121,17 +122,19 @@ const createOrder = async ({
 
       for (const line of priced.lines) {
         await client.query(
-          `INSERT INTO order_items (order_id, item_id, title, category_id, category_name, option_name, unit_price,
-             quantity, notes, position)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-          [order.id, line.itemId, line.title, line.categoryId, line.categoryName, line.option, line.unitPrice,
-            line.quantity, line.notes, line.position]
+          `INSERT INTO order_items (order_id, item_id, title, category_id, category_name, section_id, option_name,
+             unit_price, quantity, notes, position)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+          [order.id, line.itemId, line.title, line.categoryId, line.categoryName, line.sectionId ?? null, line.option,
+            line.unitPrice, line.quantity, line.notes, line.position]
         );
       }
 
       await recordStatusEvent(client, {
         orderId: order.id, ownerId, from: null, to: status, actor: actor ?? { type: source === "customer" ? "customer" : source },
       });
+      // Pedido del personal (entra confirmado): sale a los sectores ya.
+      await syncTicketsWithOrder(client, { ownerId, orderId: order.id, from: null, to: status });
 
       return { order: (await withItems([order], client))[0], duplicate: false };
     });
@@ -230,6 +233,7 @@ const updateStatus = async (ownerId, orderId, status, { reason = null, actor = {
       params
     );
     await recordStatusEvent(client, { orderId, ownerId, from: order.status, to: status, actor, reason });
+    await syncTicketsWithOrder(client, { ownerId, orderId, from: order.status, to: status });
     return (await withItems(rows, client))[0];
   });
 };

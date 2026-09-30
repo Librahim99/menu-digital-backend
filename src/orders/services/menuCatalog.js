@@ -69,6 +69,8 @@ const priceOrderLines = async (owner, lines) => {
   const byId = new Map(items.map((item) => [String(item._id), item]));
   // Nombre de la categoría al momento del pedido (snapshot para reportes).
   const categoryTitle = new Map(menus.map((menu) => [String(menu._id), menu.title]));
+  // Sección de cada categoría: con ella se resuelve el sector de la comanda.
+  const sectionOf = new Map(menus.map((menu) => [String(menu._id), menu.sectionID ? String(menu.sectionID) : null]));
   const now = new Date();
 
   const priced = lines.map((line, position) => {
@@ -97,6 +99,7 @@ const priceOrderLines = async (owner, lines) => {
       title: item.title,
       categoryId: item.menuID ? String(item.menuID) : null,
       categoryName: item.menuID ? categoryTitle.get(String(item.menuID)) ?? null : null,
+      sectionId: item.menuID ? sectionOf.get(String(item.menuID)) ?? null : null,
       option: line.option,
       unitPrice: roundMoney(unitPrice),
       quantity: line.quantity,
