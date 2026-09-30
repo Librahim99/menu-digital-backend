@@ -1,62 +1,16 @@
-// Pedidos: alta (comensal, mozo o panel), cambios de estado y consultas.
+// Pedidos: alta (comensal, operador o panel), cambios de estado y consultas.
 
 const crypto = require("crypto");
 const { query, withTransaction } = require("../db/sql");
 const { OrdersError } = require("../errors");
 const {
-  ACTIVE_STATUSES, ORDER_STATUSES, STATUS_TRANSITIONS, STATUS_TIMESTAMPS, LIMITS,
+  ACTIVE_STATUSES, ORDER_STATUSES, STATUS_TRANSITIONS, STATUS_TIMESTAMPS, SERVICE_TYPES, LIMITS,
 } = require("../constants");
 const { lockOrOpenShift } = require("./shiftService");
+const { lockOrOpenCashSession } = require("./cashService");
+const { lockOrOpenTableSession } = require("./tableSessionService");
 const { priceOrderLines } = require("./menuCatalog");
-
-const num = (value) => (value === null || value === undefined ? null : Number(value));
-
-const toItemDTO = (row) => ({
-  id: Number(row.id),
-  itemId: row.item_id,
-  title: row.title,
-  option: row.option_name,
-  unitPrice: num(row.unit_price),
-  quantity: row.quantity,
-  notes: row.notes,
-});
-
-const toOrderDTO = (row, items = []) => ({
-  id: Number(row.id),
-  shiftId: Number(row.shift_id),
-  number: row.number,
-  source: row.source,
-  status: row.status,
-  tableNumber: row.table_number,
-  waiterId: row.waiter_id === null ? null : Number(row.waiter_id),
-  waiterName: row.waiter_name,
-  notes: row.notes,
-  total: num(row.total),
-  createdAt: row.created_at,
-  confirmedAt: row.confirmed_at,
-  readyAt: row.ready_at,
-  deliveredAt: row.delivered_at,
-  cancelledAt: row.cancelled_at,
-  returnedAt: row.returned_at,
-  items,
-});
-
-// Trae las líneas de varios pedidos en una sola consulta.
-const withItems = async (rows, runner = { query }) => {
-  if (rows.length === 0) return [];
-  const ids = rows.map((row) => row.id);
-  const { rows: itemRows } = await runner.query(
-    "SELECT * FROM order_items WHERE order_id = ANY($1) ORDER BY order_id, position, id",
-    [ids]
-  );
-  const byOrder = new Map();
-  for (const item of itemRows) {
-    const key = String(item.order_id);
-    if (!byOrder.has(key)) byOrder.set(key, []);
-    byOrder.get(key).push(toItemDTO(item));
-  }
-  return rows.map((row) => toOrderDTO(row, byOrder.get(String(row.id)) ?? []));
-};
+const { toOrderDTO, withItems } = require("./orderDTO");
 
 // Huella del contenido: mismos productos, variantes, cantidades, aclaraciones
 // y mesa = mismo pedido.
@@ -76,6 +30,16 @@ const findByClientRequest = async (runner, ownerId, clientRequestId) => {
   return rows[0] ?? null;
 };
 
+// Registro de cambios de estado (incluido el alta): quién, cuándo y por qué.
+const recordStatusEvent = (client, { orderId, ownerId, from, to, actor, reason = null }) =>
+  client.query(
+    `INSERT INTO order_status_events (order_id, owner_id, from_status, to_status, actor_type, actor_id, actor_name, reason)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [orderId, ownerId, from, to, actor?.type ?? "system", actor?.id == null ? null : String(actor.id), actor?.name ?? null, reason]
+  );
+
+const EMPTY_CUSTOMER = { name: null, phone: null, address: null, deliveryNotes: null };
+
 /**
  * Crea un pedido.
  * @param {object} input
@@ -83,20 +47,30 @@ const findByClientRequest = async (runner, ownerId, clientRequestId) => {
  * @param {object} input.settings       fila de order_settings
  * @param {"customer"|"waiter"|"panel"} input.source
  * @param {Array}  input.lines          salida de parseOrderLines
- * @param {number|null} input.tableNumber
- * @param {{id:number,name:string}|null} input.waiter
+ * @param {"table"|"counter"|"takeaway"|"delivery"} input.serviceType
+ * @param {number|null} input.tableNumber   solo serviceType "table"
+ * @param {object} input.customer       { name, phone, address, deliveryNotes } (take away / delivery)
+ * @param {{id:number,name:string}|null} input.waiter   operador del pedido
+ * @param {number|null} input.waiterSessionId  dispositivo del operador que lo cargó
  * @param {string|null} input.notes
  * @param {string|null} input.clientRequestId  idempotencia (reintentos del mismo envío)
  * @param {string|null} input.fingerprint      solo comensales: frecuencia y duplicados
+ * @param {number} input.cooldownMs            solo comensales: espera entre pedidos
+ * @param {{type,id,name}} input.actor         quién lo cargó (registro de estados)
  * @returns {{ order: object, duplicate: boolean }}
  */
 const createOrder = async ({
-  owner, settings, source, lines, tableNumber = null, waiter = null, notes = null,
-  clientRequestId = null, fingerprint = null,
+  owner, settings, source, lines, serviceType = "table", tableNumber = null, customer = EMPTY_CUSTOMER,
+  waiter = null, waiterSessionId = null, notes = null, clientRequestId = null, fingerprint = null,
+  cooldownMs = LIMITS.customerCooldownMs, actor = null,
 }) => {
+  if (!SERVICE_TYPES.includes(serviceType)) throw new OrdersError(400, "Tipo de pedido inválido.");
+  if (serviceType === "table" && !tableNumber) throw new OrdersError(400, "Indicá el número de mesa.");
+  const table = serviceType === "table" ? tableNumber : null;
+
   const ownerId = String(owner._id);
   const priced = await priceOrderLines(owner, lines);
-  const contentHash = fingerprint ? contentHashOf(lines, tableNumber) : null;
+  const contentHash = fingerprint ? contentHashOf(lines, table) : null;
   // Los pedidos del personal entran confirmados; los del comensal esperan
   // que el local los confirme.
   const status = source === "customer" ? "pending" : "confirmed";
@@ -118,34 +92,46 @@ const createOrder = async ({
         if (rows.some((row) => row.content_hash === contentHash)) {
           throw new OrdersError(409, "Ya enviaste este mismo pedido hace un momento.", "DUPLICATE_ORDER");
         }
-        if (rows[0] && Date.now() - new Date(rows[0].created_at).getTime() < LIMITS.customerCooldownMs) {
+        if (rows[0] && Date.now() - new Date(rows[0].created_at).getTime() < cooldownMs) {
           throw new OrdersError(429, "Esperá unos segundos antes de enviar otro pedido.", "ORDER_COOLDOWN");
         }
       }
 
       const shift = await lockOrOpenShift(client, settings);
+      const cash = await lockOrOpenCashSession(client, ownerId, shift.id);
+      const tableSession = table
+        ? await lockOrOpenTableSession(client, { ownerId, tableNumber: table, shiftId: shift.id, waiter })
+        : null;
       const next = await client.query(
         "SELECT coalesce(max(number), 0) + 1 AS number FROM orders WHERE shift_id = $1",
         [shift.id]
       );
 
       const { rows: [order] } = await client.query(
-        `INSERT INTO orders (owner_id, shift_id, number, source, status, table_number, waiter_id, waiter_name,
-           notes, total, client_request_id, client_fingerprint, content_hash, confirmed_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        `INSERT INTO orders (owner_id, shift_id, number, source, status, service_type, table_number, table_session_id,
+           cash_session_id, customer_name, customer_phone, delivery_address, delivery_notes, waiter_id, waiter_name,
+           waiter_session_id, notes, subtotal, total, client_request_id, client_fingerprint, content_hash, confirmed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $18, $19, $20, $21, $22)
          RETURNING *`,
-        [ownerId, shift.id, next.rows[0].number, source, status, tableNumber, waiter?.id ?? null,
-          waiter?.name ?? null, notes, priced.total, clientRequestId, fingerprint, contentHash,
+        [ownerId, shift.id, next.rows[0].number, source, status, serviceType, table, tableSession?.id ?? null,
+          cash.id, customer.name, customer.phone, customer.address, customer.deliveryNotes, waiter?.id ?? null,
+          waiter?.name ?? null, waiterSessionId, notes, priced.total, clientRequestId, fingerprint, contentHash,
           status === "confirmed" ? new Date() : null]
       );
 
       for (const line of priced.lines) {
         await client.query(
-          `INSERT INTO order_items (order_id, item_id, title, option_name, unit_price, quantity, notes, position)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [order.id, line.itemId, line.title, line.option, line.unitPrice, line.quantity, line.notes, line.position]
+          `INSERT INTO order_items (order_id, item_id, title, category_id, category_name, option_name, unit_price,
+             quantity, notes, position)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+          [order.id, line.itemId, line.title, line.categoryId, line.categoryName, line.option, line.unitPrice,
+            line.quantity, line.notes, line.position]
         );
       }
+
+      await recordStatusEvent(client, {
+        orderId: order.id, ownerId, from: null, to: status, actor: actor ?? { type: source === "customer" ? "customer" : source },
+      });
 
       return { order: (await withItems([order], client))[0], duplicate: false };
     });
@@ -161,7 +147,7 @@ const createOrder = async ({
 };
 
 // Lo que muestra el panel: todo pedido sin entregar ni cancelar, de
-// cualquier turno (un pedido que quedó abierto al cerrar la caja no se pierde).
+// cualquier turno (un pedido que quedó abierto al cerrar el turno no se pierde).
 const listActiveOrders = async (ownerId) => {
   const { rows } = await query(
     "SELECT * FROM orders WHERE owner_id = $1 AND status = ANY($2) ORDER BY created_at",
@@ -171,7 +157,9 @@ const listActiveOrders = async (ownerId) => {
 };
 
 // Historial con filtros y paginado.
-const listOrders = async (ownerId, { shiftId, status, from, to, tableNumber, page = 1, pageSize = 30 } = {}) => {
+const listOrders = async (ownerId, {
+  shiftId, status, serviceType, from, to, tableNumber, page = 1, pageSize = 30,
+} = {}) => {
   const where = ["owner_id = $1"];
   const params = [ownerId];
   const add = (clause, value) => {
@@ -180,6 +168,7 @@ const listOrders = async (ownerId, { shiftId, status, from, to, tableNumber, pag
   };
   if (shiftId) add("shift_id = ?", shiftId);
   if (status) add("status = ?", status);
+  if (serviceType) add("service_type = ?", serviceType);
   if (tableNumber) add("table_number = ?", tableNumber);
   if (from) add("created_at >= ?", from);
   if (to) add("created_at < ?", to);
@@ -204,7 +193,14 @@ const getOwnedOrder = async (runner, ownerId, orderId, { lock = false } = {}) =>
   return rows[0];
 };
 
-const updateStatus = async (ownerId, orderId, status) => {
+/**
+ * Cambia el estado de un pedido.
+ * - Anular o devolver guarda el motivo (opcional).
+ * - Una devolución se registra en la caja abierta en ese momento (así no
+ *   reescribe una caja ya cerrada) y deja de sumar a la venta.
+ * @param {{ reason?: string|null, actor?: {type,id,name} }} options
+ */
+const updateStatus = async (ownerId, orderId, status, { reason = null, actor = { type: "panel" } } = {}) => {
   if (!ORDER_STATUSES.includes(status)) throw new OrdersError(400, "Estado inválido.");
   return withTransaction(async (client) => {
     const order = await getOwnedOrder(client, ownerId, orderId, { lock: true });
@@ -212,12 +208,28 @@ const updateStatus = async (ownerId, orderId, status) => {
     if (!STATUS_TRANSITIONS[order.status].includes(status)) {
       throw new OrdersError(409, "Ese cambio de estado no es posible para este pedido.");
     }
+
+    const sets = ["status = $3", "updated_at = now()"];
+    const params = [ownerId, orderId, status];
     const column = STATUS_TIMESTAMPS[status];
+    if (column) sets.push(`${column} = now()`);
+    if (status === "cancelled" || status === "returned") {
+      params.push(reason);
+      sets.push(`status_reason = $${params.length}`);
+    } else {
+      sets.push("status_reason = NULL");
+    }
+    if (status === "returned") {
+      const cash = await lockOrOpenCashSession(client, ownerId);
+      params.push(cash.id);
+      sets.push(`returned_cash_session_id = $${params.length}`);
+    }
+
     const { rows } = await client.query(
-      `UPDATE orders SET status = $3, updated_at = now()${column ? `, ${column} = now()` : ""}
-       WHERE owner_id = $1 AND id = $2 RETURNING *`,
-      [ownerId, orderId, status]
+      `UPDATE orders SET ${sets.join(", ")} WHERE owner_id = $1 AND id = $2 RETURNING *`,
+      params
     );
+    await recordStatusEvent(client, { orderId, ownerId, from: order.status, to: status, actor, reason });
     return (await withItems(rows, client))[0];
   });
 };
@@ -232,7 +244,7 @@ const assignWaiter = async (ownerId, orderId, waiter) => {
   return (await withItems(rows))[0];
 };
 
-// Pedidos que tomó un mozo en el turno abierto (para su propio seguimiento).
+// Pedidos que tomó un operador en el turno abierto (para su propio seguimiento).
 const listWaiterOrders = async (ownerId, waiterId) => {
   const { rows } = await query(
     `SELECT o.* FROM orders o JOIN shifts s ON s.id = o.shift_id

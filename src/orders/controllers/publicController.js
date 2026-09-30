@@ -28,6 +28,7 @@ const getContext = route(async (req, res) => {
     history: settings.customer_history,
     tableNumber: qr.kind === "table" ? qr.tableNumber : null,
     tableCount: settings.table_count,
+    requireTable: settingsService.optionsOf(settings).requireTableNumber,
   });
 });
 
@@ -41,13 +42,15 @@ const createCustomerOrder = route(async (req, res) => {
   const qr = await settingsService.resolveQrToken(settings, body.token);
   if (!qr) throw new OrdersError(403, "El QR ya no es válido. Volvé a escanear el de tu mesa.", "QR_INVALID");
   if (!settings.customer_ordering) {
-    throw new OrdersError(403, "En este local los pedidos se hacen con el mozo.", "CUSTOMER_ORDERING_OFF");
+    throw new OrdersError(403, "En este local los pedidos se hacen con el personal.", "CUSTOMER_ORDERING_OFF");
   }
 
+  const options = settingsService.optionsOf(settings);
   const tableNumber = qr.kind === "table"
     ? qr.tableNumber
     : optionalPositiveInt(body.tableNumber, { field: "Número de mesa", max: settings.table_count });
-  if (!tableNumber) throw new OrdersError(400, "Indicá tu número de mesa.");
+  // Con el QR general y la mesa opcional, sin mesa el pedido va a la barra.
+  if (!tableNumber && options.requireTableNumber) throw new OrdersError(400, "Indicá tu número de mesa.");
 
   // Id aleatorio que el navegador guarda en su localStorage: identifica al
   // dispositivo para limitar la frecuencia sin datos personales.
@@ -58,9 +61,12 @@ const createCustomerOrder = route(async (req, res) => {
     settings,
     source: "customer",
     lines: parseOrderLines(body.items),
+    serviceType: tableNumber ? "table" : "counter",
     tableNumber,
     clientRequestId: optionalUuid(body.clientRequestId),
     fingerprint: hashToken(`${owner._id}:${deviceId}`),
+    cooldownMs: options.customerOrderCooldownSeconds * 1000,
+    actor: { type: "customer", name: tableNumber ? `Mesa ${tableNumber}` : "Barra" },
   });
 
   // Al comensal solo le devolvemos lo necesario para su historial local.

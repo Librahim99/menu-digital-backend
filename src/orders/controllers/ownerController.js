@@ -5,13 +5,18 @@ const settingsService = require("../services/settingsService");
 const shiftService = require("../services/shiftService");
 const orderService = require("../services/orderService");
 const waiterService = require("../services/waiterService");
+const tableSessionService = require("../services/tableSessionService");
+const cashService = require("../services/cashService");
 const {
-  parseOrderLines, cleanText, optionalPositiveInt, positiveInt,
+  parseOrderLines, parseService, cleanText, optionalPositiveInt, positiveInt, optionalUuid,
 } = require("../utils/validate");
-const { LIMITS, ORDER_STATUSES } = require("../constants");
+const { LIMITS, ORDER_STATUSES, SERVICE_TYPES } = require("../constants");
 
 const ownerIdOf = (req) => String(req.user._id);
 const idParam = (req, name = "id") => positiveInt(req.params[name], { field: "Identificador" });
+const pageParam = (req) => optionalPositiveInt(req.query.page, { field: "Página", max: 10_000 }) ?? 1;
+// Quién hace el cambio desde el panel (registro de estados y cierres).
+const panelActor = (req) => ({ type: "panel", id: ownerIdOf(req), name: "Panel" });
 
 // ── Configuración ────────────────────────────
 
@@ -55,8 +60,9 @@ const getBoard = route(async (req, res) => {
 });
 
 const listOrders = route(async (req, res) => {
-  const { shiftId, status, from, to, table, page } = req.query;
+  const { shiftId, status, serviceType, from, to, table } = req.query;
   if (status && !ORDER_STATUSES.includes(status)) throw new OrdersError(400, "Estado inválido.");
+  if (serviceType && !SERVICE_TYPES.includes(serviceType)) throw new OrdersError(400, "Tipo de pedido inválido.");
   const parseDate = (value) => {
     if (!value) return null;
     const date = new Date(value);
@@ -66,49 +72,84 @@ const listOrders = route(async (req, res) => {
   res.json(await orderService.listOrders(ownerIdOf(req), {
     shiftId: optionalPositiveInt(shiftId, { field: "Turno" }),
     status: status || null,
+    serviceType: serviceType || null,
     tableNumber: optionalPositiveInt(table, { field: "Mesa" }),
     from: parseDate(from),
     to: parseDate(to),
-    page: optionalPositiveInt(page, { field: "Página", max: 10_000 }) ?? 1,
+    page: pageParam(req),
   }));
 });
 
-// Pedido cargado a mano desde el panel.
+// Pedido cargado a mano desde el panel (barra, teléfono, delivery…).
 const createOrder = route(async (req, res) => {
   const settings = req.orderSettings;
-  const tableNumber = optionalPositiveInt(req.body?.tableNumber, { field: "Mesa", max: settings.table_count });
-  const waiterId = optionalPositiveInt(req.body?.waiterId, { field: "Mozo" });
+  const body = req.body ?? {};
+  const { serviceType, tableNumber, customer } = parseService(body, { tableCount: settings.table_count });
+  const waiterId = optionalPositiveInt(body.waiterId, { field: "Operador" });
   const waiter = waiterId ? await waiterService.getWaiter(ownerIdOf(req), waiterId) : null;
 
-  const { order } = await orderService.createOrder({
+  const { order, duplicate } = await orderService.createOrder({
     owner: req.user,
     settings,
     source: "panel",
-    lines: parseOrderLines(req.body?.items),
+    lines: parseOrderLines(body.items),
+    serviceType,
     tableNumber,
+    customer,
     waiter: waiter && { id: Number(waiter.id), name: waiter.name },
-    notes: cleanText(req.body?.notes, LIMITS.orderNotesLength),
+    notes: cleanText(body.notes, LIMITS.orderNotesLength),
+    clientRequestId: optionalUuid(body.clientRequestId),
+    actor: panelActor(req),
   });
-  res.status(201).json({ order });
+  res.status(duplicate ? 200 : 201).json({ order, duplicate });
 });
 
 const updateOrderStatus = route(async (req, res) => {
-  const order = await orderService.updateStatus(ownerIdOf(req), idParam(req), req.body?.status);
+  const order = await orderService.updateStatus(ownerIdOf(req), idParam(req), req.body?.status, {
+    reason: cleanText(req.body?.reason, LIMITS.statusReasonLength),
+    actor: panelActor(req),
+  });
   res.json({ order });
 });
 
 const assignOrderWaiter = route(async (req, res) => {
-  const waiterId = optionalPositiveInt(req.body?.waiterId, { field: "Mozo" });
+  const waiterId = optionalPositiveInt(req.body?.waiterId, { field: "Operador" });
   const waiter = waiterId ? await waiterService.getWaiter(ownerIdOf(req), waiterId) : null;
   const order = await orderService.assignWaiter(ownerIdOf(req), idParam(req), waiter && { id: Number(waiter.id), name: waiter.name });
   res.json({ order });
 });
 
-// ── Turnos y caja ────────────────────────────
+// ── Sesiones de mesa ─────────────────────────
+
+const listTableSessions = route(async (req, res) => {
+  const status = req.query.status === "closed" ? "closed" : "open";
+  res.json(await tableSessionService.listSessions(ownerIdOf(req), {
+    status,
+    withOrders: status === "open",
+    page: pageParam(req),
+  }));
+});
+
+const getTableSession = route(async (req, res) => {
+  res.json({ session: await tableSessionService.getSession(ownerIdOf(req), idParam(req)) });
+});
+
+const closeTableSession = route(async (req, res) => {
+  const session = await tableSessionService.closeSession(ownerIdOf(req), idParam(req), {
+    force: req.body?.force === true,
+    actor: { type: "panel", name: "Panel" },
+  });
+  res.json({ session });
+});
+
+const updateTableSession = route(async (req, res) => {
+  res.json({ session: await tableSessionService.setGuests(ownerIdOf(req), idParam(req), req.body?.guests) });
+});
+
+// ── Turnos ───────────────────────────────────
 
 const listShifts = route(async (req, res) => {
-  const page = optionalPositiveInt(req.query.page, { field: "Página", max: 10_000 }) ?? 1;
-  res.json(await shiftService.listShifts(ownerIdOf(req), { page }));
+  res.json(await shiftService.listShifts(ownerIdOf(req), { page: pageParam(req) }));
 });
 
 const openShift = route(async (req, res) => {
@@ -126,24 +167,62 @@ const getShiftSummary = route(async (req, res) => {
   res.json({ shift: shiftService.toShiftDTO(shift), summary: await shiftService.shiftSummary(ownerId, shift.id) });
 });
 
+// Cierre de turno (la caja se cierra aparte).
 const closeShift = route(async (req, res) => {
-  const rawCash = req.body?.cashCounted;
-  let cashCounted = null;
-  if (rawCash !== undefined && rawCash !== null && rawCash !== "") {
-    cashCounted = Number(rawCash);
-    if (!Number.isFinite(cashCounted) || cashCounted < 0 || cashCounted > 1e10) {
-      throw new OrdersError(400, "El efectivo contado es inválido.");
-    }
-  }
   const shift = await shiftService.closeShift(ownerIdOf(req), {
-    cashCounted,
     notes: cleanText(req.body?.notes, 300),
     force: req.body?.force === true,
   });
   res.json({ shift });
 });
 
-// ── Mozos ────────────────────────────────────
+// ── Caja ─────────────────────────────────────
+
+const listCashRegisters = route(async (req, res) => {
+  res.json({ registers: await cashService.listRegisters(ownerIdOf(req)) });
+});
+
+const createCashRegister = route(async (req, res) => {
+  res.status(201).json({ register: await cashService.createRegister(ownerIdOf(req), req.body) });
+});
+
+const updateCashRegister = route(async (req, res) => {
+  res.json({ register: await cashService.updateRegister(ownerIdOf(req), idParam(req), req.body) });
+});
+
+// Cajas abiertas (con su resultado en vivo).
+const listOpenCash = route(async (req, res) => {
+  res.json({ sessions: await cashService.listOpenSessions(ownerIdOf(req)) });
+});
+
+const listClosedCash = route(async (req, res) => {
+  res.json(await cashService.listClosedSessions(ownerIdOf(req), { page: pageParam(req) }));
+});
+
+const getCashSession = route(async (req, res) => {
+  res.json({ session: await cashService.getSession(ownerIdOf(req), idParam(req)) });
+});
+
+const openCash = route(async (req, res) => {
+  const body = req.body ?? {};
+  res.status(201).json({
+    session: await cashService.openSession(ownerIdOf(req), {
+      registerId: optionalPositiveInt(body.registerId, { field: "Caja" }),
+      cashierName: body.cashierName,
+      openingAmount: body.openingAmount,
+    }),
+  });
+});
+
+const updateCash = route(async (req, res) => {
+  res.json({ session: await cashService.updateSession(ownerIdOf(req), idParam(req), req.body ?? {}) });
+});
+
+const closeCash = route(async (req, res) => {
+  res.json({ session: await cashService.closeSession(ownerIdOf(req), idParam(req), req.body ?? {}) });
+});
+
+// ── Operadores ───────────────────────────────
 
 const listWaiters = route(async (req, res) => {
   res.json({ waiters: await waiterService.listWaiters(ownerIdOf(req)) });
@@ -166,8 +245,17 @@ const issuePairingCode = route(async (req, res) => {
   res.json(await waiterService.issuePairingCode(ownerIdOf(req), idParam(req)));
 });
 
+const listWaiterSessions = route(async (req, res) => {
+  res.json({ sessions: await waiterService.listSessions(ownerIdOf(req), idParam(req)) });
+});
+
 const revokeWaiterSessions = route(async (req, res) => {
   await waiterService.revokeSessions(ownerIdOf(req), idParam(req));
+  res.status(204).end();
+});
+
+const revokeWaiterSession = route(async (req, res) => {
+  await waiterService.revokeSession(ownerIdOf(req), idParam(req), idParam(req, "sessionId"));
   res.status(204).end();
 });
 
@@ -180,14 +268,29 @@ module.exports = {
   createOrder,
   updateOrderStatus,
   assignOrderWaiter,
+  listTableSessions,
+  getTableSession,
+  closeTableSession,
+  updateTableSession,
   listShifts,
   openShift,
   getShiftSummary,
   closeShift,
+  listCashRegisters,
+  createCashRegister,
+  updateCashRegister,
+  listOpenCash,
+  listClosedCash,
+  getCashSession,
+  openCash,
+  updateCash,
+  closeCash,
   listWaiters,
   createWaiter,
   updateWaiter,
   deleteWaiter,
   issuePairingCode,
+  listWaiterSessions,
   revokeWaiterSessions,
+  revokeWaiterSession,
 };

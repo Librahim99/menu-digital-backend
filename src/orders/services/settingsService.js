@@ -1,10 +1,62 @@
 // Configuración del módulo por local y sus mesas (con el QR de cada una).
+//
+// Todo vive en una sola fila de order_settings. Las opciones "de siempre"
+// tienen su columna; las nuevas van en order_settings.options (jsonb) y se
+// declaran acá abajo en OPTIONS, con su validación y su valor por defecto:
+// agregar una configuración no requiere migrar la base.
 
 const { query, withTransaction } = require("../db/sql");
 const { randomToken } = require("../utils/tokens");
 const { OrdersError } = require("../errors");
 const { LIMITS } = require("../constants");
 const { parseShiftSchedule } = require("../utils/validate");
+
+const booleanOption = (fallback) => ({
+  default: fallback,
+  parse: (value) => {
+    if (typeof value !== "boolean") throw new OrdersError(400, "Configuración inválida.");
+    return value;
+  },
+});
+
+const intOption = (fallback, min, max, message) => ({
+  default: fallback,
+  parse: (value) => {
+    const number = Number(value);
+    if (!Number.isSafeInteger(number) || number < min || number > max) throw new OrdersError(400, message);
+    return number;
+  },
+});
+
+// Opciones extensibles (claves de order_settings.options).
+const OPTIONS = {
+  // Con QR general: si es false el comensal puede pedir sin indicar mesa
+  // (el pedido entra como "Barra").
+  requireTableNumber: booleanOption(true),
+  // Espera mínima entre dos pedidos del mismo dispositivo del comensal.
+  customerOrderCooldownSeconds: intOption(
+    LIMITS.customerCooldownMs / 1000, 0, 600, "La espera entre pedidos tiene que ser entre 0 y 600 segundos."
+  ),
+};
+
+// Opciones guardadas + valores por defecto de las que no se guardaron.
+const optionsOf = (row) => {
+  const stored = row?.options && typeof row.options === "object" ? row.options : {};
+  return Object.fromEntries(Object.entries(OPTIONS).map(([key, option]) => [
+    key, stored[key] === undefined ? option.default : stored[key],
+  ]));
+};
+
+const parseOptions = (current, body) => {
+  if (body === undefined) return current;
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new OrdersError(400, "Configuración inválida.");
+  const next = { ...current };
+  for (const [key, value] of Object.entries(body)) {
+    if (!OPTIONS[key]) throw new OrdersError(400, "Configuración desconocida.");
+    next[key] = OPTIONS[key].parse(value);
+  }
+  return next;
+};
 
 const toSettingsDTO = (row) => ({
   qrMode: row.qr_mode,
@@ -13,6 +65,7 @@ const toSettingsDTO = (row) => ({
   tableCount: row.table_count,
   periodMode: row.period_mode,
   shiftSchedule: row.shift_schedule ?? [],
+  options: optionsOf(row),
   generalQrToken: row.general_qr_token,
   updatedAt: row.updated_at,
 });
@@ -98,14 +151,15 @@ const updateSettings = async (ownerId, body = {}) => {
   if (body.shiftSchedule !== undefined) {
     next.shift_schedule = parseShiftSchedule(body.shiftSchedule);
   }
+  const options = parseOptions(optionsOf(current), body.options);
 
   return withTransaction(async (client) => {
     const { rows } = await client.query(
       `UPDATE order_settings SET qr_mode = $2, customer_ordering = $3, customer_history = $4,
-         table_count = $5, period_mode = $6, shift_schedule = $7::jsonb, updated_at = now()
+         table_count = $5, period_mode = $6, shift_schedule = $7::jsonb, options = $8::jsonb, updated_at = now()
        WHERE owner_id = $1 RETURNING *`,
       [ownerId, next.qr_mode, next.customer_ordering, next.customer_history,
-        next.table_count, next.period_mode, JSON.stringify(next.shift_schedule)]
+        next.table_count, next.period_mode, JSON.stringify(next.shift_schedule), JSON.stringify(options)]
     );
     if (next.table_count !== current.table_count) await syncTables(client, ownerId, next.table_count);
     return rows[0];
@@ -158,6 +212,7 @@ const resolveQrToken = async (settings, token) => {
 };
 
 module.exports = {
+  optionsOf,
   toSettingsDTO,
   getOrCreateSettings,
   findSettings,

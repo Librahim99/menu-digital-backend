@@ -1,7 +1,7 @@
 const crypto = require("crypto");
 
 // Secretos del módulo: tokens de los QR (mesa/general), códigos de acceso de
-// los mozos y sesiones de sus dispositivos. Todos aleatorios y URL-safe.
+// los operadores y sesiones de sus dispositivos. Todos aleatorios y URL-safe.
 const randomToken = (bytes = 18) => crypto.randomBytes(bytes).toString("base64url");
 
 // Lo que se guarda de un secreto que viaja en manos del cliente (código de

@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const { OrdersError } = require("../errors");
-const { LIMITS } = require("../constants");
+const { LIMITS, SERVICE_TYPES } = require("../constants");
 
 // Validación de lo que llega del cliente. Todo lo que no cumpla corta con
 // 400 y un mensaje claro; nada de esto se confía para precios (ver
@@ -55,6 +55,37 @@ const parseOrderLines = (lines) => {
   });
 };
 
+/**
+ * Dónde se sirve el pedido y, para take away / delivery, los datos de quien
+ * retira o recibe. Sin serviceType (clientes viejos) se deduce de la mesa.
+ * @returns {{ serviceType, tableNumber, customer: { name, phone, address, deliveryNotes } }}
+ */
+const parseService = (body = {}, { tableCount, allowed = SERVICE_TYPES }) => {
+  const serviceType = body.serviceType ?? (body.tableNumber ? "table" : "counter");
+  if (!allowed.includes(serviceType)) throw new OrdersError(400, "Tipo de pedido inválido.");
+
+  const tableNumber = serviceType === "table"
+    ? positiveInt(body.tableNumber, { field: "Número de mesa", max: tableCount })
+    : null;
+
+  const withCustomer = serviceType === "takeaway" || serviceType === "delivery";
+  const customer = {
+    name: withCustomer ? cleanText(body.customerName, LIMITS.customerNameLength) : null,
+    phone: withCustomer ? cleanText(body.customerPhone, LIMITS.customerPhoneLength) : null,
+    address: serviceType === "delivery" ? cleanText(body.deliveryAddress, LIMITS.deliveryAddressLength) : null,
+    deliveryNotes: withCustomer ? cleanText(body.deliveryNotes, LIMITS.deliveryNotesLength) : null,
+  };
+  return { serviceType, tableNumber, customer };
+};
+
+// Importe opcional (efectivo contado, fondo de caja): null si viene vacío.
+const optionalMoney = (value, field) => {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0 || number > 1e10) throw new OrdersError(400, `${field} inválido.`);
+  return Math.round(number * 100) / 100;
+};
+
 const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // Turnos configurados: [{ name, from: "HH:MM", to: "HH:MM" }]. Un turno que
@@ -80,5 +111,7 @@ module.exports = {
   optionalPositiveInt,
   optionalUuid,
   parseOrderLines,
+  parseService,
+  optionalMoney,
   parseShiftSchedule,
 };

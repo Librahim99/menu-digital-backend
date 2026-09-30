@@ -56,7 +56,7 @@ const roundMoney = (value) => Math.round(value * 100) / 100;
 const priceOrderLines = async (owner, lines) => {
   const [plan, menus] = await Promise.all([
     getPlanForUser(owner),
-    Menu.find({ userID: owner._id, hidden: false }).select("_id section sectionID hidden").lean(),
+    Menu.find({ userID: owner._id, hidden: false }).select("_id title section sectionID hidden").lean(),
   ]);
   const categoryIds = getReachableCategoryIds(menus);
   const itemIds = [...new Set(lines.map((line) => line.itemId))];
@@ -64,9 +64,11 @@ const priceOrderLines = async (owner, lines) => {
     _id: { $in: itemIds },
     menuID: { $in: categoryIds },
     hidden: false,
-  }).select("title price offerPrice offerRange offerSchedule options available availabilitySchedule hidden").lean();
+  }).select("title menuID price offerPrice offerRange offerSchedule options available availabilitySchedule hidden").lean();
 
   const byId = new Map(items.map((item) => [String(item._id), item]));
+  // Nombre de la categoría al momento del pedido (snapshot para reportes).
+  const categoryTitle = new Map(menus.map((menu) => [String(menu._id), menu.title]));
   const now = new Date();
 
   const priced = lines.map((line, position) => {
@@ -93,6 +95,8 @@ const priceOrderLines = async (owner, lines) => {
     return {
       itemId: line.itemId,
       title: item.title,
+      categoryId: item.menuID ? String(item.menuID) : null,
+      categoryName: item.menuID ? categoryTitle.get(String(item.menuID)) ?? null : null,
       option: line.option,
       unitPrice: roundMoney(unitPrice),
       quantity: line.quantity,

@@ -36,7 +36,7 @@ const loadSettings = async (req, res, next) => {
   }
 };
 
-// Tomador de pedidos: el dispositivo del mozo se identifica con
+// Tomador de pedidos: el dispositivo del operador se identifica con
 // "Authorization: Waiter <token>" (el token lo dio el QR de acceso).
 const protectWaiter = async (req, res, next) => {
   try {

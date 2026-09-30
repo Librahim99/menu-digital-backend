@@ -1,8 +1,10 @@
-// Turnos / días de trabajo y cierre de caja.
+// Turnos / días de trabajo.
 //
 // Siempre hay como mucho un turno abierto por local. Se abre solo con el
-// primer pedido (o desde el panel) y se cierra con el cierre de caja, que
-// congela el resumen del turno.
+// primer pedido (o desde el panel) y se cierra a mano, lo que congela el
+// resumen del turno. La caja va aparte (cashService): cerrar el turno no
+// cierra la caja ni al revés. Los turnos viejos pueden tener efectivo
+// contado (cash_counted) de cuando ambos cierres eran uno solo.
 
 const { query, withTransaction } = require("../db/sql");
 const { OrdersError } = require("../errors");
@@ -72,7 +74,7 @@ const openShift = (settings) => withTransaction((client) => lockOrOpenShift(clie
 // Resumen de un turno para la caja y los reportes.
 const shiftSummary = async (ownerId, shiftId) => {
   const params = [ownerId, shiftId, NOT_BILLED_STATUSES];
-  const [byStatus, bySource, byWaiter, byTable, topProducts, timings] = await Promise.all([
+  const [byStatus, bySource, byServiceType, byWaiter, byTable, topProducts, timings] = await Promise.all([
     query(
       `SELECT status, count(*)::int AS count, coalesce(sum(total), 0) AS amount
        FROM orders WHERE owner_id = $1 AND shift_id = $2 GROUP BY status`,
@@ -84,7 +86,12 @@ const shiftSummary = async (ownerId, shiftId) => {
       params
     ),
     query(
-      `SELECT coalesce(waiter_name, 'Sin mozo') AS name, count(*)::int AS count, coalesce(sum(total), 0) AS amount
+      `SELECT service_type, count(*)::int AS count, coalesce(sum(total), 0) AS amount
+       FROM orders WHERE owner_id = $1 AND shift_id = $2 AND NOT (status = ANY($3)) GROUP BY service_type`,
+      params
+    ),
+    query(
+      `SELECT coalesce(waiter_name, 'Sin operador') AS name, count(*)::int AS count, coalesce(sum(total), 0) AS amount
        FROM orders WHERE owner_id = $1 AND shift_id = $2 AND NOT (status = ANY($3))
        GROUP BY 1 ORDER BY amount DESC`,
       params
@@ -124,6 +131,7 @@ const shiftSummary = async (ownerId, shiftId) => {
     pendingDelivery,
     byStatus: statuses,
     bySource: bySource.rows.map((row) => ({ source: row.source, count: row.count, amount: Number(row.amount) })),
+    byServiceType: byServiceType.rows.map((row) => ({ serviceType: row.service_type, count: row.count, amount: Number(row.amount) })),
     byWaiter: byWaiter.rows.map((row) => ({ name: row.name, count: row.count, amount: Number(row.amount) })),
     byTable: byTable.rows.map((row) => ({ tableNumber: row.table_number, count: row.count, amount: Number(row.amount) })),
     topProducts: topProducts.rows.map((row) => ({
@@ -152,9 +160,10 @@ const listShifts = async (ownerId, { page = 1, pageSize = 20 } = {}) => {
   return { shifts: rows.map(toShiftDTO), total: count.rows[0].total, page, pageSize };
 };
 
-// Cierre de caja: cierra el turno abierto y congela sus totales. Con pedidos
-// todavía sin entregar pide `force` (esos pedidos siguen en el panel igual).
-const closeShift = async (ownerId, { cashCounted = null, notes = null, force = false } = {}) => {
+// Cierre de turno: cierra el turno abierto y congela sus totales. No toca la
+// caja. Con pedidos todavía sin entregar pide `force` (esos pedidos siguen
+// en el panel igual).
+const closeShift = async (ownerId, { notes = null, force = false } = {}) => {
   const shiftId = await withTransaction(async (client) => {
     const { rows } = await client.query(
       "SELECT * FROM shifts WHERE owner_id = $1 AND closed_at IS NULL FOR UPDATE",
@@ -177,9 +186,9 @@ const closeShift = async (ownerId, { cashCounted = null, notes = null, force = f
       [shift.id, NOT_BILLED_STATUSES]
     );
     await client.query(
-      `UPDATE shifts SET closed_at = now(), cash_counted = $2, closing_notes = $3,
-         orders_count = $4, total_amount = $5 WHERE id = $1`,
-      [shift.id, cashCounted, notes, totals.rows[0].count, totals.rows[0].amount]
+      `UPDATE shifts SET closed_at = now(), closing_notes = $2,
+         orders_count = $3, total_amount = $4 WHERE id = $1`,
+      [shift.id, notes, totals.rows[0].count, totals.rows[0].amount]
     );
     return shift.id;
   });

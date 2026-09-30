@@ -29,6 +29,10 @@ const STATUS_TIMESTAMPS = {
 // Estados que no suman a la venta del turno.
 const NOT_BILLED_STATUSES = ["cancelled", "returned"];
 
+// Dónde se sirve el pedido. Solo "table" lleva número de mesa (y sesión de
+// mesa); take away y delivery pueden llevar datos de quien retira / recibe.
+const SERVICE_TYPES = ["table", "counter", "takeaway", "delivery"];
+
 const LIMITS = {
   linesPerOrder: 40,
   quantityPerLine: 20,
@@ -41,8 +45,16 @@ const LIMITS = {
   customerCooldownMs: 30_000,
   // …ni repetir el mismo contenido dentro de esta ventana.
   duplicateWindowMs: 3 * 60_000,
-  // Vigencia del código del QR de acceso de un mozo.
+  // Vigencia del código del QR de acceso de un operador.
   pairingCodeTtlMs: 2 * 60_000,
+  customerNameLength: 60,
+  customerPhoneLength: 30,
+  deliveryAddressLength: 200,
+  deliveryNotesLength: 200,
+  statusReasonLength: 200,
+  cashierNameLength: 60,
+  registerNameLength: 40,
+  maxGuests: 200,
 };
 
 module.exports = {
@@ -51,5 +63,6 @@ module.exports = {
   STATUS_TRANSITIONS,
   STATUS_TIMESTAMPS,
   NOT_BILLED_STATUSES,
+  SERVICE_TYPES,
   LIMITS,
 };
