@@ -1,7 +1,9 @@
 const User = require("../models/User");
 
-// La sección editorial ocupa /blog; un local con ese nombre recibe un sufijo.
-const RESERVED_SLUGS = new Set(["blog"]);
+// Rutas fijas del front que le ganan a /:slug: la sección editorial (/blog)
+// y la pantalla de comandas de los sectores (/comandas). Un local con ese
+// nombre recibe un sufijo.
+const RESERVED_SLUGS = new Set(["blog", "comandas"]);
 
 // Normaliza un nombre a un slug URL-friendly.
 // "Café Roma" -> "cafe-roma"
