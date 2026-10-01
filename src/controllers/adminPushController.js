@@ -78,6 +78,7 @@ const sendTestNotification = async (req, res) => {
     await notifyAdmins({
       title: "🔔 Notificación de prueba",
       body: `Enviada por ${req.user.username}. Si la ves, las push funcionan.`,
+      type: "test",
     });
     res.status(204).end();
   } catch (error) {

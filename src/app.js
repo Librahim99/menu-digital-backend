@@ -167,6 +167,11 @@ app.use(
 );
 
 app.use(
+  "/api/admin/notifications",
+  require("./routes/adminNotificationRoutes")
+);
+
+app.use(
   "/api/admin/sellers",
   require("./routes/sellerRoutes")
 );
