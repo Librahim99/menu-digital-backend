@@ -217,6 +217,7 @@ const notifyAdminsPaymentApproved = (transaction, username) => {
     title: `💰 Pago aprobado — ${OPERATION_LABELS[transaction.operation] || "Mercado Pago"}`,
     body: `${username || "Usuario"} · ${plan}${months ? ` × ${months} mes(es)` : ""} · ${amountText}`,
     url: "/admin/payments",
+    type: "payment",
   });
 };
 

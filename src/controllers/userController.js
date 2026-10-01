@@ -326,6 +326,7 @@ if (acceptedTerms !== true) {
       title: "🆕 Nuevo registro",
       body: `${user.username} se registró con el plan gratuito.`,
       url: "/admin",
+      type: "registration",
     });
 
     res.status(201).json({
@@ -438,6 +439,7 @@ const registerTrial = async (req, res) => {
       title: "🆕 Nuevo registro (prueba Pro)",
       body: `${user.username} activó la prueba de 7 días con el código ${code}.`,
       url: "/admin",
+      type: "registration",
     });
 
     res.status(201).json({
