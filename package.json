@@ -7,7 +7,8 @@
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
     "test": "node --test",
-    "orders:migrate": "node src/orders/db/migrate.js"
+    "orders:migrate": "node src/orders/db/migrate.js",
+    "reservations:migrate": "node src/reservations/db/migrate.js"
   },
   "dependencies": {
     "@sparticuz/chromium": "^149.0.0",
@@ -28,7 +29,8 @@
     "nodemailer": "^10.0.0",
     "pg": "^8.23.0",
     "puppeteer": "^25.5.0",
-    "puppeteer-core": "^25.10.0"
+    "puppeteer-core": "^25.10.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

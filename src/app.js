@@ -279,6 +279,22 @@ app.use(
 
 
 // ──────────────────────────────────────────────
+// Reservas (Postgres / Neon + WebSocket)
+// ──────────────────────────────────────────────
+//
+// Módulo aparte en src/reservations/, mismo criterio que
+// pedidos: SQL para las reservas, Mongo solo de lectura.
+// El WebSocket (/api/reservations/ws) se engancha al
+// servidor HTTP al arrancar (ver start()).
+//
+
+app.use(
+  "/api/reservations",
+  require("./reservations/routes")
+);
+
+
+// ──────────────────────────────────────────────
 // Sitemap
 // ──────────────────────────────────────────────
 
@@ -458,9 +474,12 @@ const start = async () => {
     }
 
     // Iniciar HTTP server
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       printStartup({ postgresReady });
     });
+
+    // Tiempo real de Reservas (no interfiere con el resto de la API).
+    require("./reservations/realtime").attach(server);
   } catch (error) {
     console.error(
       "❌ No se pudo iniciar la API con un catálogo válido:",
