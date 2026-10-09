@@ -43,6 +43,10 @@ const OPTIONS = {
   // Con el pago online activo, saca «Pedir por WhatsApp» del carrito de la carta.
   // Solo tiene efecto si el pago online está funcionando (ver getOnlineConfig).
   hideWhatsappOrder: booleanOption(false),
+  // Tiempo estimado de preparación de los pedidos online (minutos). 0 = sin estimación.
+  // Se cargan los dos o ninguno (ver updateSettings).
+  prepMinMinutes: intOption(0, 0, 600, "El tiempo mínimo tiene que ser entre 0 y 600 minutos."),
+  prepMaxMinutes: intOption(0, 0, 600, "El tiempo máximo tiene que ser entre 0 y 600 minutos."),
 };
 
 // Opciones guardadas + valores por defecto de las que no se guardaron.
@@ -158,6 +162,12 @@ const updateSettings = async (ownerId, body = {}) => {
     next.shift_schedule = parseShiftSchedule(body.shiftSchedule);
   }
   const options = parseOptions(optionsOf(current), body.options);
+  if ((options.prepMinMinutes > 0) !== (options.prepMaxMinutes > 0)) {
+    throw new OrdersError(400, "Cargá el tiempo mínimo y el máximo, o dejá los dos en 0.");
+  }
+  if (options.prepMaxMinutes < options.prepMinMinutes) {
+    throw new OrdersError(400, "El tiempo máximo no puede ser menor que el mínimo.");
+  }
 
   return withTransaction(async (client) => {
     const { rows } = await client.query(

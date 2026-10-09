@@ -32,16 +32,27 @@ const onlineModesOf = (owner, settings) => {
 };
 
 // Para la carta pública: ¿puede este local cobrar online ahora?
+// Tiempo estimado de preparación que cargó el local (null si no cargó ninguno).
+const estimateOf = (settings) => {
+  const { prepMinMinutes: min, prepMaxMinutes: max } = settingsService.optionsOf(settings);
+  return min > 0 && max >= min ? { minMinutes: min, maxMinutes: max } : null;
+};
+
 // hideWhatsapp solo es true si el pago online está funcionando: si no, el cliente
 // se quedaría sin ninguna forma de pedir.
-const OFF = Object.freeze({ enabled: false, modes: [], hideWhatsapp: false });
+const OFF = Object.freeze({ enabled: false, modes: [], hideWhatsapp: false, estimate: null });
 
 const getOnlineConfig = async (owner, settings) => {
   const modes = settings ? onlineModesOf(owner, settings) : [];
   if (modes.length === 0 || missingForCheckout().length > 0) return OFF;
   const status = await connections.getStatus(String(owner._id));
   if (!status.connected) return OFF;
-  return { enabled: true, modes, hideWhatsapp: settingsService.optionsOf(settings).hideWhatsappOrder === true };
+  return {
+    enabled: true,
+    modes,
+    hideWhatsapp: settingsService.optionsOf(settings).hideWhatsappOrder === true,
+    estimate: estimateOf(settings),
+  };
 };
 
 const requireCustomerData = (serviceType, customer) => {
@@ -177,10 +188,11 @@ const createCheckout = async ({ owner, settings, body = {} }) => {
  * la referencia (48 hex aleatorios) y solo se resuelve dentro del local del
  * slug: no se puede consultar el checkout de otro negocio.
  */
-const getCheckoutStatus = async ({ owner, ref }) => {
+const getCheckoutStatus = async ({ owner, settings = null, ref }) => {
   if (typeof ref !== "string" || !REF_RE.test(ref)) throw new OrdersError(404, "Pago no encontrado.");
   const { rows } = await query(
-    `SELECT p.*, o.number AS order_number, o.status AS order_status
+    `SELECT p.*, o.number AS order_number, o.status AS order_status, o.created_at AS order_created_at,
+            o.confirmed_at, o.ready_at, o.delivered_at, o.cancelled_at
        FROM order_online_payments p LEFT JOIN orders o ON o.id = p.order_id
       WHERE p.owner_id = $1 AND p.external_reference = $2`,
     [String(owner._id), ref],
@@ -194,6 +206,14 @@ const getCheckoutStatus = async ({ owner, ref }) => {
     serviceType: row.draft?.serviceType ?? null,
     orderNumber: row.order_number ?? null,
     orderStatus: row.order_status ?? null,
+    // Para seguir el pedido: cuándo pasó a cada etapa y si se devolvió el dinero.
+    createdAt: row.order_created_at ?? null,
+    confirmedAt: row.confirmed_at ?? null,
+    readyAt: row.ready_at ?? null,
+    deliveredAt: row.delivered_at ?? null,
+    cancelledAt: row.cancelled_at ?? null,
+    refund: row.status === "REFUNDED" ? "full" : row.status === "PARTIALLY_REFUNDED" ? "partial" : "none",
+    estimate: settings ? estimateOf(settings) : null,
   };
 };
 
