@@ -3,9 +3,11 @@
 // /api/orders/ws. Mismo patrón que Reservas (src/reservations/realtime.js): el
 // servidor HTTP es compartido y cada módulo atiende su propio path.
 //
-// Tres tipos de pantalla se conectan y se identifican con su primer mensaje:
+// Cada pantalla se conecta y se identifica con su primer mensaje:
 //   - el panel del local        {"type":"auth","token":"<JWT>"}
 //   - el repartidor             {"type":"auth","role":"courier","token":"<token del dispositivo>"}
+//   - el mozo                   {"type":"auth","role":"waiter","token":"<token del dispositivo>"}
+//   - la pantalla de un sector  {"type":"auth","role":"station","token":"<token del dispositivo>"}
 //   - el cliente (seguimiento)  {"type":"watch","slug":"mi-local","ref":"<referencia del pago>"}
 //
 // Los mensajes son AVISOS, no datos: {"type":"delivery","event":"picked_up",
@@ -17,6 +19,8 @@
 //   - panel del local: todos los avisos de sus pedidos y repartidores
 //   - repartidor: solo avisos de las entregas que son suyas, más "open_changed"
 //     (cambió la lista de pedidos disponibles) y "courier_updated" (su acceso)
+//   - mozo / sector: {"type":"orders"} cuando cambia un pedido, una mesa o una comanda
+//     de su local (sin ids ni datos: solo "volvé a consultar")
 //   - cliente: solo avisos del pedido cuya referencia presentó
 // El estado vive en memoria del proceso (una sola instancia de la API); al
 // reconectar, cada pantalla reconsulta por HTTP.
@@ -37,11 +41,12 @@ const WS_PATH = "/api/orders/ws";
  * @param {(token: string) => Promise<{ownerId: string, courierId: number}|null>} deps.authorizeCourier
  * @param {(slug: string, ref: string) => Promise<{ownerId: string}|null>} deps.authorizeCustomer
  */
-const createHub = ({ authorizeOwner, authorizeCourier, authorizeCustomer }) => {
+const createHub = ({ authorizeOwner, authorizeCourier, authorizeCustomer, authorizeStaff = async () => null }) => {
   const owners = new Map();           // ownerId → sockets del panel
   const couriersByOwner = new Map();  // ownerId → sockets de repartidores
   const couriersById = new Map();     // `${ownerId}:${courierId}` → sockets
   const customers = new Map();        // `${ownerId}:${ref}` → sockets
+  const staff = new Map();            // ownerId → sockets de mozos y pantallas de sector
   const state = new WeakMap();
 
   const cleanup = (socket) => {
@@ -52,6 +57,7 @@ const createHub = ({ authorizeOwner, authorizeCourier, authorizeCustomer }) => {
       removeFrom(couriersByOwner, info.courier.ownerId, socket);
       removeFrom(couriersById, `${info.courier.ownerId}:${info.courier.courierId}`, socket);
     }
+    if (info.staff) removeFrom(staff, info.staff.ownerId, socket);
     for (const key of info.watching) removeFrom(customers, key, socket);
     state.delete(socket);
   };
@@ -91,6 +97,19 @@ const createHub = ({ authorizeOwner, authorizeCourier, authorizeCustomer }) => {
         addTo(couriersById, `${found.ownerId}:${found.courierId}`, socket);
         return safeSend(socket, { type: "ready", role: "courier" });
       }
+      // Mozo o pantalla de un sector: reciben "algo cambió" de su local, sin datos.
+      if (message.role === "waiter" || message.role === "station") {
+        const found = await authorizeStaff(message.role, message.token).catch(() => null);
+        if (!found) {
+          safeSend(socket, { type: "error", code: "AUTH", message: "Sesión inválida." });
+          return socket.close?.(1008, "auth");
+        }
+        if (!state.has(socket)) return;
+        if (info.staff) removeFrom(staff, info.staff.ownerId, socket);
+        info.staff = { ownerId: String(found.ownerId) };
+        addTo(staff, info.staff.ownerId, socket);
+        return safeSend(socket, { type: "ready", role: message.role });
+      }
       const ownerId = await authorizeOwner(message.token).catch(() => null);
       if (!ownerId) {
         safeSend(socket, { type: "error", code: "AUTH", message: "Sesión inválida." });
@@ -118,12 +137,12 @@ const createHub = ({ authorizeOwner, authorizeCourier, authorizeCustomer }) => {
   };
 
   const connect = (socket) => {
-    state.set(socket, { ownerId: null, courier: null, watching: new Set(), messages: 0, windowStart: Date.now() });
+    state.set(socket, { ownerId: null, courier: null, staff: null, watching: new Set(), messages: 0, windowStart: Date.now() });
 
     // Si no se identifica a tiempo, se corta (evita sockets colgados anónimos).
     const timer = setTimeout(() => {
       const info = state.get(socket);
-      if (info && !info.ownerId && !info.courier && info.watching.size === 0) socket.close?.(1008, "timeout");
+      if (info && !info.ownerId && !info.courier && !info.staff && info.watching.size === 0) socket.close?.(1008, "timeout");
     }, AUTH_TIMEOUT_MS);
     timer.unref?.();
 
@@ -138,6 +157,7 @@ const createHub = ({ authorizeOwner, authorizeCourier, authorizeCustomer }) => {
   const toAllCouriers = (ownerId, payload) => send(couriersByOwner.get(String(ownerId)), payload);
   const toCourier = (ownerId, courierId, payload) => send(couriersById.get(`${ownerId}:${courierId}`), payload);
   const toCustomer = (ownerId, ref, payload) => send(customers.get(`${ownerId}:${ref}`), payload);
+  const toStaff = (ownerId, payload) => send(staff.get(String(ownerId)), payload);
   // ¿Hay clientes mirando algún pedido de este local? (evita consultar la base de más)
   const hasCustomers = (ownerId) => {
     const prefix = `${ownerId}:`;
@@ -145,10 +165,10 @@ const createHub = ({ authorizeOwner, authorizeCourier, authorizeCustomer }) => {
     return false;
   };
   const stats = () => ({
-    owners: owners.size, couriers: couriersById.size, customers: customers.size,
+    owners: owners.size, couriers: couriersById.size, customers: customers.size, staff: staff.size,
   });
 
-  return { connect, toOwner, toAllCouriers, toCourier, toCustomer, hasCustomers, stats };
+  return { connect, toOwner, toAllCouriers, toCourier, toCustomer, toStaff, hasCustomers, stats };
 };
 
 // ── Cableado real (ws + base + JWT) ──────────
@@ -183,6 +203,15 @@ const buildHub = () => createHub({
     );
     return rows[0] ? { ownerId: String(owner._id) } : null;
   },
+  // Misma validación que protectWaiter / protectStation: sesión del dispositivo vigente y local activo y Pro.
+  authorizeStaff: async (role, token) => {
+    const { findOwnerById, isProOwner } = require("../services/menuCatalog");
+    const service = role === "waiter" ? require("../services/waiterService") : require("../services/sectorService");
+    const session = await service.authenticateSession(token);
+    if (!session) return null;
+    const owner = await findOwnerById(session.ownerId);
+    return owner && owner.active && isProOwner(owner) ? { ownerId: session.ownerId } : null;
+  },
 });
 
 const getHub = () => {
@@ -203,13 +232,18 @@ const getHub = () => {
  * @param {number[]} [event.courierIds]  repartidores a los que les interesa (ej. el anterior y el nuevo)
  * @param {boolean} [event.openList]     cambió la lista de pedidos disponibles
  * @param {boolean} [event.customer]     el cliente del pedido también tiene que enterarse
+ * @param {boolean} [event.staff]        mozos y pantallas de sector del local también (pedidos, mesas, comandas)
  */
-const emit = ({ ownerId, event, orderId = null, orderNumber = null, courierIds = [], openList = false, customer = false }) => {
+const emit = ({
+  ownerId, event, orderId = null, orderNumber = null, courierIds = [], openList = false, customer = false, staff = false,
+}) => {
   if (!hub || !ownerId) return;
   try {
     const owner = String(ownerId);
     const payload = { type: "delivery", event, orderId, orderNumber };
     hub.toOwner(owner, payload);
+    // Una entrega confirmada por el repartidor también cierra el pedido para el salón.
+    if (staff || event === "delivered") hub.toStaff?.(owner, { type: "orders", event });
     for (const courierId of new Set(courierIds.filter((id) => id != null))) hub.toCourier(owner, courierId, payload);
     if (openList) hub.toAllCouriers(owner, { type: "delivery", event: "open_changed", orderId: null, orderNumber: null });
     if (customer && orderId && hub.hasCustomers(owner)) notifyCustomer(owner, orderId, event);
@@ -225,6 +259,19 @@ const notifyCustomer = (ownerId, orderId, event) => {
       for (const row of rows) hub?.toCustomer(ownerId, row.external_reference, { type: "order", event });
     })
     .catch(() => {});
+};
+
+/**
+ * Aviso directo al cliente que sigue un pago por su referencia (antes de que
+ * exista el pedido: pago aprobado, rechazado o devuelto). Nunca tira.
+ */
+const emitToCustomer = (ownerId, ref, event) => {
+  if (!hub || !ownerId || !ref) return;
+  try {
+    hub.toCustomer(String(ownerId), ref, { type: "order", event });
+  } catch {
+    // Complemento: el cliente tiene además su consulta de respaldo.
+  }
 };
 
 const allowed = (origin) => !origin || allowedOrigins().includes(origin.replace(/\/$/, ""));
@@ -265,4 +312,4 @@ const attach = (server) => {
 // Solo para tests: instala un hub ya armado.
 const setHubForTests = (value) => { hub = value; };
 
-module.exports = { createHub, attach, emit, WS_PATH, setHubForTests };
+module.exports = { createHub, attach, emit, emitToCustomer, WS_PATH, setHubForTests };

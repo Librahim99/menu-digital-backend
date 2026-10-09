@@ -17,6 +17,7 @@ const orderService = require("../services/orderService");
 const { cleanText } = require("../utils/validate");
 const connections = require("./connectionService");
 const mpApi = require("./mpApi");
+const realtime = require("../delivery/realtime");
 
 const REFUNDABLE = ["APPROVED", "PARTIALLY_REFUNDED"];
 const REASON_MAX = 200;
@@ -105,6 +106,8 @@ const markCompleted = async (refund, payment, refundedTotal) => {
       [payment.owner_id, payment.order_id, status],
     );
   });
+  // Devolución confirmada: el panel y el seguimiento del cliente se actualizan solos.
+  realtime.emit({ ownerId: payment.owner_id, event: "payment", orderId: Number(payment.order_id), customer: true });
 };
 
 const markFailed = (refund, detail) =>

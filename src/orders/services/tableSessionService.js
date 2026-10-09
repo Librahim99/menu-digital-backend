@@ -11,6 +11,7 @@ const { query, withTransaction } = require("../db/sql");
 const { OrdersError } = require("../errors");
 const { ACTIVE_STATUSES, NOT_BILLED_STATUSES, LIMITS } = require("../constants");
 const { withItems } = require("./orderDTO");
+const realtime = require("../delivery/realtime");
 
 const num = (value) => (value === null || value === undefined ? null : Number(value));
 
@@ -172,6 +173,7 @@ const closeSession = async (ownerId, sessionId, { force = false, actor, waiterId
       [session.id, actor.type, actor.name, totals.count, totals.amount]
     );
   });
+  realtime.emit({ ownerId, event: "table", staff: true });
   return getSession(ownerId, sessionId);
 };
 
@@ -187,6 +189,7 @@ const setGuests = async (ownerId, sessionId, guests, { waiterId = null } = {}) =
   const session = await getSessionRow({ query }, ownerId, sessionId);
   assertWaiterCanManage(session, waiterId);
   await query("UPDATE table_sessions SET guests = $2, updated_at = now() WHERE id = $1", [sessionId, value]);
+  realtime.emit({ ownerId, event: "table", staff: true });
   return getSession(ownerId, sessionId);
 };
 

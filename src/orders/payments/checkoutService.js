@@ -193,14 +193,21 @@ const getCheckoutStatus = async ({ owner, settings = null, ref }) => {
   const { rows } = await query(
     `SELECT p.*, o.number AS order_number, o.status AS order_status, o.created_at AS order_created_at,
             o.confirmed_at, o.ready_at, o.delivered_at, o.cancelled_at,
-            to_jsonb(o) ->> 'dispatched_at' AS dispatched_at
+            to_jsonb(o) ->> 'dispatched_at' AS dispatched_at, o.total AS order_total,
+            (SELECT jsonb_agg(jsonb_build_object('title', i.title, 'option', i.option_name, 'quantity', i.quantity)
+                              ORDER BY i.position, i.id)
+               FROM order_items i
+              WHERE i.order_id = o.id AND to_jsonb(i) ->> 'status' = 'cancelled') AS removed_items
        FROM order_online_payments p LEFT JOIN orders o ON o.id = p.order_id
       WHERE p.owner_id = $1 AND p.external_reference = $2`,
     [String(owner._id), ref],
   );
   const row = rows[0];
   if (!row) throw new OrdersError(404, "Pago no encontrado.");
+  // El local quitó productos (falta de stock): qué se quitó y cuánto vale ahora el pedido.
+  const removedItems = Array.isArray(row.removed_items) ? row.removed_items : [];
   return {
+    ...(removedItems.length > 0 ? { removedItems, orderTotal: Number(row.order_total) } : {}),
     status: row.status,
     expired: row.status === "PENDING" && new Date(row.expires_at).getTime() < Date.now(),
     total: Number(row.amount),

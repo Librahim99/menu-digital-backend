@@ -11,8 +11,11 @@ const sectorService = require("../services/sectorService");
 const ticketService = require("../services/ticketService");
 const { businessNameOf, findOwnerById } = require("../services/menuCatalog");
 const { positiveInt } = require("../utils/validate");
+const realtime = require("../delivery/realtime");
 
 const ownerIdOf = (req) => String(req.user._id);
+// Cambió un sector o sus equipos: el panel y las pantallas de sector vuelven a consultar.
+const notifyDevices = (ownerId) => realtime.emit({ ownerId, event: "devices", staff: true });
 const idParam = (req, name = "id") => positiveInt(req.params[name], { field: "Identificador" });
 
 // ── Dueño: configuración ─────────────────────
@@ -32,11 +35,14 @@ const createSector = route(async (req, res) => {
 });
 
 const updateSector = route(async (req, res) => {
-  res.json({ sector: await sectorService.updateSector(ownerIdOf(req), idParam(req), req.body) });
+  const sector = await sectorService.updateSector(ownerIdOf(req), idParam(req), req.body);
+  notifyDevices(ownerIdOf(req));
+  res.json({ sector });
 });
 
 const deleteSector = route(async (req, res) => {
   await sectorService.deleteSector(ownerIdOf(req), idParam(req));
+  notifyDevices(ownerIdOf(req));
   res.status(204).end();
 });
 
@@ -50,11 +56,13 @@ const issuePairingCode = route(async (req, res) => {
 
 const revokeSessions = route(async (req, res) => {
   await sectorService.revokeSessions(ownerIdOf(req), idParam(req));
+  notifyDevices(ownerIdOf(req));
   res.status(204).end();
 });
 
 const revokeSession = route(async (req, res) => {
   await sectorService.revokeSession(ownerIdOf(req), idParam(req), idParam(req, "sessionId"));
+  notifyDevices(ownerIdOf(req));
   res.status(204).end();
 });
 
@@ -95,6 +103,7 @@ const pair = route(async (req, res) => {
     userAgent: req.headers["user-agent"],
   });
   const owner = await findOwnerById(ownerId);
+  notifyDevices(ownerId);
   res.status(201).json({ token, ...stationPayload(owner, sector) });
 });
 
@@ -104,6 +113,7 @@ const me = route(async (req, res) => {
 
 const logout = route(async (req, res) => {
   await sectorService.endSession(req.stationSession.sessionId);
+  notifyDevices(stationOwnerId(req));
   res.status(204).end();
 });
 

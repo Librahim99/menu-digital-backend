@@ -11,6 +11,7 @@ const {
   parseOrderLines, parseService, positiveInt, optionalPositiveInt, cleanText, optionalUuid,
 } = require("../utils/validate");
 const { LIMITS } = require("../constants");
+const realtime = require("../delivery/realtime");
 
 const sessionPayload = (owner, settings, waiter, session = null) => ({
   waiter,
@@ -29,6 +30,8 @@ const pair = route(async (req, res) => {
     userAgent: req.headers["user-agent"],
   });
   const owner = await findOwnerById(ownerId);
+  // El panel ve el dispositivo recién vinculado sin esperar.
+  realtime.emit({ ownerId, event: "devices" });
   res.status(201).json({ token, ...sessionPayload(owner, null, waiter) });
 });
 
@@ -39,6 +42,7 @@ const me = route(async (req, res) => {
 
 const logout = route(async (req, res) => {
   await waiterService.endSession(req.waiterSession.sessionId);
+  realtime.emit({ ownerId: ownerIdOf(req), event: "devices" });
   res.status(204).end();
 });
 

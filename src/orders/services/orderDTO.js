@@ -18,7 +18,19 @@ const toItemDTO = (row) => ({
   notes: row.notes,
   // Sector de la comanda a la que fue la línea (null sin sectores).
   sectorName: row.ticket_sector_name ?? null,
+  // Entrega en partes: cuándo se entregó esta línea (null si todavía no).
+  deliveredAt: row.delivered_at ?? null,
 });
+
+// Línea quitada del pedido (falta de stock, error…): no suma al total.
+const toRemovedItemDTO = (row) => ({
+  ...toItemDTO(row),
+  reason: row.status_reason ?? null,
+  removedAt: row.cancelled_at ?? null,
+});
+
+const isRemoved = (row) => row.status === "cancelled";
+const cents = (value) => Math.round(Number(value) * 100);
 
 // Comandas del pedido (una por sector), con su avance.
 const toTicketSummary = (row) => ({
@@ -39,7 +51,7 @@ const dispatchedAtOf = (row) => {
   return row.dispatched_at;
 };
 
-const toOrderDTO = (row, items = [], tickets = []) => ({
+const toOrderDTO = (row, items = [], tickets = [], { removedItems = [], refundDue = 0 } = {}) => ({
   id: Number(row.id),
   shiftId: Number(row.shift_id),
   number: row.number,
@@ -76,7 +88,37 @@ const toOrderDTO = (row, items = [], tickets = []) => ({
   returnedAt: row.returned_at,
   items,
   tickets,
+  // Productos quitados del pedido (no están en `items` ni en el total).
+  removedItems,
+  // Pagado online y con productos quitados: lo que falta devolverle al cliente.
+  refundDue,
 });
+
+// Lo cobrado online que ya no corresponde al pedido (se quitaron productos):
+// cobrado − devuelto − devoluciones en curso − total actual. Solo consulta los
+// pagos de pedidos online con algo quitado, así el resto no depende de ellos.
+const refundDueByOrder = async (rows, removedByOrder, runner) => {
+  const ids = rows
+    .filter((row) => row.payment_mode === "mercadopago" && removedByOrder.has(String(row.id)))
+    .map((row) => row.id);
+  const due = new Map();
+  if (ids.length === 0) return due;
+  const { rows: payments } = await runner.query(
+    `SELECT p.order_id, p.amount, p.refunded_amount,
+            coalesce((SELECT sum(r.amount) FROM order_refunds r
+                      WHERE r.online_payment_id = p.id AND r.status = 'PENDING'), 0) AS pending_amount
+     FROM order_online_payments p
+     WHERE p.order_id = ANY($1) AND p.status IN ('APPROVED', 'PARTIALLY_REFUNDED')`,
+    [ids]
+  );
+  const totals = new Map(rows.map((row) => [String(row.id), cents(row.total)]));
+  for (const payment of payments) {
+    const key = String(payment.order_id);
+    const left = cents(payment.amount) - cents(payment.refunded_amount) - cents(payment.pending_amount) - totals.get(key);
+    if (left > 0) due.set(key, left / 100);
+  }
+  return due;
+};
 
 // Trae las líneas (y las comandas) de varios pedidos en una sola consulta.
 const withItems = async (rows, runner = { query }) => {
@@ -90,20 +132,24 @@ const withItems = async (rows, runner = { query }) => {
     [ids]
   );
   const byOrder = new Map();
+  const removedByOrder = new Map();
   const ticketsByOrder = new Map();
   for (const item of itemRows) {
     const key = String(item.order_id);
-    if (!byOrder.has(key)) byOrder.set(key, []);
-    byOrder.get(key).push(toItemDTO(item));
+    const target = isRemoved(item) ? removedByOrder : byOrder;
+    if (!target.has(key)) target.set(key, []);
+    target.get(key).push(isRemoved(item) ? toRemovedItemDTO(item) : toItemDTO(item));
     if (item.ticket_id !== null && item.ticket_id !== undefined) {
       if (!ticketsByOrder.has(key)) ticketsByOrder.set(key, new Map());
       ticketsByOrder.get(key).set(String(item.ticket_id), toTicketSummary(item));
     }
   }
+  const refundDue = await refundDueByOrder(rows, removedByOrder, runner);
   return rows.map((row) => toOrderDTO(
     row,
     byOrder.get(String(row.id)) ?? [],
-    [...(ticketsByOrder.get(String(row.id))?.values() ?? [])]
+    [...(ticketsByOrder.get(String(row.id))?.values() ?? [])],
+    { removedItems: removedByOrder.get(String(row.id)) ?? [], refundDue: refundDue.get(String(row.id)) ?? 0 }
   ));
 };
 

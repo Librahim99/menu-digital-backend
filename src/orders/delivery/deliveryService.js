@@ -694,7 +694,10 @@ const toCourierOrder = (order, items, assignment, { mine, config }) => ({
 const itemsByOrder = async (orderIds) => {
   if (orderIds.length === 0) return new Map();
   const { rows } = await query(
-    "SELECT order_id, title, option_name, quantity, notes FROM order_items WHERE order_id = ANY($1) ORDER BY order_id, position, id",
+    // Sin los productos que el local quitó del pedido (el repartidor lleva lo que quedó).
+    `SELECT order_id, title, option_name, quantity, notes FROM order_items
+     WHERE order_id = ANY($1) AND coalesce(to_jsonb(order_items) ->> 'status', 'active') <> 'cancelled'
+     ORDER BY order_id, position, id`,
     [orderIds]
   );
   const byOrder = new Map();
