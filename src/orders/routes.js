@@ -131,6 +131,10 @@ router.post("/orders/:id/refund", ownerOnly, mpRefunds.requestRefund);
 router.post("/orders/:id/refunds/:refundId/retry", ownerOnly, mpRefunds.retryRefund);
 router.post("/orders/:id/dispatch", ownerOnly, owner.dispatchOrder);
 router.patch("/orders/:id/waiter", ownerOnly, owner.assignOrderWaiter);
+// Un producto del pedido: quitarlo (falta de stock…), restaurarlo o entregarlo antes que el resto.
+router.post("/orders/:id/items/:itemId/remove", ownerOnly, owner.removeOrderItem);
+router.post("/orders/:id/items/:itemId/restore", ownerOnly, owner.restoreOrderItem);
+router.patch("/orders/:id/items/:itemId/delivered", ownerOnly, owner.setOrderItemDelivered);
 
 // Delivery: entregas en curso, repartidores y auditoría. Las rutas no dependen del
 // interruptor para poder consultar y resolver lo pendiente; cada operación que

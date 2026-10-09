@@ -4,10 +4,12 @@ const { route, OrdersError } = require("../errors");
 const settingsService = require("../services/settingsService");
 const shiftService = require("../services/shiftService");
 const orderService = require("../services/orderService");
+const orderItemService = require("../services/orderItemService");
 const waiterService = require("../services/waiterService");
 const tableSessionService = require("../services/tableSessionService");
 const cashService = require("../services/cashService");
 const deliveryService = require("../delivery/deliveryService");
+const realtime = require("../delivery/realtime");
 const {
   parseOrderLines, parseService, cleanText, optionalPositiveInt, positiveInt, optionalUuid,
 } = require("../utils/validate");
@@ -17,6 +19,9 @@ const ownerIdOf = (req) => String(req.user._id);
 const idParam = (req, name = "id") => positiveInt(req.params[name], { field: "Identificador" });
 const pageParam = (req) => optionalPositiveInt(req.query.page, { field: "Página", max: 10_000 }) ?? 1;
 // Quién hace el cambio desde el panel (registro de estados y cierres).
+// Cambió un operador o sus dispositivos: el panel y los tomadores vuelven a consultar
+// (un dispositivo al que se le cerró el acceso se entera en el momento).
+const notifyDevices = (req) => realtime.emit({ ownerId: ownerIdOf(req), event: "devices", staff: true });
 const panelActor = (req) => ({ type: "panel", id: ownerIdOf(req), name: "Panel" });
 
 // ── Configuración ────────────────────────────
@@ -132,6 +137,33 @@ const dispatchOrder = route(async (req, res) => {
   res.json({ order: await orderService.markDispatched(ownerIdOf(req), idParam(req)) });
 });
 
+// ── Productos de un pedido en curso ──────────
+// Quitar (falta de stock, error de carga), restaurar y entregar en partes.
+
+const removeOrderItem = route(async (req, res) => {
+  const body = req.body ?? {};
+  const order = await orderItemService.removeItem(ownerIdOf(req), idParam(req), idParam(req, "itemId"), {
+    quantity: optionalPositiveInt(body.quantity, { field: "Cantidad", max: LIMITS.quantityPerLine }),
+    reason: cleanText(body.reason, LIMITS.itemReasonLength),
+    actor: panelActor(req),
+  });
+  res.json({ order });
+});
+
+const restoreOrderItem = route(async (req, res) => {
+  const order = await orderItemService.restoreItem(ownerIdOf(req), idParam(req), idParam(req, "itemId"), {
+    actor: panelActor(req),
+  });
+  res.json({ order });
+});
+
+const setOrderItemDelivered = route(async (req, res) => {
+  const order = await orderItemService.setItemDelivered(
+    ownerIdOf(req), idParam(req), idParam(req, "itemId"), req.body?.delivered, { actor: panelActor(req) },
+  );
+  res.json({ order });
+});
+
 const assignOrderWaiter = route(async (req, res) => {
   const waiterId = optionalPositiveInt(req.body?.waiterId, { field: "Operador" });
   const waiter = waiterId ? await waiterService.getWaiter(ownerIdOf(req), waiterId) : null;
@@ -174,6 +206,7 @@ const listShifts = route(async (req, res) => {
 
 const openShift = route(async (req, res) => {
   const shift = await shiftService.openShift(req.orderSettings);
+  realtime.emit({ ownerId: ownerIdOf(req), event: "shift", staff: true });
   res.status(201).json({ shift: shiftService.toShiftDTO(shift) });
 });
 
@@ -193,6 +226,7 @@ const closeShift = route(async (req, res) => {
     notes: cleanText(req.body?.notes, 300),
     force: req.body?.force === true,
   });
+  realtime.emit({ ownerId: ownerIdOf(req), event: "shift", staff: true });
   res.json({ shift });
 });
 
@@ -253,11 +287,14 @@ const createWaiter = route(async (req, res) => {
 });
 
 const updateWaiter = route(async (req, res) => {
-  res.json({ waiter: await waiterService.updateWaiter(ownerIdOf(req), idParam(req), req.body) });
+  const waiter = await waiterService.updateWaiter(ownerIdOf(req), idParam(req), req.body);
+  notifyDevices(req);
+  res.json({ waiter });
 });
 
 const deleteWaiter = route(async (req, res) => {
   await waiterService.deleteWaiter(ownerIdOf(req), idParam(req));
+  notifyDevices(req);
   res.status(204).end();
 });
 
@@ -271,11 +308,13 @@ const listWaiterSessions = route(async (req, res) => {
 
 const revokeWaiterSessions = route(async (req, res) => {
   await waiterService.revokeSessions(ownerIdOf(req), idParam(req));
+  notifyDevices(req);
   res.status(204).end();
 });
 
 const revokeWaiterSession = route(async (req, res) => {
   await waiterService.revokeSession(ownerIdOf(req), idParam(req), idParam(req, "sessionId"));
+  notifyDevices(req);
   res.status(204).end();
 });
 
@@ -288,6 +327,9 @@ module.exports = {
   createOrder,
   updateOrderStatus,
   dispatchOrder,
+  removeOrderItem,
+  restoreOrderItem,
+  setOrderItemDelivered,
   assignOrderWaiter,
   listTableSessions,
   getTableSession,

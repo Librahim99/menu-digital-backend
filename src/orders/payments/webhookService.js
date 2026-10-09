@@ -19,6 +19,7 @@ const orderService = require("../services/orderService");
 const connections = require("./connectionService");
 const refunds = require("./refundService");
 const mpApi = require("./mpApi");
+const realtime = require("../delivery/realtime");
 
 const REF_RE = /^[0-9a-f]{48}$/;
 const AMOUNT_TOLERANCE = 0.005;
@@ -183,6 +184,10 @@ const handle = async ({ mpUserId, paymentId, eventId }) => {
   }
 
   await finishEvent(eventId, "applied", ownerId);
+  // El cliente que espera en la pantalla de retorno se entera sin consultar cada
+  // pocos segundos; el panel, si cambió el pago de un pedido que ya existía.
+  realtime.emitToCustomer(ownerId, ref, "payment");
+  if (row.order_id) realtime.emit({ ownerId, event: "payment", orderId: Number(row.order_id) });
   return "applied";
 };
 

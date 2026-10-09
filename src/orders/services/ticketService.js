@@ -15,6 +15,11 @@ const { OrdersError } = require("../errors");
 const { ACTIVE_STATUSES, TICKET_TRANSITIONS, LIMITS } = require("../constants");
 const { loadRouting } = require("./sectorService");
 const { groupLinesBySector } = require("../utils/sectorRouting");
+const realtime = require("../delivery/realtime");
+
+// Línea que sigue en el pedido (no se quitó). Lee la columna vía to_jsonb para
+// que estas consultas funcionen también sin la migración 008 aplicada.
+const ACTIVE_LINE = (alias) => `coalesce(to_jsonb(${alias}) ->> 'status', 'active') <> 'cancelled'`;
 
 /**
  * Crea las comandas que falten para un pedido y reactiva las anuladas.
@@ -27,7 +32,7 @@ const issueTickets = async (client, { ownerId, orderId }) => {
 
   const { rows: pending } = await client.query(
     `SELECT id, item_id, category_id, section_id FROM order_items
-     WHERE order_id = $1 AND ticket_id IS NULL ORDER BY position, id`,
+     WHERE order_id = $1 AND ticket_id IS NULL AND ${ACTIVE_LINE("order_items")} ORDER BY position, id`,
     [orderId]
   );
   const lines = pending.map((row) => ({
@@ -48,11 +53,13 @@ const issueTickets = async (client, { ownerId, orderId }) => {
     );
   }
 
-  // Reconfirmado: lo anulado vuelve a entrar como nuevo (y a imprimirse).
+  // Reconfirmado: lo anulado vuelve a entrar como nuevo (y a imprimirse), salvo
+  // la comanda a la que no le quedó ningún producto (se quitaron todos).
   await client.query(
     `UPDATE order_tickets SET status = 'new', cancelled_at = NULL, started_at = NULL, done_at = NULL,
        printed_at = NULL, updated_at = now()
-     WHERE order_id = $1 AND status = 'cancelled'`,
+     WHERE order_id = $1 AND status = 'cancelled'
+       AND EXISTS (SELECT 1 FROM order_items i WHERE i.ticket_id = order_tickets.id AND ${ACTIVE_LINE("i")})`,
     [orderId]
   );
 };
@@ -61,6 +68,16 @@ const cancelTickets = (client, orderId) =>
   client.query(
     `UPDATE order_tickets SET status = 'cancelled', cancelled_at = now(), updated_at = now()
      WHERE order_id = $1 AND status <> 'cancelled'`,
+    [orderId]
+  );
+
+// Se quitaron productos del pedido: la comanda que quedó sin nada que preparar
+// se anula (el sector ve "ANULADA"); las demás siguen con lo que les queda.
+const cancelEmptyTickets = (client, orderId) =>
+  client.query(
+    `UPDATE order_tickets SET status = 'cancelled', cancelled_at = now(), updated_at = now()
+     WHERE order_id = $1 AND status <> 'cancelled'
+       AND NOT EXISTS (SELECT 1 FROM order_items i WHERE i.ticket_id = order_tickets.id AND ${ACTIVE_LINE("i")})`,
     [orderId]
   );
 
@@ -78,7 +95,7 @@ const syncTicketsWithOrder = async (client, { ownerId, orderId, from, to }) => {
 
 // ── Pantalla del sector ──────────────────────
 
-const toTicketDTO = (row, items = []) => ({
+const toTicketDTO = (row, items = [], removedItems = []) => ({
   id: Number(row.id),
   orderId: Number(row.order_id),
   sectorId: Number(row.sector_id),
@@ -103,6 +120,8 @@ const toTicketDTO = (row, items = []) => ({
   },
   // Sin precios: al sector no le hacen falta.
   items,
+  // Productos que el local quitó del pedido: el sector ya no los prepara.
+  removedItems,
 });
 
 const SELECT_TICKETS = `
@@ -113,17 +132,20 @@ const SELECT_TICKETS = `
 const withTicketItems = async (rows) => {
   if (rows.length === 0) return [];
   const { rows: items } = await query(
-    `SELECT ticket_id, title, option_name, quantity, notes FROM order_items
+    `SELECT ticket_id, title, option_name, quantity, notes, to_jsonb(order_items) ->> 'status' AS line_status
+     FROM order_items
      WHERE ticket_id = ANY($1) ORDER BY ticket_id, position, id`,
     [rows.map((row) => row.id)]
   );
   const byTicket = new Map();
+  const removedByTicket = new Map();
   for (const item of items) {
     const key = String(item.ticket_id);
-    if (!byTicket.has(key)) byTicket.set(key, []);
-    byTicket.get(key).push({ title: item.title, option: item.option_name, quantity: item.quantity, notes: item.notes });
+    const target = item.line_status === "cancelled" ? removedByTicket : byTicket;
+    if (!target.has(key)) target.set(key, []);
+    target.get(key).push({ title: item.title, option: item.option_name, quantity: item.quantity, notes: item.notes });
   }
-  return rows.map((row) => toTicketDTO(row, byTicket.get(String(row.id)) ?? []));
+  return rows.map((row) => toTicketDTO(row, byTicket.get(String(row.id)) ?? [], removedByTicket.get(String(row.id)) ?? []));
 };
 
 /**
@@ -185,6 +207,8 @@ const updateTicketStatus = async (ownerId, sectorId, ticketId, status) => {
     if (status === "new") sets.push("started_at = NULL");
     await client.query(`UPDATE order_tickets SET ${sets.join(", ")} WHERE id = $1`, [ticketId, status]);
   });
+  // El panel ve el avance del sector y los otros equipos del sector, el cambio.
+  realtime.emit({ ownerId, event: "ticket", staff: true });
   return readTicket(ticketId);
 };
 
@@ -195,12 +219,15 @@ const markPrinted = async (ownerId, sectorId, ticketId) => {
     "UPDATE order_tickets SET printed_at = now(), print_count = print_count + 1 WHERE id = $1",
     [ticketId]
   );
+  // Con dos equipos en el sector, el otro deja de intentar imprimirla.
+  realtime.emit({ ownerId, event: "ticket", staff: true });
   return readTicket(ticketId);
 };
 
 module.exports = {
   issueTickets,
   cancelTickets,
+  cancelEmptyTickets,
   syncTicketsWithOrder,
   listSectorTickets,
   updateTicketStatus,

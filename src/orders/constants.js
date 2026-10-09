@@ -66,6 +66,7 @@ const LIMITS = {
   deliveryAddressLength: 200,
   deliveryNotesLength: 200,
   statusReasonLength: 200,
+  itemReasonLength: 120,
   cashierNameLength: 60,
   registerNameLength: 40,
   maxGuests: 200,

@@ -81,7 +81,7 @@ const createOrder = async ({
   const status = source === "customer" ? "pending" : "confirmed";
 
   try {
-    return await withTransaction(async (client) => {
+    const created = await withTransaction(async (client) => {
       if (clientRequestId) {
         const existing = await findByClientRequest(client, ownerId, clientRequestId);
         if (existing) return { order: (await withItems([existing], client))[0], duplicate: true };
@@ -153,6 +153,15 @@ const createOrder = async ({
 
       return { order: (await withItems([order], client))[0], duplicate: false };
     });
+    // Pedido nuevo: el panel, los mozos y los sectores se enteran al instante
+    // (y los repartidores, si es un delivery que ya entra confirmado).
+    if (!created.duplicate) {
+      realtime.emit({
+        ownerId, event: "order_created", orderId: created.order.id, orderNumber: created.order.number,
+        staff: true, openList: serviceType === "delivery",
+      });
+    }
+    return created;
   } catch (error) {
     // Dos reintentos simultáneos del mismo envío: el segundo choca con el
     // UNIQUE de client_request_id y devuelve el pedido del primero.
@@ -270,7 +279,7 @@ const updateStatus = async (ownerId, orderId, status, { reason = null, actor = {
     return applyStatusChange(client, ownerId, order, status, { reason, actor });
   });
   // Los avisos salen recién con la transacción confirmada.
-  realtime.emit({ ownerId, event: "order_status", orderId: Number(orderId), orderNumber: result.number, customer: true, openList: true });
+  realtime.emit({ ownerId, event: "order_status", orderId: Number(orderId), orderNumber: result.number, customer: true, openList: true, staff: true });
   for (const event of deliveryEvents) realtime.emit({ ownerId, ...event });
   return result;
 };
@@ -311,6 +320,7 @@ const assignWaiter = async (ownerId, orderId, waiter) => {
      WHERE owner_id = $1 AND id = $2 RETURNING *`,
     [ownerId, orderId, waiter?.id ?? null, waiter?.name ?? null]
   );
+  realtime.emit({ ownerId, event: "order_waiter", orderId: Number(orderId), staff: true });
   return (await withItems(rows))[0];
 };
 

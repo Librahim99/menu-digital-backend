@@ -106,6 +106,7 @@ const shiftSummary = async (ownerId, shiftId) => {
       `SELECT oi.title, oi.option_name, sum(oi.quantity)::int AS quantity, sum(oi.quantity * oi.unit_price) AS amount
        FROM order_items oi JOIN orders o ON o.id = oi.order_id
        WHERE o.owner_id = $1 AND o.shift_id = $2 AND NOT (o.status = ANY($3))
+         AND coalesce(to_jsonb(oi) ->> 'status', 'active') <> 'cancelled'
        GROUP BY 1, 2 ORDER BY quantity DESC, amount DESC LIMIT 10`,
       params
     ),
