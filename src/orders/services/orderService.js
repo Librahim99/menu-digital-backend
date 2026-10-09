@@ -58,19 +58,22 @@ const EMPTY_CUSTOMER = { name: null, phone: null, address: null, deliveryNotes: 
  * @param {string|null} input.fingerprint      solo comensales: frecuencia y duplicados
  * @param {number} input.cooldownMs            solo comensales: espera entre pedidos
  * @param {{type,id,name}} input.actor         quién lo cargó (registro de estados)
+ * @param {{lines:Array,total:number}|null} input.priced  líneas ya cotizadas por el servidor
+ *        (pedidos online: se cobró ese importe, no se vuelve a cotizar)
+ * @param {{mode:string,status:string}|null} input.payment  pago online ya acreditado
  * @returns {{ order: object, duplicate: boolean }}
  */
 const createOrder = async ({
   owner, settings, source, lines, serviceType = "table", tableNumber = null, customer = EMPTY_CUSTOMER,
   waiter = null, waiterSessionId = null, notes = null, clientRequestId = null, fingerprint = null,
-  cooldownMs = LIMITS.customerCooldownMs, actor = null,
+  cooldownMs = LIMITS.customerCooldownMs, actor = null, priced: presetPriced = null, payment = null,
 }) => {
   if (!SERVICE_TYPES.includes(serviceType)) throw new OrdersError(400, "Tipo de pedido inválido.");
   if (serviceType === "table" && !tableNumber) throw new OrdersError(400, "Indicá el número de mesa.");
   const table = serviceType === "table" ? tableNumber : null;
 
   const ownerId = String(owner._id);
-  const priced = await priceOrderLines(owner, lines);
+  const priced = presetPriced ?? await priceOrderLines(owner, lines);
   const contentHash = fingerprint ? contentHashOf(lines, table) : null;
   // Los pedidos del personal entran confirmados; los del comensal esperan
   // que el local los confirme.
@@ -108,16 +111,27 @@ const createOrder = async ({
         [shift.id]
       );
 
+      const values = [ownerId, shift.id, next.rows[0].number, source, status, serviceType, table, tableSession?.id ?? null,
+        cash.id, customer.name, customer.phone, customer.address, customer.deliveryNotes, waiter?.id ?? null,
+        waiter?.name ?? null, waiterSessionId, notes, priced.total, clientRequestId, fingerprint, contentHash,
+        status === "confirmed" ? new Date() : null];
+      const columns = [
+        "owner_id", "shift_id", "number", "source", "status", "service_type", "table_number", "table_session_id",
+        "cash_session_id", "customer_name", "customer_phone", "delivery_address", "delivery_notes", "waiter_id", "waiter_name",
+        "waiter_session_id", "notes", "subtotal", "total", "client_request_id", "client_fingerprint", "content_hash", "confirmed_at",
+      ];
+      // subtotal y total comparten el mismo valor ($18).
+      const placeholders = columns.map((_, index) => `$${index < 18 ? index + 1 : index}`);
+      // Las columnas de pago solo se tocan en pedidos online: así el resto de
+      // los pedidos no depende de que la migración de pagos esté aplicada.
+      if (payment) {
+        values.push(payment.mode, payment.status);
+        columns.push("payment_mode", "payment_status");
+        placeholders.push(`$${values.length - 1}`, `$${values.length}`);
+      }
       const { rows: [order] } = await client.query(
-        `INSERT INTO orders (owner_id, shift_id, number, source, status, service_type, table_number, table_session_id,
-           cash_session_id, customer_name, customer_phone, delivery_address, delivery_notes, waiter_id, waiter_name,
-           waiter_session_id, notes, subtotal, total, client_request_id, client_fingerprint, content_hash, confirmed_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $18, $19, $20, $21, $22)
-         RETURNING *`,
-        [ownerId, shift.id, next.rows[0].number, source, status, serviceType, table, tableSession?.id ?? null,
-          cash.id, customer.name, customer.phone, customer.address, customer.deliveryNotes, waiter?.id ?? null,
-          waiter?.name ?? null, waiterSessionId, notes, priced.total, clientRequestId, fingerprint, contentHash,
-          status === "confirmed" ? new Date() : null]
+        `INSERT INTO orders (${columns.join(", ")}) VALUES (${placeholders.join(", ")}) RETURNING *`,
+        values
       );
 
       for (const line of priced.lines) {

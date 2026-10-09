@@ -19,7 +19,7 @@ const {
 } = require("../../utils/publicMenu");
 const { OrdersError } = require("../errors");
 
-const OWNER_SELECT = "slug active subscription subscriptionExpiresAt contactInfo.businessName";
+const OWNER_SELECT = "slug active subscription subscriptionExpiresAt contactInfo.businessName hasDelivery hasTakeAway";
 
 const isProOwner = (user) =>
   getSubscriptionState(user.subscription, user.subscriptionExpiresAt).effectivePlan === "pro";

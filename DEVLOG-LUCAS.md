@@ -468,3 +468,34 @@ sus observaciones históricas. No hubo deploy, consultas a Atlas ni pagos reales
 - Pendiente antes de liberar: desplegar de forma coordinada y ejecutar el E2E real
   autorizado contra MercadoPago/Atlas, comprobando payload, checkout, transacción,
   webhook, plan/vencimiento, CRM, redirect y sincronización del dashboard.
+
+## 08-10-2026 — Pedidos de delivery / take away con Mercado Pago (tarjeta 148)
+
+Cobro online de pedidos en la cuenta de Mercado Pago de cada local (OAuth), sin
+comisión ni manejo de fondos de la plataforma. Todo vive en `src/orders/payments/`
+y no toca la integración de suscripciones (`paymentRoutes` / `paymentController`).
+
+- Migración `004_pagos_mercado_pago.sql` (aditiva, **sin aplicar**): `orders.payment_mode`
+  / `payment_status`, `order_mp_connections` (tokens cifrados), `order_mp_oauth_states`,
+  `order_online_payments`, `order_refunds`, `order_mp_webhook_events`.
+- OAuth por local: conectar / callback con `state` de un solo uso / estado / desconectar;
+  AES-256-GCM con `ORDERS_CREDENTIALS_KEY`; renovación del token (el refresh rota).
+- Checkout público sin QR (`/api/orders/public/:slug/online-*`): cotiza en el servidor y crea
+  la preferencia con el token del local. El pedido **no existe en `orders` hasta que el pago
+  está aprobado** (el carrito vive en `order_online_payments.draft`): no ensucia tablero ni caja.
+- Webhook propio (`POST /api/orders/payments/webhook`): firma, consulta del pago a la API de MP
+  con el token del local, validación de cuenta/importe/moneda, idempotencia, eventos fuera de
+  orden, pagos duplicados señalados sin pisar al primero. Pago aprobado ⇒ pedido `pending`
+  (no aceptado) con `payment_status = APPROVED`.
+- Devoluciones total / parcial desde el panel (`/orders/:id/refund`): `PENDING` hasta confirmar
+  con MP, `FAILED` ante rechazo definitivo, reintento con la misma `X-Idempotency-Key`; con
+  `cancelOrder` el pedido se anula solo si la devolución quedó confirmada.
+- Frontend: sección Pagos y opción `onlineOrdering` en la configuración de pedidos, chip de
+  pago + Reembolsar en tablero e historial, "Pagar con Mercado Pago" en el carrito público
+  y pantalla de retorno (`?pago=`) que consulta el resultado al servidor.
+- Validación: `npm test` → **670/670** (67 tests nuevos de pagos); frontend `tsc -b` y
+  `eslint .` sin errores. Los tests `.ts` del frontend requieren Node >= 22.6 (acá hay Node 20).
+- Sin deploy, sin migración aplicada, sin pagos reales ni E2E contra Mercado Pago.
+- Pendiente antes de liberar: crear la app de MP de pedidos y cargar las variables nuevas,
+  `npm run orders:migrate` en Neon, y probar en vivo OAuth + pago + webhook + devolución.
+  Confirmar con un pago real que la notificación trae `user_id` en el body y qué secret firma.
