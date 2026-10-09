@@ -2,7 +2,7 @@
 // Además de tomar pedidos, el operador maneja sus mesas abiertas (la cuenta
 // de cada una y su cierre) y ve el historial de las mesas que cerró.
 
-const { route } = require("../errors");
+const { OrdersError, route } = require("../errors");
 const waiterService = require("../services/waiterService");
 const orderService = require("../services/orderService");
 const tableSessionService = require("../services/tableSessionService");
@@ -46,7 +46,11 @@ const createOrder = route(async (req, res) => {
   const settings = req.orderSettings;
   const body = req.body ?? {};
   const { waiterId, name, sessionId } = req.waiterSession;
-  const { serviceType, tableNumber, customer } = parseService(body, { tableCount: settings.table_count });
+  // El mozo toma pedidos de mesa. Barra, take away y delivery se cargan desde el panel.
+  if (body.serviceType !== undefined && body.serviceType !== "table") {
+    throw new OrdersError(403, "Los mozos solo toman pedidos de mesa.", "WAITER_TABLE_ONLY");
+  }
+  const { serviceType, tableNumber, customer } = parseService({ ...body, serviceType: "table" }, { tableCount: settings.table_count, allowed: ["table"] });
   const { order, duplicate } = await orderService.createOrder({
     owner: req.owner,
     settings,

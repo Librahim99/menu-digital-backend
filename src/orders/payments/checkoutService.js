@@ -192,7 +192,8 @@ const getCheckoutStatus = async ({ owner, settings = null, ref }) => {
   if (typeof ref !== "string" || !REF_RE.test(ref)) throw new OrdersError(404, "Pago no encontrado.");
   const { rows } = await query(
     `SELECT p.*, o.number AS order_number, o.status AS order_status, o.created_at AS order_created_at,
-            o.confirmed_at, o.ready_at, o.delivered_at, o.cancelled_at
+            o.confirmed_at, o.ready_at, o.delivered_at, o.cancelled_at,
+            to_jsonb(o) ->> 'dispatched_at' AS dispatched_at
        FROM order_online_payments p LEFT JOIN orders o ON o.id = p.order_id
       WHERE p.owner_id = $1 AND p.external_reference = $2`,
     [String(owner._id), ref],
@@ -210,6 +211,11 @@ const getCheckoutStatus = async ({ owner, settings = null, ref }) => {
     createdAt: row.order_created_at ?? null,
     confirmedAt: row.confirmed_at ?? null,
     readyAt: row.ready_at ?? null,
+    // Delivery que ya salió (solo vale si fue después de quedar listo).
+    dispatchedAt: row.order_status === "ready" && row.dispatched_at
+      && (!row.ready_at || new Date(row.dispatched_at).getTime() >= new Date(row.ready_at).getTime())
+      ? row.dispatched_at
+      : null,
     deliveredAt: row.delivered_at ?? null,
     cancelledAt: row.cancelled_at ?? null,
     refund: row.status === "REFUNDED" ? "full" : row.status === "PARTIALLY_REFUNDED" ? "partial" : "none",

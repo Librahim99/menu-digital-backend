@@ -112,6 +112,11 @@ const updateOrderStatus = route(async (req, res) => {
   res.json({ order });
 });
 
+// Delivery: el pedido salió del local (entre Listo y Entregado).
+const dispatchOrder = route(async (req, res) => {
+  res.json({ order: await orderService.markDispatched(ownerIdOf(req), idParam(req)) });
+});
+
 const assignOrderWaiter = route(async (req, res) => {
   const waiterId = optionalPositiveInt(req.body?.waiterId, { field: "Operador" });
   const waiter = waiterId ? await waiterService.getWaiter(ownerIdOf(req), waiterId) : null;
@@ -267,6 +272,7 @@ module.exports = {
   listOrders,
   createOrder,
   updateOrderStatus,
+  dispatchOrder,
   assignOrderWaiter,
   listTableSessions,
   getTableSession,

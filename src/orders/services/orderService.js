@@ -10,7 +10,7 @@ const { lockOrOpenShift } = require("./shiftService");
 const { lockOrOpenCashSession } = require("./cashService");
 const { lockOrOpenTableSession } = require("./tableSessionService");
 const { priceOrderLines } = require("./menuCatalog");
-const { toOrderDTO, withItems } = require("./orderDTO");
+const { toOrderDTO, withItems, dispatchedAtOf } = require("./orderDTO");
 const { syncTicketsWithOrder } = require("./ticketService");
 
 // Huella del contenido: mismos productos, variantes, cantidades, aclaraciones
@@ -252,6 +252,26 @@ const updateStatus = async (ownerId, orderId, status, { reason = null, actor = {
   });
 };
 
+/**
+ * Delivery listo → "salió del local". No cambia el estado del pedido: solo
+ * registra la hora. Idempotente (marcarlo dos veces no la pisa).
+ */
+const markDispatched = async (ownerId, orderId) => withTransaction(async (client) => {
+  const order = await getOwnedOrder(client, ownerId, orderId, { lock: true });
+  if (order.service_type !== "delivery") {
+    throw new OrdersError(409, "Solo los pedidos de delivery salen del local.", "NOT_DELIVERY");
+  }
+  if (order.status !== "ready") {
+    throw new OrdersError(409, "El pedido tiene que estar listo para marcar que salió.", "NOT_READY");
+  }
+  if (dispatchedAtOf(order)) return (await withItems([order], client))[0];
+  const { rows } = await client.query(
+    "UPDATE orders SET dispatched_at = now(), updated_at = now() WHERE owner_id = $1 AND id = $2 RETURNING *",
+    [ownerId, orderId]
+  );
+  return (await withItems(rows, client))[0];
+});
+
 const assignWaiter = async (ownerId, orderId, waiter) => {
   await getOwnedOrder({ query }, ownerId, orderId);
   const { rows } = await query(
@@ -279,6 +299,7 @@ module.exports = {
   listActiveOrders,
   listOrders,
   updateStatus,
+  markDispatched,
   assignWaiter,
   listWaiterOrders,
 };

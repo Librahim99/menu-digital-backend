@@ -231,7 +231,7 @@ test("estado del checkout: devuelve solo lo necesario para el cliente", async (t
   const dto = await checkout.getCheckoutStatus({ owner: OWNER, ref: "c".repeat(48) });
   assert.deepEqual(dto, {
     status: "APPROVED", expired: false, total: 3000, serviceType: "delivery", orderNumber: 12, orderStatus: "pending",
-    createdAt: null, confirmedAt: null, readyAt: null, deliveredAt: null, cancelledAt: null, refund: "none", estimate: null,
+    createdAt: null, confirmedAt: null, readyAt: null, dispatchedAt: null, deliveredAt: null, cancelledAt: null, refund: "none", estimate: null,
   });
 });
 
@@ -293,4 +293,24 @@ test("seguimiento: el estado del pedido trae etapas, devolución y estimación",
   assert.ok(!JSON.stringify(dto).includes("1122334455"));
   assert.ok(!JSON.stringify(dto).includes("mp.example"));
   assert.ok(!JSON.stringify(dto).includes("Calle 1"));
+});
+
+test("seguimiento: 'en camino' solo si el delivery salió después de quedar listo", async (t) => {
+  withEnv(t);
+  const ready = new Date("2026-01-01T20:00:00.000Z");
+  const row = (over) => ({
+    status: "APPROVED", expires_at: ready, amount: "3000.00", order_number: 5, order_status: "ready", order_created_at: ready,
+    confirmed_at: ready, ready_at: ready, delivered_at: null, cancelled_at: null, dispatched_at: null,
+    draft: { serviceType: "delivery", customer: {} }, ...over,
+  });
+  let current = row({});
+  const { checkout } = load(t, { handler: () => ({ rows: [current] }) });
+  const ref = "e".repeat(48);
+  assert.equal((await checkout.getCheckoutStatus({ owner: OWNER, ref })).dispatchedAt, null);
+  current = row({ dispatched_at: "2026-01-01T20:10:00.000Z" });
+  assert.equal((await checkout.getCheckoutStatus({ owner: OWNER, ref })).dispatchedAt, "2026-01-01T20:10:00.000Z");
+  current = row({ dispatched_at: "2026-01-01T19:50:00.000Z" });
+  assert.equal((await checkout.getCheckoutStatus({ owner: OWNER, ref })).dispatchedAt, null, "salida vieja, antes de volver a quedar listo");
+  current = row({ order_status: "delivered", dispatched_at: "2026-01-01T20:10:00.000Z" });
+  assert.equal((await checkout.getCheckoutStatus({ owner: OWNER, ref })).dispatchedAt, null);
 });

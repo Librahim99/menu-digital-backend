@@ -102,6 +102,7 @@ router.patch("/orders/:id/status", ownerOnly, owner.updateOrderStatus);
 router.get("/orders/:id/payment", ownerOnly, mpRefunds.getOrderPayment);
 router.post("/orders/:id/refund", ownerOnly, mpRefunds.requestRefund);
 router.post("/orders/:id/refunds/:refundId/retry", ownerOnly, mpRefunds.retryRefund);
+router.post("/orders/:id/dispatch", ownerOnly, owner.dispatchOrder);
 router.patch("/orders/:id/waiter", ownerOnly, owner.assignOrderWaiter);
 
 // Sesiones de mesa (?status=open|closed)
