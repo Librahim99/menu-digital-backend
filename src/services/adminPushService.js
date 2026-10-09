@@ -3,6 +3,7 @@ const admin = require("firebase-admin");
 const User = require("../models/User");
 const AdminPushToken = require("../models/AdminPushToken");
 const AdminNotification = require("../models/AdminNotification");
+const AdminPushPreference = require("../models/AdminPushPreference");
 
 // ──────────────────────────────────────────────
 // Notificaciones push (Firebase Cloud Messaging) SOLO para usuarios admin.
@@ -17,11 +18,21 @@ const AdminNotification = require("../models/AdminNotification");
 
 // Códigos con los que FCM indica que el token ya no sirve (app desinstalada,
 // permiso revocado, token rotado): esos registros se borran.
-const INVALID_TOKEN_CODES = new Set([
+const DEAD_TOKEN_CODES = new Set([
   "messaging/registration-token-not-registered",
   "messaging/invalid-registration-token",
-  "messaging/invalid-argument",
 ]);
+
+// FCM devuelve "invalid-argument" tanto por un token mal formado como por un
+// mensaje inválido (payload muy grande, campo mal armado). Solo el primer
+// caso es culpa del token: si se borrara por el código a secas, un aviso
+// defectuoso daría de baja a todos los dispositivos de una sola vez.
+const isDeadToken = (error) => {
+  if (!error) return false;
+  if (DEAD_TOKEN_CODES.has(error.code)) return true;
+  return error.code === "messaging/invalid-argument"
+    && /registration token/i.test(error.message || "");
+};
 
 // FCM acepta hasta 500 tokens por sendEachForMulticast.
 const MULTICAST_LIMIT = 500;
@@ -61,25 +72,71 @@ const getMessaging = () => {
 
 const isPushEnabled = () => getMessaging() !== null;
 
-// Guarda una copia del aviso en la bandeja de cada admin. Atrapa sus errores
-// para que una falla de Mongo no impida mandar la push (y viceversa).
-const saveToInboxes = async (adminIDs, { eventID, type, title, body, url }) => {
+// Solo para tests: permite inyectar un cliente de FCM simulado (o volver al
+// estado inicial pasando undefined).
+const setMessagingForTests = (fake) => {
+  messaging = fake ?? null;
+  initialized = fake !== undefined;
+};
+
+const isDuplicateKeyError = (error) => (
+  error?.code === 11000
+  || (Array.isArray(error?.writeErrors) && error.writeErrors.length > 0
+    && error.writeErrors.every((writeError) => (writeError.code ?? writeError.err?.code) === 11000))
+);
+
+// Guarda una copia del aviso en la bandeja de cada admin y devuelve cuántas
+// se guardaron (null si no se pudo saber). Atrapa sus errores para que una
+// falla de Mongo no impida mandar la push (y viceversa).
+const saveToInboxes = async (adminIDs, { eventID, type, title, body, url, dedupeKey }) => {
   try {
-    await AdminNotification.insertMany(
-      adminIDs.map((userID) => ({ userID, eventID, type, title, body, url })),
+    const docs = await AdminNotification.insertMany(
+      adminIDs.map((userID) => ({
+        userID, eventID, type, title, body, url,
+        ...(dedupeKey ? { dedupeKey } : {}),
+      })),
       { ordered: false }
     );
+    return docs.length;
   } catch (error) {
+    // Otro proceso guardó el mismo aviso al mismo tiempo: el índice único
+    // rechaza las copias repetidas y solo cuentan las que entraron.
+    if (dedupeKey && isDuplicateKeyError(error)) {
+      return error.insertedDocs?.length ?? error.result?.insertedCount ?? 0;
+    }
     console.error("No se pudo guardar la notificación en la bandeja de los admins:", error);
+    return null;
+  }
+};
+
+// Admins que silenciaron este tipo de aviso: lo ven en la bandeja pero no
+// les llega la push. La prueba no se puede silenciar.
+const withoutMuted = async (adminIDs, type) => {
+  if (type === "test") return adminIDs;
+  try {
+    const muted = await AdminPushPreference.find({
+      userID: { $in: adminIDs },
+      mutedTypes: type,
+    }).distinct("userID");
+    if (muted.length === 0) return adminIDs;
+    const mutedSet = new Set(muted.map(String));
+    return adminIDs.filter((id) => !mutedSet.has(String(id)));
+  } catch (error) {
+    // Ante la duda, avisar: es peor perder un aviso que recibir uno de más.
+    console.error("No se pudieron leer las preferencias de push de los admins:", error);
+    return adminIDs;
   }
 };
 
 const sendPush = async (fcm, adminIDs, { eventID, title, body, url }) => {
-  const tokens = await AdminPushToken.find({ userID: { $in: adminIDs } }).distinct("token");
-  if (tokens.length === 0) return;
+  const result = { devices: 0, delivered: 0, failed: 0, removed: 0 };
+  if (adminIDs.length === 0) return result;
 
-  const link = new URL(url, process.env.FRONTEND_URL).toString();
-  const invalidTokens = [];
+  const tokens = await AdminPushToken.find({ userID: { $in: adminIDs } }).distinct("token");
+  result.devices = tokens.length;
+  if (tokens.length === 0) return result;
+
+  const deadTokens = [];
 
   for (let i = 0; i < tokens.length; i += MULTICAST_LIMIT) {
     const batch = tokens.slice(i, i + MULTICAST_LIMIT);
@@ -88,45 +145,87 @@ const sendPush = async (fcm, adminIDs, { eventID, title, body, url }) => {
       // Mensaje "data-only" a propósito: el service worker del frontend
       // arma la notificación. Si mandáramos también `notification`, el SDK
       // web la mostraría solo y el click no respetaría el link.
+      // `url` viaja como ruta relativa: el service worker la resuelve contra
+      // su propio origen, así el aviso no depende de FRONTEND_URL.
       // `eventID` le permite al panel marcar el aviso como leído al tocarla.
-      data: { title, body, url: link, eventID },
+      data: { title, body, url, eventID },
       webpush: { headers: { Urgency: "high" } },
     });
 
-    response.responses.forEach((result, index) => {
-      if (!result.success && INVALID_TOKEN_CODES.has(result.error?.code)) {
-        invalidTokens.push(batch[index]);
+    response.responses.forEach((sent, index) => {
+      if (sent.success) {
+        result.delivered += 1;
+        return;
+      }
+      result.failed += 1;
+      if (isDeadToken(sent.error)) {
+        deadTokens.push(batch[index]);
+      } else {
+        console.error(`Push a un admin falló (${sent.error?.code || "sin código"}): ${sent.error?.message || ""}`);
       }
     });
   }
 
-  if (invalidTokens.length > 0) {
-    await AdminPushToken.deleteMany({ token: { $in: invalidTokens } });
+  if (deadTokens.length > 0) {
+    await AdminPushToken.deleteMany({ token: { $in: deadTokens } });
+    result.removed = deadTokens.length;
   }
+
+  return result;
 };
 
 /**
  * Avisa a todos los usuarios con admin: true: guarda el aviso en la bandeja
  * de cada uno y, si Firebase está configurado, manda la push a todos sus
  * dispositivos. `url` es la ruta del frontend que se abre al tocarla y
- * `type` agrupa los avisos en la bandeja (registration, payment, test).
+ * `type` agrupa los avisos en la bandeja (ver NOTIFICATION_TYPES).
+ *
+ * Con `dedupeKey`, el mismo hecho avisa una sola vez aunque el disparador
+ * se repita.
+ *
+ * Nunca lanza. Devuelve un resumen de lo que pasó:
+ * { recipients, duplicate, push: { enabled, devices, delivered, failed, removed }, error }
  */
-const notifyAdmins = async ({ title, body = "", url = "/admin", type = "other" }) => {
+const notifyAdmins = async ({ title, body = "", url = "/admin", type = "other", dedupeKey = null }) => {
+  const summary = {
+    recipients: 0,
+    duplicate: false,
+    push: { enabled: false, devices: 0, delivered: 0, failed: 0, removed: 0 },
+    error: null,
+  };
+
   try {
     // Se filtra por el flag admin vigente en cada envío: si a alguien le
     // sacan el rol, deja de recibir avisos (bandeja y push) sin tener que
     // limpiar sus tokens a mano.
     const adminIDs = await User.find({ admin: true }).distinct("_id");
-    if (adminIDs.length === 0) return;
+    summary.recipients = adminIDs.length;
+    if (adminIDs.length === 0) return summary;
 
-    const notification = { eventID: crypto.randomUUID(), type, title, body, url };
-    await saveToInboxes(adminIDs, notification);
+    if (dedupeKey && await AdminNotification.exists({ dedupeKey })) {
+      summary.duplicate = true;
+      return summary;
+    }
+
+    const notification = { eventID: crypto.randomUUID(), type, title, body, url, dedupeKey };
+    const saved = await saveToInboxes(adminIDs, notification);
+    if (dedupeKey && saved === 0) {
+      summary.duplicate = true;
+      return summary;
+    }
 
     const fcm = getMessaging();
-    if (fcm) await sendPush(fcm, adminIDs, notification);
+    summary.push.enabled = Boolean(fcm);
+    if (fcm) {
+      const recipients = await withoutMuted(adminIDs, type);
+      Object.assign(summary.push, await sendPush(fcm, recipients, notification));
+    }
   } catch (error) {
     console.error("No se pudo enviar la notificación push a los admins:", error);
+    summary.error = error.message || "error desconocido";
   }
+
+  return summary;
 };
 
-module.exports = { notifyAdmins, isPushEnabled };
+module.exports = { notifyAdmins, isPushEnabled, isDeadToken, setMessagingForTests };

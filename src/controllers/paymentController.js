@@ -205,11 +205,15 @@ const OPERATION_LABELS = {
 // motivo que el email de verificación: el 200 a MercadoPago no puede quedar
 // atado a la latencia de Firebase. notifyAdmins atrapa sus propios errores.
 // El username llega desde quien la llama para no sumar otra lectura de User.
-const notifyAdminsPaymentApproved = (transaction, username) => {
-  const amount = Number(transaction.amount);
-  const amountText = Number.isFinite(amount)
-    ? `$${amount.toLocaleString("es-AR")}${transaction.currency && transaction.currency !== "ARS" ? ` ${transaction.currency}` : ""}`
+const formatPaymentAmount = (rawAmount, currency) => {
+  const amount = Number(rawAmount);
+  return Number.isFinite(amount)
+    ? `$${amount.toLocaleString("es-AR")}${currency && currency !== "ARS" ? ` ${currency}` : ""}`
     : "monto desconocido";
+};
+
+const notifyAdminsPaymentApproved = (transaction, username) => {
+  const amountText = formatPaymentAmount(transaction.amount, transaction.currency);
   const plan = transaction.appliedPlanId || transaction.planId || "plan";
   const months = transaction.appliedMonths || transaction.months;
 
@@ -220,6 +224,59 @@ const notifyAdminsPaymentApproved = (transaction, username) => {
     type: "payment",
   });
 };
+
+// Avisos a los admins por lo que le pasa a una cuenta fuera del pago aprobado
+// (pago rechazado, reembolso, contracargo, baja). Siempre sin `await` desde
+// quien la llama y sin propagar errores, igual que notifyAdminsPaymentApproved.
+// Busca el username acá para no sumarle una lectura al flujo principal; si
+// ya se conoce, se pasa en `username` y no se consulta.
+// `build` recibe el username y devuelve el aviso para notifyAdmins.
+const notifyAdminsAboutAccount = async ({ userID, username }, build) => {
+  try {
+    let name = username;
+    if (!name && userID) {
+      const user = await User.findById(userID).select("username").lean();
+      name = user?.username;
+    }
+    await notifyAdmins(build(name || "Usuario"));
+  } catch (error) {
+    console.error("No se pudo avisar a los admins sobre la cuenta:", error);
+  }
+};
+
+// Un pago rechazado avisa una sola vez aunque MP reenvíe el webhook
+// (dedupeKey por paymentID).
+const notifyAdminsPaymentRejected = ({ paymentID, paymentData, operation, userID, username }) => (
+  notifyAdminsAboutAccount({ userID, username }, (name) => ({
+    title: `⚠️ Pago rechazado — ${OPERATION_LABELS[operation] || "Mercado Pago"}`,
+    body: [
+      name,
+      formatPaymentAmount(paymentData.transaction_amount, paymentData.currency_id),
+      paymentData.status_detail,
+    ].filter(Boolean).join(" · "),
+    url: "/admin/payments",
+    type: "payment_failed",
+    dedupeKey: `payment-rejected:${paymentID}`,
+  }))
+);
+
+// Estados con los que MP informa que un pago ya acreditado se devolvió.
+const REVERSED_PAYMENT_TITLES = {
+  refunded: "↩️ Pago reembolsado",
+  charged_back: "🚨 Contracargo",
+};
+
+// Comparte dedupeKey con el reembolso por arrepentimiento: el webhook que MP
+// manda después de ese reembolso no genera un segundo aviso.
+const notifyAdminsPaymentReversed = (transaction, title) => (
+  notifyAdminsAboutAccount({ userID: transaction.userID }, (name) => ({
+    title,
+    body: `${name} · ${formatPaymentAmount(transaction.refundedAmount ?? transaction.amount, transaction.currency)}`,
+    url: "/admin/payments",
+    type: "refund",
+    dedupeKey: `refund:${transaction.paymentID}`,
+  }))
+);
 
 const amountsMatch = (actual, expected) => (
   Number.isFinite(Number(actual))
@@ -713,6 +770,8 @@ const processPaymentEvent = async (paymentId) => {
   // beneficio ya aplicado no vuelve a tocar User ni duplica el evento CRM.
   if (paymentTransaction?.entitlementStatus === "applied") {
     await recordSaleFromTransaction(paymentTransaction);
+    const reversedTitle = REVERSED_PAYMENT_TITLES[paymentData.status];
+    if (reversedTitle) notifyAdminsPaymentReversed(paymentTransaction, reversedTitle);
     return;
   }
 
@@ -748,6 +807,16 @@ const processPaymentEvent = async (paymentId) => {
         || (isRegistration ? associatedID || undefined : undefined),
       preferenceId: toNullableString(pendingRegistration?.preferenceId) || undefined,
     });
+    // Pendiente o en revisión no avisan: solo el rechazo definitivo.
+    if (paymentData.status === "rejected") {
+      notifyAdminsPaymentRejected({
+        paymentID: paymentSnapshot.paymentID,
+        paymentData,
+        operation,
+        userID: isRegistration ? null : associatedID,
+        username: pendingRegistration?.username,
+      });
+    }
     return;
   }
 
@@ -1507,6 +1576,8 @@ const confirmarArrepentimiento = async (req, res) => {
       `Arrepentimiento confirmado por email — reembolso MP ${transaction.paymentID} · plan bajado a free`
     );
 
+    notifyAdminsPaymentReversed(transaction, "↩️ Reembolso por arrepentimiento");
+
     const codigo = `ARR-${Date.now().toString(36).toUpperCase()}`;
 
     return res.json({
@@ -1628,6 +1699,13 @@ const confirmarBaja = async (req, res) => {
       user._id,
       `Baja de servicio confirmada por email — plan ${user.subscription} → free`
     );
+
+    notifyAdminsAboutAccount({ userID: user._id }, (name) => ({
+      title: "👋 Baja de servicio",
+      body: `${name} dio de baja el plan ${user.subscription} y pasó a Gratis.`,
+      url: "/admin",
+      type: "subscription",
+    }));
 
     const codigo = `BAJA-${Date.now().toString(36).toUpperCase()}`;
 
