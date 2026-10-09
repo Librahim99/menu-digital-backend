@@ -40,6 +40,9 @@ const OPTIONS = {
   // Pedidos de take away / delivery pagados online con Mercado Pago desde la
   // carta pública (requiere tener la cuenta de MP conectada).
   onlineOrdering: booleanOption(false),
+  // Con el pago online activo, saca «Pedir por WhatsApp» del carrito de la carta.
+  // Solo tiene efecto si el pago online está funcionando (ver getOnlineConfig).
+  hideWhatsappOrder: booleanOption(false),
 };
 
 // Opciones guardadas + valores por defecto de las que no se guardaron.

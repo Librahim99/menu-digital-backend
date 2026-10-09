@@ -32,11 +32,16 @@ const onlineModesOf = (owner, settings) => {
 };
 
 // Para la carta pública: ¿puede este local cobrar online ahora?
+// hideWhatsapp solo es true si el pago online está funcionando: si no, el cliente
+// se quedaría sin ninguna forma de pedir.
+const OFF = Object.freeze({ enabled: false, modes: [], hideWhatsapp: false });
+
 const getOnlineConfig = async (owner, settings) => {
   const modes = settings ? onlineModesOf(owner, settings) : [];
-  if (modes.length === 0 || missingForCheckout().length > 0) return { enabled: false, modes: [] };
+  if (modes.length === 0 || missingForCheckout().length > 0) return OFF;
   const status = await connections.getStatus(String(owner._id));
-  return status.connected ? { enabled: true, modes } : { enabled: false, modes: [] };
+  if (!status.connected) return OFF;
+  return { enabled: true, modes, hideWhatsapp: settingsService.optionsOf(settings).hideWhatsappOrder === true };
 };
 
 const requireCustomerData = (serviceType, customer) => {

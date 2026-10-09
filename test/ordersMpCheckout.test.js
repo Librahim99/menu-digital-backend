@@ -236,9 +236,23 @@ test("configuración pública: deshabilitada si no hay cuenta de MP conectada", 
   withEnv(t);
   const { checkout, connections } = load(t);
   const status = t.mock.method(connections, "getStatus", async () => ({ connected: false }));
-  assert.deepEqual(await checkout.getOnlineConfig(OWNER, SETTINGS), { enabled: false, modes: [] });
+  assert.deepEqual(await checkout.getOnlineConfig(OWNER, SETTINGS), { enabled: false, modes: [], hideWhatsapp: false });
   status.mock.mockImplementation(async () => ({ connected: true }));
-  assert.deepEqual(await checkout.getOnlineConfig(OWNER, SETTINGS), { enabled: true, modes: ["takeaway", "delivery"] });
-  assert.deepEqual(await checkout.getOnlineConfig({ ...OWNER, hasTakeAway: false }, SETTINGS), { enabled: true, modes: ["delivery"] });
-  assert.deepEqual(await checkout.getOnlineConfig(OWNER, { options: {} }), { enabled: false, modes: [] });
+  assert.deepEqual(await checkout.getOnlineConfig(OWNER, SETTINGS), { enabled: true, modes: ["takeaway", "delivery"], hideWhatsapp: false });
+  assert.deepEqual(await checkout.getOnlineConfig({ ...OWNER, hasTakeAway: false }, SETTINGS), { enabled: true, modes: ["delivery"], hideWhatsapp: false });
+  assert.deepEqual(await checkout.getOnlineConfig(OWNER, { options: {} }), { enabled: false, modes: [], hideWhatsapp: false });
+});
+
+test("configuración pública: ocultar WhatsApp solo vale si el pago online funciona", async (t) => {
+  withEnv(t);
+  const { checkout, connections } = load(t);
+  const status = t.mock.method(connections, "getStatus", async () => ({ connected: true }));
+  const hiding = { options: { onlineOrdering: true, hideWhatsappOrder: true } };
+  assert.deepEqual(await checkout.getOnlineConfig(OWNER, hiding), { enabled: true, modes: ["takeaway", "delivery"], hideWhatsapp: true });
+  // Sin cuenta conectada, sin modalidades o sin pago online activado: WhatsApp se queda.
+  status.mock.mockImplementation(async () => ({ connected: false }));
+  assert.equal((await checkout.getOnlineConfig(OWNER, hiding)).hideWhatsapp, false);
+  status.mock.mockImplementation(async () => ({ connected: true }));
+  assert.equal((await checkout.getOnlineConfig({ ...OWNER, hasDelivery: false, hasTakeAway: false }, hiding)).hideWhatsapp, false);
+  assert.equal((await checkout.getOnlineConfig(OWNER, { options: { hideWhatsappOrder: true } })).hideWhatsapp, false);
 });
