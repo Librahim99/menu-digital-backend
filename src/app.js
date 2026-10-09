@@ -485,6 +485,9 @@ const start = async () => {
     reservationsRealtime.attach(server);
     ordersRealtime.attach(server);
     reservationsRealtime.closeUnknownUpgrades(server, [reservationsRealtime.WS_PATH, ordersRealtime.WS_PATH]);
+
+    // Avisos a los admins por planes que vencen (revisión periódica).
+    require("./services/adminSubscriptionNotices").startSubscriptionNotices();
   } catch (error) {
     console.error(
       "❌ No se pudo iniciar la API con un catálogo válido:",
