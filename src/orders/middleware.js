@@ -3,6 +3,7 @@ const { OrdersError, sendError } = require("./errors");
 const { getOrCreateSettings } = require("./services/settingsService");
 const { authenticateSession } = require("./services/waiterService");
 const { authenticateSession: authenticateStation } = require("./services/sectorService");
+const { authenticateSession: authenticateCourier } = require("./delivery/courierService");
 const { findOwnerById, isProOwner } = require("./services/menuCatalog");
 
 // Sin DATABASE_URL (o sin Neon) el resto de la API sigue igual: solo estas
@@ -86,4 +87,28 @@ const protectStation = async (req, res, next) => {
   }
 };
 
-module.exports = { requireOrdersDb, requireProPlan, loadSettings, protectWaiter, protectStation };
+// Repartidor: el dispositivo se identifica con "Authorization: Courier <token>"
+// (el token lo dio el QR de vinculación). Solo ve y opera lo de su propio local.
+const protectCourier = async (req, res, next) => {
+  try {
+    const [scheme, token] = (req.headers.authorization ?? "").split(" ");
+    if (scheme !== "Courier" || !token) throw new OrdersError(401, "Escaneá tu QR de acceso para repartir pedidos.");
+
+    const session = await authenticateCourier(token);
+    if (!session) throw new OrdersError(401, "Tu acceso ya no es válido. Escaneá un QR nuevo.", "COURIER_SESSION_INVALID");
+
+    const owner = await findOwnerById(session.ownerId);
+    if (!owner || !owner.active || !isProOwner(owner)) {
+      throw new OrdersError(403, "El local no tiene la gestión de pedidos habilitada.");
+    }
+
+    req.courierSession = session;
+    req.owner = owner;
+    req.orderSettings = await getOrCreateSettings(session.ownerId);
+    next();
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
+module.exports = { requireOrdersDb, requireProPlan, loadSettings, protectWaiter, protectStation, protectCourier };

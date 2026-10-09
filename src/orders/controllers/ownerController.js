@@ -7,6 +7,7 @@ const orderService = require("../services/orderService");
 const waiterService = require("../services/waiterService");
 const tableSessionService = require("../services/tableSessionService");
 const cashService = require("../services/cashService");
+const deliveryService = require("../delivery/deliveryService");
 const {
   parseOrderLines, parseService, cleanText, optionalPositiveInt, positiveInt, optionalUuid,
 } = require("../utils/validate");
@@ -34,7 +35,12 @@ const getSettings = route(async (req, res) => {
 });
 
 const updateSettings = route(async (req, res) => {
+  const wasEnabled = deliveryService.deliveryConfig(req.orderSettings).enabled;
   const row = await settingsService.updateSettings(ownerIdOf(req), req.body);
+  // Al apagar Delivery lo que no se retiró vuelve a "sin asignar"; lo que ya salió se puede terminar de entregar.
+  if (wasEnabled && !deliveryService.deliveryConfig(row).enabled) {
+    await deliveryService.releasePendingOnDisable(ownerIdOf(req));
+  }
   const tables = await settingsService.listTables(ownerIdOf(req));
   res.json({ settings: settingsService.toSettingsDTO(row), tables, slug: req.user.slug });
 });
@@ -56,11 +62,14 @@ const getBoard = route(async (req, res) => {
     orderService.listActiveOrders(ownerIdOf(req)),
     shiftService.findOpenShift(ownerIdOf(req)),
   ]);
-  res.json({ orders, openShift: shiftService.toShiftDTO(openShift), serverTime: new Date().toISOString() });
+  // Cada pedido de reparto muestra su repartidor y cómo va (también con Delivery apagado: lo que
+  // ya salió se sigue viendo). Si la consulta falla, el tablero sigue sin ese dato.
+  const withDelivery = await deliveryService.attachDelivery(ownerIdOf(req), orders).catch(() => orders);
+  res.json({ orders: withDelivery, openShift: shiftService.toShiftDTO(openShift), serverTime: new Date().toISOString() });
 });
 
 const listOrders = route(async (req, res) => {
-  const { shiftId, status, serviceType, from, to, table } = req.query;
+  const { shiftId, status, serviceType, from, to, table, courier } = req.query;
   if (status && !ORDER_STATUSES.includes(status)) throw new OrdersError(400, "Estado inválido.");
   if (serviceType && !SERVICE_TYPES.includes(serviceType)) throw new OrdersError(400, "Tipo de pedido inválido.");
   const parseDate = (value) => {
@@ -69,7 +78,8 @@ const listOrders = route(async (req, res) => {
     if (Number.isNaN(date.getTime())) throw new OrdersError(400, "Fecha inválida.");
     return date;
   };
-  res.json(await orderService.listOrders(ownerIdOf(req), {
+  const result = await orderService.listOrders(ownerIdOf(req), {
+    courierId: optionalPositiveInt(courier, { field: "Repartidor" }),
     shiftId: optionalPositiveInt(shiftId, { field: "Turno" }),
     status: status || null,
     serviceType: serviceType || null,
@@ -77,7 +87,12 @@ const listOrders = route(async (req, res) => {
     from: parseDate(from),
     to: parseDate(to),
     page: pageParam(req),
-  }));
+  });
+  // El historial de delivery es el mismo historial general, filtrado, con el repartidor y los tiempos.
+  if (serviceType === "delivery" || courier) {
+    result.orders = await deliveryService.attachDelivery(ownerIdOf(req), result.orders);
+  }
+  res.json(result);
 });
 
 // Pedido cargado a mano desde el panel (barra, teléfono, delivery…).

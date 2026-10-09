@@ -478,8 +478,13 @@ const start = async () => {
       printStartup({ postgresReady });
     });
 
-    // Tiempo real de Reservas (no interfiere con el resto de la API).
-    require("./reservations/realtime").attach(server);
+    // Tiempo real (no interfiere con el resto de la API): cada módulo atiende su
+    // propio path del mismo servidor y se corta cualquier otro upgrade.
+    const reservationsRealtime = require("./reservations/realtime");
+    const ordersRealtime = require("./orders/delivery/realtime");
+    reservationsRealtime.attach(server);
+    ordersRealtime.attach(server);
+    reservationsRealtime.closeUnknownUpgrades(server, [reservationsRealtime.WS_PATH, ordersRealtime.WS_PATH]);
   } catch (error) {
     console.error(
       "❌ No se pudo iniciar la API con un catálogo válido:",

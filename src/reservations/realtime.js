@@ -221,4 +221,15 @@ const attach = (server) => {
   return wss;
 };
 
-module.exports = { createHub, attach, publish, WS_PATH };
+// Corta los upgrade a paths que ningún módulo atiende.
+const closeUnknownUpgrades = (server, knownPaths) => {
+  server.on("upgrade", (request, socket) => {
+    const { pathname } = new URL(request.url, "http://localhost");
+    if (!knownPaths.includes(pathname)) socket.destroy();
+  });
+};
+
+module.exports = {
+  createHub, attach, publish, WS_PATH, closeUnknownUpgrades, allowedOrigins, safeSend, addTo, removeFrom,
+  HEARTBEAT_MS, AUTH_TIMEOUT_MS, MAX_MESSAGES_PER_MINUTE, MAX_PAYLOAD_BYTES,
+};
