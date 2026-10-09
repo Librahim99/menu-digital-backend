@@ -37,6 +37,9 @@ const OPTIONS = {
   customerOrderCooldownSeconds: intOption(
     LIMITS.customerCooldownMs / 1000, 0, 600, "La espera entre pedidos tiene que ser entre 0 y 600 segundos."
   ),
+  // Pedidos de take away / delivery pagados online con Mercado Pago desde la
+  // carta pública (requiere tener la cuenta de MP conectada).
+  onlineOrdering: booleanOption(false),
 };
 
 // Opciones guardadas + valores por defecto de las que no se guardaron.

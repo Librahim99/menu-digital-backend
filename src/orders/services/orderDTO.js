@@ -50,6 +50,10 @@ const toOrderDTO = (row, items = [], tickets = []) => ({
   waiterName: row.waiter_name,
   notes: row.notes,
   statusReason: row.status_reason ?? null,
+  // Estado del pago, aparte del estado del pedido (un pedido pagado puede estar
+  // todavía sin aceptar). Sin la migración de pagos, todos son "sin cobro online".
+  paymentMode: row.payment_mode ?? "none",
+  paymentStatus: row.payment_status ?? "NOT_REQUIRED",
   subtotal: num(row.subtotal ?? row.total),
   discountAmount: num(row.discount_amount) ?? 0,
   total: num(row.total),

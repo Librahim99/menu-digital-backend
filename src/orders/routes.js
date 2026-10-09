@@ -21,6 +21,10 @@ const sectors = require("./controllers/sectorController");
 const owner = require("./controllers/ownerController");
 const publicOrders = require("./controllers/publicController");
 const waiter = require("./controllers/waiterController");
+const mpConnection = require("./payments/connectionController");
+const onlinePayments = require("./payments/publicController");
+const mpWebhook = require("./payments/webhookController");
+const mpRefunds = require("./payments/refundController");
 
 const router = express.Router();
 
@@ -35,11 +39,25 @@ const customerOrderLimiter = rateLimit({
   message: { message: "Demasiados pedidos seguidos. Esperá unos minutos o pedile al personal." },
 });
 
+// Checkouts online: más estricto que el pedido en el local (un pago real por
+// intento, y cada intento crea una preferencia en Mercado Pago).
+const onlineCheckoutLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 12,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Demasiados intentos de pago. Esperá unos minutos e intentá de nuevo." },
+});
+
 router.use(requireOrdersDb);
 
 // ── Carta pública ────────────────────────────
 router.get("/public/:slug/context", publicOrders.getContext);
 router.post("/public/:slug/orders", customerOrderLimiter, publicOrders.createCustomerOrder);
+// Take away / delivery pagados online (sin QR del local).
+router.get("/public/:slug/online-ordering", onlinePayments.getOnlineOrdering);
+router.post("/public/:slug/online-checkout", onlineCheckoutLimiter, onlinePayments.createCheckout);
+router.get("/public/:slug/online-checkout/:ref", onlinePayments.getCheckoutStatus);
 
 // ── Tomador de pedidos (operadores) ──────────
 router.post("/waiter/pair", authLimiter, waiter.pair);
@@ -67,10 +85,23 @@ router.get("/settings", ownerOnly, owner.getSettings);
 router.put("/settings", ownerOnly, owner.updateSettings);
 router.post("/settings/regenerate-qr", ownerOnly, owner.regenerateQr);
 
+// Pagos con Mercado Pago del local (cuenta propia, OAuth). El callback es
+// público: lo invoca el navegador al volver de Mercado Pago.
+router.get("/payments/oauth/callback", authLimiter, mpConnection.oauthCallback);
+// Notificaciones de MP: la firma se valida adentro (no hay sesión).
+router.post("/payments/webhook", mpWebhook.receive);
+router.get("/payments/connection", ownerOnly, mpConnection.getConnection);
+router.post("/payments/connection/start", ownerOnly, mpConnection.startConnection);
+router.delete("/payments/connection", ownerOnly, mpConnection.disconnect);
+
 router.get("/board", ownerOnly, owner.getBoard);
 router.get("/orders", ownerOnly, owner.listOrders);
 router.post("/orders", ownerOnly, owner.createOrder);
 router.patch("/orders/:id/status", ownerOnly, owner.updateOrderStatus);
+// Pago online del pedido y devoluciones desde el panel.
+router.get("/orders/:id/payment", ownerOnly, mpRefunds.getOrderPayment);
+router.post("/orders/:id/refund", ownerOnly, mpRefunds.requestRefund);
+router.post("/orders/:id/refunds/:refundId/retry", ownerOnly, mpRefunds.retryRefund);
 router.patch("/orders/:id/waiter", ownerOnly, owner.assignOrderWaiter);
 
 // Sesiones de mesa (?status=open|closed)
