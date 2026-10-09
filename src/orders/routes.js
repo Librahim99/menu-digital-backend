@@ -3,6 +3,8 @@
 //
 //   /api/orders/public/:slug/*  carta pública (comensal en el local, sin sesión)
 //   /api/orders/waiter/*        tomador de pedidos (dispositivo del operador)
+//   /api/orders/courier/*       app del repartidor (dispositivo vinculado)
+//   /api/orders/delivery/*      Delivery en el panel del local
 //   /api/orders/station/*       pantalla de un sector (equipo vinculado con código)
 //   /api/orders/*               panel del dueño (JWT + plan PRO)
 //
@@ -15,8 +17,10 @@ const rateLimit = require("express-rate-limit");
 const { protect } = require("../middleware/auth");
 const { authLimiter } = require("../middleware/rateLimiters");
 const {
-  requireOrdersDb, requireProPlan, loadSettings, protectWaiter, protectStation,
+  requireOrdersDb, requireProPlan, loadSettings, protectWaiter, protectStation, protectCourier,
 } = require("./middleware");
+const courierApp = require("./delivery/courierController");
+const delivery = require("./delivery/deliveryController");
 const sectors = require("./controllers/sectorController");
 const owner = require("./controllers/ownerController");
 const publicOrders = require("./controllers/publicController");
@@ -49,6 +53,15 @@ const onlineCheckoutLimiter = rateLimit({
   message: { message: "Demasiados intentos de pago. Esperá unos minutos e intentá de nuevo." },
 });
 
+// Código de entrega: tope por IP además del bloqueo por pedido que aplica el servicio.
+const deliveryCodeLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Demasiados intentos. Esperá unos minutos e intentá de nuevo." },
+});
+
 router.use(requireOrdersDb);
 
 // ── Carta pública ────────────────────────────
@@ -58,6 +71,8 @@ router.post("/public/:slug/orders", customerOrderLimiter, publicOrders.createCus
 router.get("/public/:slug/online-ordering", onlinePayments.getOnlineOrdering);
 router.post("/public/:slug/online-checkout", onlineCheckoutLimiter, onlinePayments.createCheckout);
 router.get("/public/:slug/online-checkout/:ref", onlinePayments.getCheckoutStatus);
+// Envío del pedido: si ya salió y el código de entrega que le da al repartidor.
+router.get("/public/:slug/online-checkout/:ref/delivery", delivery.customerDelivery);
 
 // ── Tomador de pedidos (operadores) ──────────
 router.post("/waiter/pair", authLimiter, waiter.pair);
@@ -69,6 +84,18 @@ router.get("/waiter/tables", protectWaiter, waiter.myTables);
 router.patch("/waiter/tables/:id", protectWaiter, waiter.updateTable);
 router.post("/waiter/tables/:id/close", protectWaiter, waiter.closeTable);
 router.get("/waiter/history", protectWaiter, waiter.myHistory);
+
+// ── Repartidores (dispositivo vinculado) ─────
+router.post("/courier/pair", authLimiter, courierApp.pair);
+router.get("/courier/me", protectCourier, courierApp.me);
+router.post("/courier/logout", protectCourier, courierApp.logout);
+router.put("/courier/availability", protectCourier, courierApp.setAvailability);
+router.get("/courier/panel", protectCourier, courierApp.panel);
+router.get("/courier/history", protectCourier, courierApp.history);
+router.get("/courier/orders/:id", protectCourier, courierApp.getOrder);
+router.post("/courier/orders/:id/claim", protectCourier, courierApp.claim);
+router.post("/courier/orders/:id/pickup", protectCourier, courierApp.pickup);
+router.post("/courier/orders/:id/deliver", protectCourier, deliveryCodeLimiter, courierApp.deliver);
 
 // ── Pantalla de un sector (equipo vinculado) ──
 router.post("/station/pair", authLimiter, sectors.pair);
@@ -104,6 +131,25 @@ router.post("/orders/:id/refund", ownerOnly, mpRefunds.requestRefund);
 router.post("/orders/:id/refunds/:refundId/retry", ownerOnly, mpRefunds.retryRefund);
 router.post("/orders/:id/dispatch", ownerOnly, owner.dispatchOrder);
 router.patch("/orders/:id/waiter", ownerOnly, owner.assignOrderWaiter);
+
+// Delivery: entregas en curso, repartidores y auditoría. Las rutas no dependen del
+// interruptor para poder consultar y resolver lo pendiente; cada operación que
+// crea trabajo nuevo valida la configuración en el servicio.
+router.get("/delivery/active", ownerOnly, delivery.listActive);
+router.post("/delivery/orders/:id/assign", ownerOnly, delivery.assign);
+router.post("/delivery/orders/:id/unassign", ownerOnly, delivery.unassign);
+router.post("/delivery/orders/:id/complete", ownerOnly, delivery.complete);
+router.get("/delivery/orders/:id/trail", ownerOnly, delivery.trail);
+router.post("/delivery/orders/:id/code", ownerOnly, delivery.revealCode);
+router.get("/delivery/couriers", ownerOnly, delivery.listCouriers);
+router.post("/delivery/couriers", ownerOnly, delivery.createCourier);
+router.put("/delivery/couriers/:id", ownerOnly, delivery.updateCourier);
+router.delete("/delivery/couriers/:id", ownerOnly, delivery.deleteCourier);
+router.post("/delivery/couriers/:id/pairing-code", ownerOnly, delivery.issuePairingCode);
+router.delete("/delivery/couriers/:id/pairing-code", ownerOnly, delivery.revokePairingCode);
+router.get("/delivery/couriers/:id/sessions", ownerOnly, delivery.listSessions);
+router.delete("/delivery/couriers/:id/sessions", ownerOnly, delivery.revokeSessions);
+router.delete("/delivery/couriers/:id/sessions/:sessionId", ownerOnly, delivery.revokeSession);
 
 // Sesiones de mesa (?status=open|closed)
 router.get("/table-sessions", ownerOnly, owner.listTableSessions);

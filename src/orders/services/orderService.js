@@ -12,6 +12,7 @@ const { lockOrOpenTableSession } = require("./tableSessionService");
 const { priceOrderLines } = require("./menuCatalog");
 const { toOrderDTO, withItems, dispatchedAtOf } = require("./orderDTO");
 const { syncTicketsWithOrder } = require("./ticketService");
+const realtime = require("../delivery/realtime");
 
 // Huella del contenido: mismos productos, variantes, cantidades, aclaraciones
 // y mesa = mismo pedido.
@@ -175,7 +176,7 @@ const listActiveOrders = async (ownerId) => {
 
 // Historial con filtros y paginado.
 const listOrders = async (ownerId, {
-  shiftId, status, serviceType, from, to, tableNumber, page = 1, pageSize = 30,
+  shiftId, status, serviceType, from, to, tableNumber, courierId, page = 1, pageSize = 30,
 } = {}) => {
   const where = ["owner_id = $1"];
   const params = [ownerId];
@@ -187,6 +188,8 @@ const listOrders = async (ownerId, {
   if (status) add("status = ?", status);
   if (serviceType) add("service_type = ?", serviceType);
   if (tableNumber) add("table_number = ?", tableNumber);
+  // Delivery: pedidos que pasaron por ese repartidor (entregó o fue responsable).
+  if (courierId) add("EXISTS (SELECT 1 FROM delivery_assignments a WHERE a.order_id = orders.id AND a.courier_id = ?)", courierId);
   if (from) add("created_at >= ?", from);
   if (to) add("created_at < ?", to);
 
@@ -211,52 +214,78 @@ const getOwnedOrder = async (runner, ownerId, orderId, { lock = false } = {}) =>
 };
 
 /**
+ * Aplica un cambio de estado ya validado sobre un pedido bloqueado (FOR UPDATE),
+ * dentro de la transacción del caller: fecha del estado, motivo, caja de la
+ * devolución, registro del cambio y comandas.
+ */
+const applyStatusChange = async (client, ownerId, order, status, { reason = null, actor = { type: "panel" } } = {}) => {
+  const orderId = order.id;
+  const sets = ["status = $3", "updated_at = now()"];
+  const params = [ownerId, orderId, status];
+  const column = STATUS_TIMESTAMPS[status];
+  if (column) sets.push(`${column} = now()`);
+  if (status === "cancelled" || status === "returned") {
+    params.push(reason);
+    sets.push(`status_reason = $${params.length}`);
+  } else {
+    sets.push("status_reason = NULL");
+  }
+  if (status === "returned") {
+    const cash = await lockOrOpenCashSession(client, ownerId);
+    params.push(cash.id);
+    sets.push(`returned_cash_session_id = $${params.length}`);
+  }
+
+  const { rows } = await client.query(
+    `UPDATE orders SET ${sets.join(", ")} WHERE owner_id = $1 AND id = $2 RETURNING *`,
+    params
+  );
+  await recordStatusEvent(client, { orderId, ownerId, from: order.status, to: status, actor, reason });
+  await syncTicketsWithOrder(client, { ownerId, orderId, from: order.status, to: status });
+  return (await withItems(rows, client))[0];
+};
+
+/**
  * Cambia el estado de un pedido.
  * - Anular o devolver guarda el motivo (opcional).
  * - Una devolución se registra en la caja abierta en ese momento (así no
  *   reescribe una caja ya cerrada) y deja de sumar a la venta.
+ * - Delivery: un pedido que está en manos de un repartidor no se marca
+ *   entregado desde acá (lo confirma el repartidor con el código del cliente, o
+ *   el administrador desde Delivery); anularlo libera al repartidor.
  * @param {{ reason?: string|null, actor?: {type,id,name} }} options
  */
 const updateStatus = async (ownerId, orderId, status, { reason = null, actor = { type: "panel" } } = {}) => {
   if (!ORDER_STATUSES.includes(status)) throw new OrdersError(400, "Estado inválido.");
-  return withTransaction(async (client) => {
+  const deliveryEvents = [];
+  const result = await withTransaction(async (client) => {
     const order = await getOwnedOrder(client, ownerId, orderId, { lock: true });
     if (order.status === status) return (await withItems([order], client))[0];
     if (!STATUS_TRANSITIONS[order.status].includes(status)) {
       throw new OrdersError(409, "Ese cambio de estado no es posible para este pedido.");
     }
-
-    const sets = ["status = $3", "updated_at = now()"];
-    const params = [ownerId, orderId, status];
-    const column = STATUS_TIMESTAMPS[status];
-    if (column) sets.push(`${column} = now()`);
-    if (status === "cancelled" || status === "returned") {
-      params.push(reason);
-      sets.push(`status_reason = $${params.length}`);
-    } else {
-      sets.push("status_reason = NULL");
+    if (order.service_type === "delivery") {
+      deliveryEvents.push(...await require("../delivery/deliveryService").guardStatusChange(client, ownerId, order, status, { actor, reason }));
     }
-    if (status === "returned") {
-      const cash = await lockOrOpenCashSession(client, ownerId);
-      params.push(cash.id);
-      sets.push(`returned_cash_session_id = $${params.length}`);
-    }
-
-    const { rows } = await client.query(
-      `UPDATE orders SET ${sets.join(", ")} WHERE owner_id = $1 AND id = $2 RETURNING *`,
-      params
-    );
-    await recordStatusEvent(client, { orderId, ownerId, from: order.status, to: status, actor, reason });
-    await syncTicketsWithOrder(client, { ownerId, orderId, from: order.status, to: status });
-    return (await withItems(rows, client))[0];
+    return applyStatusChange(client, ownerId, order, status, { reason, actor });
   });
+  // Los avisos salen recién con la transacción confirmada.
+  realtime.emit({ ownerId, event: "order_status", orderId: Number(orderId), orderNumber: result.number, customer: true, openList: true });
+  for (const event of deliveryEvents) realtime.emit({ ownerId, ...event });
+  return result;
 };
 
 /**
  * Delivery listo → "salió del local". No cambia el estado del pedido: solo
  * registra la hora. Idempotente (marcarlo dos veces no la pisa).
  */
-const markDispatched = async (ownerId, orderId) => withTransaction(async (client) => {
+const markDispatched = async (ownerId, orderId) => {
+  const result = await dispatchTx(ownerId, orderId);
+  realtime.emit({ ownerId, event: "order_status", orderId: Number(orderId), orderNumber: result.number, customer: true });
+  return result;
+};
+
+const dispatchTx = (ownerId, orderId) => withTransaction(async (client) => {
   const order = await getOwnedOrder(client, ownerId, orderId, { lock: true });
   if (order.service_type !== "delivery") {
     throw new OrdersError(409, "Solo los pedidos de delivery salen del local.", "NOT_DELIVERY");
@@ -265,6 +294,9 @@ const markDispatched = async (ownerId, orderId) => withTransaction(async (client
     throw new OrdersError(409, "El pedido tiene que estar listo para marcar que salió.", "NOT_READY");
   }
   if (dispatchedAtOf(order)) return (await withItems([order], client))[0];
+  // Con un repartidor asignado, la salida la registra él al retirar el pedido
+  // (ahí se genera el código de entrega del cliente).
+  await require("../delivery/deliveryService").assertNoCourierAssigned(client, order.id);
   const { rows } = await client.query(
     "UPDATE orders SET dispatched_at = now(), updated_at = now() WHERE owner_id = $1 AND id = $2 RETURNING *",
     [ownerId, orderId]
@@ -299,6 +331,8 @@ module.exports = {
   listActiveOrders,
   listOrders,
   updateStatus,
+  applyStatusChange,
+  getOwnedOrder,
   markDispatched,
   assignWaiter,
   listWaiterOrders,

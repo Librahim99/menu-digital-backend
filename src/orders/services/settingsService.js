@@ -28,6 +28,14 @@ const intOption = (fallback, min, max, message) => ({
   },
 });
 
+const enumOption = (fallback, values) => ({
+  default: fallback,
+  parse: (value) => {
+    if (!values.includes(value)) throw new OrdersError(400, "Configuración inválida.");
+    return value;
+  },
+});
+
 // Opciones extensibles (claves de order_settings.options).
 const OPTIONS = {
   // Con QR general: si es false el comensal puede pedir sin indicar mesa
@@ -47,6 +55,19 @@ const OPTIONS = {
   // Se cargan los dos o ninguno (ver updateSettings).
   prepMinMinutes: intOption(0, 0, 600, "El tiempo mínimo tiene que ser entre 0 y 600 minutos."),
   prepMaxMinutes: intOption(0, 0, 600, "El tiempo máximo tiene que ser entre 0 y 600 minutos."),
+
+  // ── Delivery / repartidores (ver orders/delivery/) ──
+  // Apagado: el local gestiona sus envíos por fuera y el flujo de siempre no cambia.
+  deliveryEnabled: booleanOption(false),
+  // manual: el administrador elige al repartidor · open: lista compartida y los
+  // repartidores disponibles toman los pedidos.
+  deliveryAssignMode: enumOption("manual", ["manual", "open"]),
+  // Quién puede marcar la entrega: solo el repartidor (con el código del cliente)
+  // o también el administrador.
+  deliveryConfirmBy: enumOption("courier", ["courier", "courier_admin"]),
+  // Excepción para resolver incidencias: el administrador entrega sin código,
+  // con motivo obligatorio y queda auditado (aunque confirmBy sea "courier").
+  deliveryAdminOverride: booleanOption(false),
 };
 
 // Opciones guardadas + valores por defecto de las que no se guardaron.
