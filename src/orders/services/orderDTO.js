@@ -29,6 +29,16 @@ const toTicketSummary = (row) => ({
   doneAt: row.ticket_done_at,
 });
 
+// Delivery que ya salió del local. Vale solo si la salida es posterior a la última
+// vez que el pedido quedó listo; así, si vuelve atrás y se lo marca listo de nuevo,
+// deja de figurar en camino sin tener que limpiar nada.
+const dispatchedAtOf = (row) => {
+  if (!row.dispatched_at) return null;
+  if (row.status !== "ready") return null;
+  if (row.ready_at && new Date(row.dispatched_at).getTime() < new Date(row.ready_at).getTime()) return null;
+  return row.dispatched_at;
+};
+
 const toOrderDTO = (row, items = [], tickets = []) => ({
   id: Number(row.id),
   shiftId: Number(row.shift_id),
@@ -60,6 +70,7 @@ const toOrderDTO = (row, items = [], tickets = []) => ({
   createdAt: row.created_at,
   confirmedAt: row.confirmed_at,
   readyAt: row.ready_at,
+  dispatchedAt: dispatchedAtOf(row),
   deliveredAt: row.delivered_at,
   cancelledAt: row.cancelled_at,
   returnedAt: row.returned_at,
@@ -96,4 +107,4 @@ const withItems = async (rows, runner = { query }) => {
   ));
 };
 
-module.exports = { toOrderDTO, withItems };
+module.exports = { toOrderDTO, withItems, dispatchedAtOf };

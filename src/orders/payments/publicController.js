@@ -31,7 +31,8 @@ const createCheckout = route(async (req, res) => {
 
 const getCheckoutStatus = route(async (req, res) => {
   const owner = await loadOwner(req.params.slug);
-  res.json(await checkout.getCheckoutStatus({ owner, ref: req.params.ref }));
+  const settings = await settingsService.findSettings(String(owner._id));
+  res.json(await checkout.getCheckoutStatus({ owner, settings, ref: req.params.ref }));
 });
 
 module.exports = { getOnlineOrdering, createCheckout, getCheckoutStatus };

@@ -229,16 +229,88 @@ test("estado del checkout: devuelve solo lo necesario para el cliente", async (t
     }),
   });
   const dto = await checkout.getCheckoutStatus({ owner: OWNER, ref: "c".repeat(48) });
-  assert.deepEqual(dto, { status: "APPROVED", expired: false, total: 3000, serviceType: "delivery", orderNumber: 12, orderStatus: "pending" });
+  assert.deepEqual(dto, {
+    status: "APPROVED", expired: false, total: 3000, serviceType: "delivery", orderNumber: 12, orderStatus: "pending",
+    createdAt: null, confirmedAt: null, readyAt: null, dispatchedAt: null, deliveredAt: null, cancelledAt: null, refund: "none", estimate: null,
+  });
 });
 
 test("configuración pública: deshabilitada si no hay cuenta de MP conectada", async (t) => {
   withEnv(t);
   const { checkout, connections } = load(t);
   const status = t.mock.method(connections, "getStatus", async () => ({ connected: false }));
-  assert.deepEqual(await checkout.getOnlineConfig(OWNER, SETTINGS), { enabled: false, modes: [] });
+  assert.deepEqual(await checkout.getOnlineConfig(OWNER, SETTINGS), { enabled: false, modes: [], hideWhatsapp: false, estimate: null });
   status.mock.mockImplementation(async () => ({ connected: true }));
-  assert.deepEqual(await checkout.getOnlineConfig(OWNER, SETTINGS), { enabled: true, modes: ["takeaway", "delivery"] });
-  assert.deepEqual(await checkout.getOnlineConfig({ ...OWNER, hasTakeAway: false }, SETTINGS), { enabled: true, modes: ["delivery"] });
-  assert.deepEqual(await checkout.getOnlineConfig(OWNER, { options: {} }), { enabled: false, modes: [] });
+  assert.deepEqual(await checkout.getOnlineConfig(OWNER, SETTINGS), { enabled: true, modes: ["takeaway", "delivery"], hideWhatsapp: false, estimate: null });
+  assert.deepEqual(await checkout.getOnlineConfig({ ...OWNER, hasTakeAway: false }, SETTINGS), { enabled: true, modes: ["delivery"], hideWhatsapp: false, estimate: null });
+  assert.deepEqual(await checkout.getOnlineConfig(OWNER, { options: {} }), { enabled: false, modes: [], hideWhatsapp: false, estimate: null });
+});
+
+test("configuración pública: ocultar WhatsApp solo vale si el pago online funciona", async (t) => {
+  withEnv(t);
+  const { checkout, connections } = load(t);
+  const status = t.mock.method(connections, "getStatus", async () => ({ connected: true }));
+  const hiding = { options: { onlineOrdering: true, hideWhatsappOrder: true } };
+  assert.deepEqual(await checkout.getOnlineConfig(OWNER, hiding), { enabled: true, modes: ["takeaway", "delivery"], hideWhatsapp: true, estimate: null });
+  // Sin cuenta conectada, sin modalidades o sin pago online activado: WhatsApp se queda.
+  status.mock.mockImplementation(async () => ({ connected: false }));
+  assert.equal((await checkout.getOnlineConfig(OWNER, hiding)).hideWhatsapp, false);
+  status.mock.mockImplementation(async () => ({ connected: true }));
+  assert.equal((await checkout.getOnlineConfig({ ...OWNER, hasDelivery: false, hasTakeAway: false }, hiding)).hideWhatsapp, false);
+  assert.equal((await checkout.getOnlineConfig(OWNER, { options: { hideWhatsappOrder: true } })).hideWhatsapp, false);
+});
+
+test("tiempo estimado: se informa al cliente solo si el local cargó mínimo y máximo", async (t) => {
+  withEnv(t);
+  const { checkout, connections } = load(t);
+  t.mock.method(connections, "getStatus", async () => ({ connected: true }));
+  const withEta = { options: { onlineOrdering: true, prepMinMinutes: 10, prepMaxMinutes: 25 } };
+  assert.deepEqual((await checkout.getOnlineConfig(OWNER, withEta)).estimate, { minMinutes: 10, maxMinutes: 25 });
+  for (const options of [{}, { prepMinMinutes: 10 }, { prepMaxMinutes: 25 }, { prepMinMinutes: 30, prepMaxMinutes: 20 }]) {
+    assert.equal((await checkout.getOnlineConfig(OWNER, { options: { onlineOrdering: true, ...options } })).estimate, null, JSON.stringify(options));
+  }
+});
+
+test("seguimiento: el estado del pedido trae etapas, devolución y estimación", async (t) => {
+  withEnv(t);
+  const stamp = new Date("2026-10-09T20:00:00.000Z");
+  const { checkout } = load(t, {
+    handler: () => ({
+      rows: [{
+        status: "PARTIALLY_REFUNDED", expires_at: stamp, amount: "3000.00", order_number: 12, order_status: "confirmed",
+        order_created_at: stamp, confirmed_at: stamp, ready_at: null, delivered_at: null, cancelled_at: null,
+        draft: { serviceType: "takeaway", customer: { phone: "1122334455", address: "Calle 1" } }, checkout_url: "https://mp.example/x",
+      }],
+    }),
+  });
+  const settings = { options: { prepMinMinutes: 10, prepMaxMinutes: 25 } };
+  const dto = await checkout.getCheckoutStatus({ owner: OWNER, settings, ref: "d".repeat(48) });
+  assert.equal(dto.orderStatus, "confirmed");
+  assert.equal(dto.confirmedAt, stamp);
+  assert.equal(dto.refund, "partial");
+  assert.deepEqual(dto.estimate, { minMinutes: 10, maxMinutes: 25 });
+  // Nada de datos personales ni del link de pago en la respuesta pública.
+  assert.ok(!JSON.stringify(dto).includes("1122334455"));
+  assert.ok(!JSON.stringify(dto).includes("mp.example"));
+  assert.ok(!JSON.stringify(dto).includes("Calle 1"));
+});
+
+test("seguimiento: 'en camino' solo si el delivery salió después de quedar listo", async (t) => {
+  withEnv(t);
+  const ready = new Date("2026-01-01T20:00:00.000Z");
+  const row = (over) => ({
+    status: "APPROVED", expires_at: ready, amount: "3000.00", order_number: 5, order_status: "ready", order_created_at: ready,
+    confirmed_at: ready, ready_at: ready, delivered_at: null, cancelled_at: null, dispatched_at: null,
+    draft: { serviceType: "delivery", customer: {} }, ...over,
+  });
+  let current = row({});
+  const { checkout } = load(t, { handler: () => ({ rows: [current] }) });
+  const ref = "e".repeat(48);
+  assert.equal((await checkout.getCheckoutStatus({ owner: OWNER, ref })).dispatchedAt, null);
+  current = row({ dispatched_at: "2026-01-01T20:10:00.000Z" });
+  assert.equal((await checkout.getCheckoutStatus({ owner: OWNER, ref })).dispatchedAt, "2026-01-01T20:10:00.000Z");
+  current = row({ dispatched_at: "2026-01-01T19:50:00.000Z" });
+  assert.equal((await checkout.getCheckoutStatus({ owner: OWNER, ref })).dispatchedAt, null, "salida vieja, antes de volver a quedar listo");
+  current = row({ order_status: "delivered", dispatched_at: "2026-01-01T20:10:00.000Z" });
+  assert.equal((await checkout.getCheckoutStatus({ owner: OWNER, ref })).dispatchedAt, null);
 });
