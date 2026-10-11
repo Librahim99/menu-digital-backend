@@ -13,7 +13,7 @@ const { priceOrderLines } = require("./menuCatalog");
 const { toOrderDTO, withItems, dispatchedAtOf } = require("./orderDTO");
 const { syncTicketsWithOrder } = require("./ticketService");
 const realtime = require("../delivery/realtime");
-const { orderAlert, notifyOwnerLater } = require("../../services/ownerPushService");
+const { orderAlert } = require("../../services/ownerAlerts");
 
 // Huella del contenido: mismos productos, variantes, cantidades, aclaraciones
 // y mesa = mismo pedido.
@@ -156,15 +156,12 @@ const createOrder = async ({
     });
     // Pedido nuevo: el panel, los mozos y los sectores se enteran al instante
     // (y los repartidores, si es un delivery que ya entra confirmado). Si
-    // amerita (pedido del comensal, mesa que se abre), el panel suena y al
-    // dueño le llega la push.
+    // amerita (pedido del comensal, mesa que se abre), el panel suena.
     if (!created.duplicate) {
-      const alert = orderAlert(created.order, { tableOpened: created.tableOpened });
       realtime.emit({
         ownerId, event: "order_created", orderId: created.order.id, orderNumber: created.order.number,
-        staff: true, openList: serviceType === "delivery", alert,
+        staff: true, openList: serviceType === "delivery", alert: orderAlert(created.order, { tableOpened: created.tableOpened }),
       });
-      notifyOwnerLater(ownerId, alert);
     }
     return { order: created.order, duplicate: created.duplicate };
   } catch (error) {

@@ -7,7 +7,7 @@
 
 const db = require("../db/sql");
 const realtime = require("../realtime");
-const { notifyOwnerLater, reservationAlert } = require("../../services/ownerPushService");
+const { reservationAlert } = require("../../services/ownerAlerts");
 const { randomPairingCode, normalizePairingCode, formatPairingCode } = require("../../orders/utils/tokens");
 const { ReservationsError } = require("../errors");
 const { LIMITS } = require("../constants");
@@ -222,10 +222,8 @@ const createFromWeb = async (ownerId, settingsRow, body, now = new Date()) => {
   }
 
   const row = await insertReservation(ownerId, fields);
-  // Reserva nueva desde la web: el panel abierto suena y al dueño le llega la push.
-  const alert = reservationAlert(toOwnerDTO(row));
-  notify(row, alert);
-  notifyOwnerLater(ownerId, alert);
+  // Reserva nueva desde la web: el panel abierto suena y la muestra.
+  notify(row, reservationAlert(toOwnerDTO(row)));
   return row;
 };
 

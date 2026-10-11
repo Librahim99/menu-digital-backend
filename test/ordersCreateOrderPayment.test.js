@@ -80,12 +80,10 @@ test("pedido online: usa lo cotizado antes y guarda el pago aprobado", async (t)
   assert.equal(params[17], 3000);
 });
 
-test("pedido que abre una mesa: el panel recibe el aviso y al dueño le llega la push", async (t) => {
+test("pedido que abre una mesa: el panel recibe el aviso", async (t) => {
   const realtime = require("../src/orders/delivery/realtime");
-  const ownerPush = require("../src/services/ownerPushService");
   const emits = [];
   t.mock.method(realtime, "emit", (event) => emits.push(event));
-  const pushes = t.mock.method(ownerPush, "notifyOwnerLater", () => {});
   const { orderService } = load(t);
   const tables = require("../src/orders/services/tableSessionService");
   tables.lockOrOpenTableSession.mock.mockImplementation(async () => ({ id: 3, opened: true }));
@@ -102,7 +100,4 @@ test("pedido que abre una mesa: el panel recibe el aviso y al dueño le llega la
   assert.deepEqual(Object.keys(result).sort(), ["duplicate", "order"]);
   const created = emits.find((event) => event.event === "order_created");
   assert.equal(created.alert.kind, "table");
-  assert.equal(pushes.mock.callCount(), 1);
-  assert.equal(pushes.mock.calls[0].arguments[0], "owner-1");
-  assert.equal(pushes.mock.calls[0].arguments[1].kind, "table");
 });

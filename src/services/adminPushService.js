@@ -228,4 +228,4 @@ const notifyAdmins = async ({ title, body = "", url = "/admin", type = "other", 
   return summary;
 };
 
-module.exports = { notifyAdmins, isPushEnabled, isDeadToken, getMessaging, setMessagingForTests };
+module.exports = { notifyAdmins, isPushEnabled, isDeadToken, setMessagingForTests };
