@@ -42,4 +42,36 @@ const imageUploadLimiter = rateLimit({
   message: { message: "Subiste demasiadas imágenes en poco tiempo. Esperá unos minutos e intentá de nuevo." },
 });
 
-module.exports = { authLimiter, apiLimiter, imageUploadLimiter };
+// Verificación de email post-registro. Antes compartían authLimiter con
+// login/registro (10 cada 15 min por IP): alguien que se registraba, entraba
+// y se equivocaba un par de veces con el código se quedaba sin cupo. Clave
+// por usuario porque siempre corren después de protect — mismo criterio que
+// imageUploadLimiter. El tope por código lo sigue poniendo
+// claimPendingServiceAction (5 intentos).
+const verifyEmailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?._id?.toString() || ipKeyGenerator(req.ip),
+  message: { message: "Demasiados intentos. Esperá unos minutos e intentá de nuevo." },
+});
+
+// Cada pedido manda un mail real (reenvío o corrección del email): más
+// estricto que probar un código.
+const verificationMailLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => req.user?._id?.toString() || ipKeyGenerator(req.ip),
+  message: { message: "Pediste demasiados códigos. Esperá unos minutos e intentá de nuevo." },
+});
+
+module.exports = {
+  authLimiter,
+  apiLimiter,
+  imageUploadLimiter,
+  verifyEmailLimiter,
+  verificationMailLimiter,
+};

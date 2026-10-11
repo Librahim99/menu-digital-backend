@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const { protect, requireFeature } = require("../middleware/auth");
-const { authLimiter } = require("../middleware/rateLimiters");
+const { protect, protectAllowUnverified, requireFeature } = require("../middleware/auth");
+const { authLimiter, verifyEmailLimiter, verificationMailLimiter } = require("../middleware/rateLimiters");
 const { uploadUser, uploadFavicon: faviconUpload, FAVICON_MAX_BYTES } = require("../config/cloudinary");
 const {
   newUser,
@@ -9,6 +9,8 @@ const {
   loginUser,
   verifyEmail,
   resendVerificationCode,
+  getEmailVerificationStatus,
+  changeUnverifiedEmail,
   getAuthUser,
   getAuthUserSummary,
   fetchUserWithMenu,
@@ -64,13 +66,17 @@ router.post("/login", authLimiter, loginUser);
 // Rutas privadas (requieren JWT)
 // IMPORTANTE: /me debe ir ANTES de /:slug para que Express no lo interprete como slug
 // ──────────────────────────────────────────────
-router.get("/me", protect, getAuthUser);    // Datos del user autenticado (panel admin)
+// protectAllowUnverified: GET /me y las rutas de verify-email son lo único
+// que una cuenta sin verificar puede usar (el front refresca la sesión contra
+// /me); el resto de la API le responde 403 EMAIL_NOT_VERIFIED desde protect.
+router.get("/me", protectAllowUnverified, getAuthUser);    // Datos del user autenticado (panel admin)
 router.get("/me/summary", protect, getAuthUserSummary); // Versión liviana de /me para el dashboard
-// authLimiter: mismo criterio que /register — el claim ya corta a los 5
-// intentos por código (ver claimPendingServiceAction), esto además limita
-// cuántos códigos puede pedir/probar una cuenta por IP.
-router.post("/me/verify-email", protect, authLimiter, verifyEmail);
-router.post("/me/verify-email/resend", protect, authLimiter, resendVerificationCode);
+// Limitadores propios por usuario (ver rateLimiters.js) — el claim ya corta
+// a los 5 intentos por código (ver claimPendingServiceAction).
+router.get("/me/verify-email", protectAllowUnverified, getEmailVerificationStatus);
+router.post("/me/verify-email", protectAllowUnverified, verifyEmailLimiter, verifyEmail);
+router.post("/me/verify-email/resend", protectAllowUnverified, verificationMailLimiter, resendVerificationCode);
+router.patch("/me/verify-email/email", protectAllowUnverified, verificationMailLimiter, changeUnverifiedEmail);
 router.get("/me/menu", protect, fetchOwnMenu); // Menú completo del user autenticado, sin filtrar ocultos
 router.get("/me/stats", protect, requireFeature("estadisticas"), fetchStats); // Estadísticas de visitas (plan pro+)
 router.get("/me/item-stats", protect, requireFeature("estadisticas"), fetchItemStats); // Top de productos más vistos (plan pro+)

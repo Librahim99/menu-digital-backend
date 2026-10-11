@@ -1205,6 +1205,12 @@ const processPaymentEvent = async (paymentId) => {
       email: user.contactInfo.mail,
     }).catch((mailError) => {
       console.error("No se pudo enviar el email de verificación en el alta paga:", mailError);
+      notifyAdmins({
+        title: "⚠️ Falló el mail de verificación",
+        body: `No se pudo enviar el código de verificación a ${user.username} (alta paga).`,
+        url: "/admin",
+        type: "other",
+      });
     });
 
     const completedPending = await PendingRegistration.findByIdAndUpdate(

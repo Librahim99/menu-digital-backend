@@ -41,6 +41,7 @@ const { normalizeArPhone, isValidArLocalPhone, toStoredPhone } = require("../uti
 const {
   maskEmail,
   createPendingServiceAction,
+  findLivePendingServiceAction,
   claimPendingServiceAction,
 } = require("../utils/serviceActionCodes");
 const Seller = require("../models/Seller");
@@ -52,7 +53,9 @@ const { notifyAdmins } = require("../services/adminPushService");
 // propósito: la escritura que la dispara (alta o edición de perfil) ya se
 // guardó — si el mail falla acá no queremos revertir ni bloquear esa
 // respuesta, el dueño puede reenviarlo después con
-// POST /users/me/verify-email/resend.
+// POST /users/me/verify-email/resend. La pantalla de verificación se entera
+// por GET /users/me/verify-email (no queda ningún código vigente) y los
+// admins por un aviso, para que un SMTP caído no pase desapercibido.
 const sendEmailVerificationCode = async (user) => {
   try {
     await createPendingServiceAction({
@@ -62,8 +65,18 @@ const sendEmailVerificationCode = async (user) => {
     });
   } catch (error) {
     console.error("No se pudo enviar el email de verificación al registrarse:", error);
+    notifyAdmins({
+      title: "⚠️ Falló el mail de verificación",
+      body: `No se pudo enviar el código de verificación a ${user.username}.`,
+      url: "/admin",
+      type: "other",
+    });
   }
 };
+
+// Espera mínima entre reenvíos del código, la misma que muestra el botón de
+// la pantalla de verificación (RESEND_COOLDOWN_S en VerifyEmail.tsx).
+const RESEND_COOLDOWN_MS = 30 * 1000;
 
 // ──────────────────────────────────────────────
 // Helper: suma la visita de hoy del local (upsert, no bloqueante) si la
@@ -305,6 +318,17 @@ if (acceptedTerms !== true) {
   });
 }
 
+    // Mismo criterio que registerTrial y el alta paga: un email, una cuenta.
+    // Se guarda en minúsculas para que ese chequeo (y la búsqueda por mail de
+    // baja/arrepentimiento) no dependa de cómo lo tipearon.
+    const cleanMail = contactInfo.mail.trim().toLowerCase();
+    const mailTaken = await User.findOne({ "contactInfo.mail": cleanMail });
+    if (mailTaken) {
+      return res.status(409).json({
+        message: "Ese email ya está registrado. Iniciá sesión o usá otro email.",
+      });
+    }
+
     // El alta gratuita también exige un catálogo disponible y válido.
     await getPlanForUser({ subscription: "free" });
 
@@ -312,7 +336,7 @@ if (acceptedTerms !== true) {
     const user = await createUserWithUniqueSlug({
       username: cleanUsername,
       password,
-      contactInfo: { ...contactInfo, number: toStoredPhone(contactInfo.number) },
+      contactInfo: { ...contactInfo, mail: cleanMail, number: toStoredPhone(contactInfo.number) },
       acceptedTerms: true,
       acceptedTermsAt: new Date(),
       acceptedTermsVersion: process.env.ACCEPTED_TERMS_VERSION,
@@ -597,6 +621,18 @@ const resendVerificationCode = async (req, res) => {
       });
     }
 
+    const live = await findLivePendingServiceAction({
+      userID: req.user._id,
+      action: "verificacion_email",
+    });
+    const sentAgoMs = live?.createdAt ? Date.now() - new Date(live.createdAt).getTime() : Infinity;
+    if (sentAgoMs < RESEND_COOLDOWN_MS) {
+      return res.status(429).json({
+        message: "Esperá unos segundos antes de pedir otro código.",
+        retryAfterSeconds: Math.ceil((RESEND_COOLDOWN_MS - sentAgoMs) / 1000),
+      });
+    }
+
     try {
       await createPendingServiceAction({
         action: "verificacion_email",
@@ -614,6 +650,104 @@ const resendVerificationCode = async (req, res) => {
     }
 
     res.json({ ok: true, maskedEmail: maskEmail(req.user.contactInfo.mail) });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Estado de la verificación para la pantalla de código: a qué
+//          casilla se mandó y si hay un código vigente. El envío del alta es
+//          best-effort (ver sendEmailVerificationCode), así que sin esto la
+//          pantalla afirmaba "te mandamos un código" aunque el mail hubiera
+//          fallado. Devuelve el email completo, no enmascarado: lo pide el
+//          dueño autenticado (GET /users/me ya se lo muestra) y necesita
+//          verlo entero para darse cuenta de un error de tipeo.
+// @route   GET /api/users/me/verify-email
+// @access  Private
+// ──────────────────────────────────────────────
+const getEmailVerificationStatus = async (req, res) => {
+  try {
+    if (req.user.emailVerified) {
+      return res.json({ emailVerified: true });
+    }
+
+    const live = await findLivePendingServiceAction({
+      userID: req.user._id,
+      action: "verificacion_email",
+    });
+
+    res.json({
+      emailVerified: false,
+      email: req.user.contactInfo?.mail ?? null,
+      codeActive: Boolean(live),
+      codeExpiresAt: live?.expiresAt ?? null,
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Corregir el email de una cuenta que todavía no se verificó (ej.
+//          lo tipearon mal al registrarse y el código nunca les llega). A
+//          diferencia de requestEmailChange, escribe el mail de una: todavía
+//          no hay ninguna casilla confirmada que proteger, y el código nuevo
+//          sale a la dirección corregida. Una vez verificada la cuenta, el
+//          cambio pasa por /me/email-change.
+// @route   PATCH /api/users/me/verify-email/email
+// @access  Private
+// ──────────────────────────────────────────────
+const changeUnverifiedEmail = async (req, res) => {
+  try {
+    if (req.user.emailVerified) {
+      return res.status(400).json({
+        message: "Tu cuenta ya está verificada. Cambiá el email desde tu perfil.",
+      });
+    }
+
+    const { mail } = req.body;
+    if (!isValidEmail(mail)) {
+      return res.status(400).json({ message: "Ingresá un email válido." });
+    }
+
+    const cleanMail = mail.trim().toLowerCase();
+    if (cleanMail === req.user.contactInfo?.mail) {
+      return res.status(400).json({ message: "Ese ya es el email de tu cuenta." });
+    }
+
+    const takenByAnotherAccount = await User.findOne({
+      "contactInfo.mail": cleanMail,
+      _id: { $ne: req.user._id },
+    }).select("_id");
+    if (takenByAnotherAccount) {
+      return res.status(409).json({ message: "Ese email ya está en uso por otra cuenta." });
+    }
+
+    // Primero se guarda y después se manda: createPendingServiceAction
+    // invalida el código que había salido a la casilla anterior, y si el
+    // mail falla la cuenta queda igual en un estado coherente (email nuevo,
+    // sin código vigente) del que se sale con "Reenviar código".
+    await User.findByIdAndUpdate(req.user._id, { $set: { "contactInfo.mail": cleanMail } });
+
+    try {
+      await createPendingServiceAction({
+        action: "verificacion_email",
+        userID: req.user._id,
+        email: cleanMail,
+      });
+    } catch (error) {
+      if (error.isMailError) {
+        console.error("No se pudo enviar el código al email corregido:", error.cause);
+        return res.status(503).json({
+          email: cleanMail,
+          message: "Guardamos el email nuevo pero no pudimos enviar el código. Tocá Reenviar código en unos segundos.",
+        });
+      }
+      throw error;
+    }
+
+    res.json({ ok: true, email: cleanMail });
   } catch (error) {
     handleError(res, error);
   }
@@ -2013,6 +2147,8 @@ module.exports = {
   loginUser,
   verifyEmail,
   resendVerificationCode,
+  getEmailVerificationStatus,
+  changeUnverifiedEmail,
   getAuthUser,
   getAuthUserSummary,
   fetchUserWithMenu,
