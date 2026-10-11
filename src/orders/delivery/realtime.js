@@ -233,15 +233,18 @@ const getHub = () => {
  * @param {boolean} [event.openList]     cambió la lista de pedidos disponibles
  * @param {boolean} [event.customer]     el cliente del pedido también tiene que enterarse
  * @param {boolean} [event.staff]        mozos y pantallas de sector del local también (pedidos, mesas, comandas)
+ * @param {object} [event.alert]         aviso para el panel del local (pedido nuevo, mesa abierta): suena y
+ *                                       muestra el texto. Solo lo recibe el panel, nunca el repartidor.
  */
 const emit = ({
   ownerId, event, orderId = null, orderNumber = null, courierIds = [], openList = false, customer = false, staff = false,
+  alert = null,
 }) => {
   if (!hub || !ownerId) return;
   try {
     const owner = String(ownerId);
     const payload = { type: "delivery", event, orderId, orderNumber };
-    hub.toOwner(owner, payload);
+    hub.toOwner(owner, alert ? { ...payload, alert } : payload);
     // Una entrega confirmada por el repartidor también cierra el pedido para el salón.
     if (staff || event === "delivered") hub.toStaff?.(owner, { type: "orders", event });
     for (const courierId of new Set(courierIds.filter((id) => id != null))) hub.toCourier(owner, courierId, payload);

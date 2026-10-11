@@ -7,6 +7,7 @@
 
 const db = require("../db/sql");
 const realtime = require("../realtime");
+const { notifyOwnerLater, reservationAlert } = require("../../services/ownerPushService");
 const { randomPairingCode, normalizePairingCode, formatPairingCode } = require("../../orders/utils/tokens");
 const { ReservationsError } = require("../errors");
 const { LIMITS } = require("../constants");
@@ -120,9 +121,10 @@ const toCustomerDTO = (row) => ({
   updatedAt: row.updated_at,
 });
 
-const notify = (row) => {
+// `alert`: reserva nueva que el panel tiene que anunciar (suena y muestra el texto).
+const notify = (row, alert = null) => {
   try {
-    realtime.publish(row.owner_id, row.code, toOwnerDTO(row), toCustomerDTO(row));
+    realtime.publish(row.owner_id, row.code, toOwnerDTO(row), toCustomerDTO(row), alert);
   } catch (error) {
     // El tiempo real es un plus: si falla, la reserva ya quedó guardada.
     console.error(`⚠️  Reservas (tiempo real): ${error.message}`);
@@ -220,7 +222,10 @@ const createFromWeb = async (ownerId, settingsRow, body, now = new Date()) => {
   }
 
   const row = await insertReservation(ownerId, fields);
-  notify(row);
+  // Reserva nueva desde la web: el panel abierto suena y al dueño le llega la push.
+  const alert = reservationAlert(toOwnerDTO(row));
+  notify(row, alert);
+  notifyOwnerLater(ownerId, alert);
   return row;
 };
 
