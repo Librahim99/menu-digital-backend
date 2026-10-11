@@ -167,3 +167,12 @@ test("exportación: sin Pro devuelve solo las visitas del local autenticado", as
   assert.equal(visits.getCell("B3").value, 12);
   assert.equal(visits.getCell("B2").value, 0);
 });
+
+// Una ruta con un handler sin exportar tira al cargar el router: la API no levanta.
+test("las rutas de pedidos cargan con todos sus handlers", () => {
+  const router = require("../src/orders/routes");
+  const paths = router.stack.filter((layer) => layer.route).map((layer) => layer.route.path);
+  assert.ok(paths.includes("/reports/sales"));
+  assert.equal(typeof require("../src/orders/controllers/ownerController").getSalesReport, "function");
+  assert.equal(typeof require("../src/controllers/reportExportController").exportReport, "function");
+});
