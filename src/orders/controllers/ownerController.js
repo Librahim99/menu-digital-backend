@@ -359,6 +359,7 @@ module.exports = {
   updateCashRegister,
   listOpenCash,
   listClosedCash,
+  getSalesReport,
   getCashSession,
   openCash,
   updateCash,
