@@ -179,6 +179,10 @@ router.get("/cash/sessions/:id", ownerOnly, owner.getCashSession);
 router.patch("/cash/sessions/:id", ownerOnly, owner.updateCash);
 router.post("/cash/sessions/:id/close", ownerOnly, owner.closeCash);
 
+// Reportes de ventas para Estadísticas (?days=7|30&serviceType=). El Excel sale por
+// /api/users/me/reports/export, que junta ventas y visitas.
+router.get("/reports/sales", ownerOnly, owner.getSalesReport);
+
 // Operadores (en la API siguen como "waiters")
 router.get("/waiters", ownerOnly, owner.listWaiters);
 router.post("/waiters", ownerOnly, owner.createWaiter);

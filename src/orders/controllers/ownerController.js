@@ -8,6 +8,8 @@ const orderItemService = require("../services/orderItemService");
 const waiterService = require("../services/waiterService");
 const tableSessionService = require("../services/tableSessionService");
 const cashService = require("../services/cashService");
+const reportService = require("../services/reportService");
+const { buildStatsPeriod } = require("../../utils/statsPeriod");
 const deliveryService = require("../delivery/deliveryService");
 const realtime = require("../delivery/realtime");
 const {
@@ -251,6 +253,19 @@ const listOpenCash = route(async (req, res) => {
 
 const listClosedCash = route(async (req, res) => {
   res.json(await cashService.listClosedSessions(ownerIdOf(req), { page: pageParam(req) }));
+});
+
+// ── Reportes ─────────────────────────────────
+
+// Ventas del período para Estadísticas: mismas ventanas que las visitas
+// (GET /api/users/me/stats), para que las dos pestañas hablen de los mismos días.
+const getSalesReport = route(async (req, res) => {
+  const { days, serviceType } = req.query;
+  if (days !== "7" && days !== "30") throw new OrdersError(400, "El período debe ser de 7 o 30 días.");
+  if (serviceType !== undefined && !SERVICE_TYPES.includes(serviceType)) throw new OrdersError(400, "Tipo de pedido inválido.");
+  res.json(await reportService.salesDashboard(
+    ownerIdOf(req), buildStatsPeriod(Number(days), req.user.createdAt), { serviceType: serviceType ?? null }
+  ));
 });
 
 const getCashSession = route(async (req, res) => {
