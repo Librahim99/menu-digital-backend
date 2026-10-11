@@ -13,6 +13,7 @@ const { priceOrderLines } = require("./menuCatalog");
 const { toOrderDTO, withItems, dispatchedAtOf } = require("./orderDTO");
 const { syncTicketsWithOrder } = require("./ticketService");
 const realtime = require("../delivery/realtime");
+const { orderAlert, notifyOwnerLater } = require("../../services/ownerPushService");
 
 // Huella del contenido: mismos productos, variantes, cantidades, aclaraciones
 // y mesa = mismo pedido.
@@ -151,17 +152,21 @@ const createOrder = async ({
       // Pedido del personal (entra confirmado): sale a los sectores ya.
       await syncTicketsWithOrder(client, { ownerId, orderId: order.id, from: null, to: status });
 
-      return { order: (await withItems([order], client))[0], duplicate: false };
+      return { order: (await withItems([order], client))[0], duplicate: false, tableOpened: Boolean(tableSession?.opened) };
     });
     // Pedido nuevo: el panel, los mozos y los sectores se enteran al instante
-    // (y los repartidores, si es un delivery que ya entra confirmado).
+    // (y los repartidores, si es un delivery que ya entra confirmado). Si
+    // amerita (pedido del comensal, mesa que se abre), el panel suena y al
+    // dueño le llega la push.
     if (!created.duplicate) {
+      const alert = orderAlert(created.order, { tableOpened: created.tableOpened });
       realtime.emit({
         ownerId, event: "order_created", orderId: created.order.id, orderNumber: created.order.number,
-        staff: true, openList: serviceType === "delivery",
+        staff: true, openList: serviceType === "delivery", alert,
       });
+      notifyOwnerLater(ownerId, alert);
     }
-    return created;
+    return { order: created.order, duplicate: created.duplicate };
   } catch (error) {
     // Dos reintentos simultáneos del mismo envío: el segundo choca con el
     // UNIQUE de client_request_id y devuelve el pedido del primero.

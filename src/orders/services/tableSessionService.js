@@ -17,16 +17,20 @@ const num = (value) => (value === null || value === undefined ? null : Number(va
 
 /**
  * Sesión abierta de la mesa (la crea si no hay), bloqueada para la transacción.
+ * `opened` dice si se creó recién (el pedido abrió la mesa).
  * @param {object} client
  * @param {{ ownerId, tableNumber, shiftId, waiter: {id,name}|null }} input
  */
 const lockOrOpenTableSession = async (client, { ownerId, tableNumber, shiftId, waiter }) => {
-  await client.query(
+  const inserted = await client.query(
     `INSERT INTO table_sessions (owner_id, table_number, shift_id, waiter_id, waiter_name)
      VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (owner_id, table_number) WHERE closed_at IS NULL DO NOTHING`,
+     ON CONFLICT (owner_id, table_number) WHERE closed_at IS NULL DO NOTHING
+     RETURNING id`,
     [ownerId, tableNumber, shiftId, waiter?.id ?? null, waiter?.name ?? null]
   );
+  // La mesa se abrió con este pedido (no había una sesión abierta): el panel avisa.
+  const opened = (inserted?.rowCount ?? inserted?.rows?.length ?? 0) > 0;
   const { rows } = await client.query(
     "SELECT * FROM table_sessions WHERE owner_id = $1 AND table_number = $2 AND closed_at IS NULL FOR UPDATE",
     [ownerId, tableNumber]
@@ -39,9 +43,9 @@ const lockOrOpenTableSession = async (client, { ownerId, tableNumber, shiftId, w
       "UPDATE table_sessions SET waiter_id = $2, waiter_name = $3, updated_at = now() WHERE id = $1 RETURNING *",
       [session.id, waiter.id, waiter.name]
     );
-    return updated.rows[0];
+    return { ...updated.rows[0], opened };
   }
-  return session;
+  return { ...session, opened };
 };
 
 // Sesiones con sus totales en vivo (las cerradas usan su snapshot).

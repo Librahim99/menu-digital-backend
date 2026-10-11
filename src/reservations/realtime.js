@@ -127,9 +127,12 @@ const createHub = ({ authorizeOwner, authorizeCode }) => {
     socket.on("error", () => { clearTimeout(timer); cleanup(socket); });
   };
 
-  const publish = (ownerId, code, ownerReservation, customerReservation) => {
+  const publish = (ownerId, code, ownerReservation, customerReservation, alert = null) => {
+    const ownerPayload = alert
+      ? { type: "reservation", reservation: ownerReservation, alert }
+      : { type: "reservation", reservation: ownerReservation };
     for (const socket of owners.get(String(ownerId)) ?? []) {
-      safeSend(socket, { type: "reservation", reservation: ownerReservation });
+      safeSend(socket, ownerPayload);
     }
     for (const socket of codes.get(code) ?? []) {
       safeSend(socket, { type: "reservation", reservation: customerReservation });
@@ -175,9 +178,9 @@ const getHub = () => {
 };
 
 // Llamado por el service en cada cambio de una reserva.
-const publish = (ownerId, code, ownerReservation, customerReservation) => {
+const publish = (ownerId, code, ownerReservation, customerReservation, alert = null) => {
   if (!hub) return; // nadie se conectó todavía
-  hub.publish(ownerId, code, ownerReservation, customerReservation);
+  hub.publish(ownerId, code, ownerReservation, customerReservation, alert);
 };
 
 /**
