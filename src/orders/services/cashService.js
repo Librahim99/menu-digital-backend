@@ -14,6 +14,7 @@ const { query, withTransaction } = require("../db/sql");
 const { OrdersError } = require("../errors");
 const { ACTIVE_STATUSES, LIMITS } = require("../constants");
 const { cleanText, optionalMoney } = require("../utils/validate");
+const { TIMEZONE_BA } = require("../../utils/dates");
 
 const num = (value) => (value === null || value === undefined ? null : Number(value));
 const round = (value) => Math.round(value * 100) / 100;
@@ -312,6 +313,20 @@ const listClosedSessions = async (ownerId, { page = 1, pageSize = 20 } = {}) => 
   return { sessions: rows.map((row) => toCashSessionDTO(row)), total: count.rows[0].total, page, pageSize };
 };
 
+// Cajas cerradas entre dos días de Buenos Aires (inclusive), según cuándo se
+// cerraron. Para los reportes: sin paginar, de la más vieja a la más nueva.
+const listSessionsClosedBetween = async (ownerId, from, to, { limit = 1000 } = {}) => {
+  const { rows } = await query(
+    `SELECT * FROM cash_sessions
+     WHERE owner_id = $1
+       AND closed_at >= ($2::date::timestamp AT TIME ZONE '${TIMEZONE_BA}')
+       AND closed_at < (($3::date + 1)::timestamp AT TIME ZONE '${TIMEZONE_BA}')
+     ORDER BY closed_at LIMIT $4`,
+    [ownerId, from, to, limit]
+  );
+  return rows.map((row) => toCashSessionDTO(row));
+};
+
 module.exports = {
   lockOrOpenCashSession,
   listRegisters,
@@ -323,4 +338,5 @@ module.exports = {
   updateSession,
   closeSession,
   listClosedSessions,
+  listSessionsClosedBetween,
 };

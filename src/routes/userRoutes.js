@@ -37,6 +37,7 @@ const {
   changePanelSettingsPassword,
   updatePanelSettings,
 } = require("../controllers/userController");
+const { exportReport } = require("../controllers/reportExportController");
 
 // El favicon responde 400 con un mensaje claro si el archivo pesa de más o
 // no es una imagen, en vez de caer en el handler global (500 genérico).
@@ -80,6 +81,9 @@ router.patch("/me/verify-email/email", protectAllowUnverified, verificationMailL
 router.get("/me/menu", protect, fetchOwnMenu); // Menú completo del user autenticado, sin filtrar ocultos
 router.get("/me/stats", protect, requireFeature("estadisticas"), fetchStats); // Estadísticas de visitas (plan pro+)
 router.get("/me/item-stats", protect, requireFeature("estadisticas"), fetchItemStats); // Top de productos más vistos (plan pro+)
+// Reporte en Excel (ventas, caja, visitas). Sin requireFeature: el controller
+// arma solo las hojas que el plan incluye y responde 403 si no queda ninguna.
+router.get("/me/reports/export", protect, exportReport);
 router.put("/me", protect, editUser);
 // authLimiter: mismo criterio que verify-email — el claim ya corta a los 5
 // intentos por código, esto además limita cuántos pedidos/códigos puede
