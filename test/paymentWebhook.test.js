@@ -74,6 +74,12 @@ function response() {
   };
 }
 
+// "Ahora" de estos tests: instantes después del date_approved por defecto de
+// approvedPayment. mockCommon congela Date acá para que los vencimientos
+// fijos (renewal_base, subscriptionExpiresAt) no cambien de "vigente" a
+// "vencido" según el día real en que corra la suite.
+const TEST_NOW = new Date("2026-08-21T15:00:05.000Z");
+
 function approvedPayment(overrides = {}) {
   return {
     id: "payment-123",
@@ -164,6 +170,7 @@ function mockCommon(
     if (previousMpEnvironment === undefined) delete process.env.MP_ENV;
     else process.env.MP_ENV = previousMpEnvironment;
   });
+  t.mock.timers.enable({ apis: ["Date"], now: TEST_NOW });
   t.mock.method(console, "error", () => {});
   t.mock.method(mongoose.connection, "transaction", async (work) => work(null));
   t.mock.method(Payment.prototype, "get", async ({ id }) => (
