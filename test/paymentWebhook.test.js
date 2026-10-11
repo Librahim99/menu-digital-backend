@@ -1001,34 +1001,53 @@ test("un upgrade no acorta un vencimiento vigente más lejano", async (t) => {
   );
 });
 
+// Vencimiento vigente relativo al momento de ejecución: el webhook solo
+// suma desde el vencimiento si todavía es futuro. Se fija el día 10 a las
+// 15:00 UTC para que sumar meses calendario no dependa del recorte de fin de mes.
+function futureExpiry(daysAhead = 30) {
+  const date = new Date(Date.now() + daysAhead * 24 * 60 * 60 * 1000);
+  date.setUTCDate(10);
+  date.setUTCHours(15, 0, 0, 0);
+  if (date.getTime() <= Date.now()) date.setUTCMonth(date.getUTCMonth() + 1);
+  return date;
+}
+
+function plusMonths(date, months) {
+  const result = new Date(date);
+  result.setUTCMonth(result.getUTCMonth() + months);
+  return result;
+}
+
 test("renovación anticipada suma meses desde el vencimiento vigente", async (t) => {
+  const currentExpiry = futureExpiry();
+  const expectedExpiry = plusMonths(currentExpiry, 3).toISOString();
   const paymentContext = mockCommon(t, approvedPayment({
     metadata: {
       plan_id: "basic",
       months: 3,
       type: "upgrade",
       payment_mode: "renewal",
-      renewal_base: "2026-10-10T15:00:00.000Z",
+      renewal_base: currentExpiry.toISOString(),
     },
   }));
   const updates = [];
   mockExistingUser(t, {
     subscription: "basic",
-    subscriptionExpiresAt: new Date("2026-10-10T15:00:00.000Z"),
+    subscriptionExpiresAt: new Date(currentExpiry),
   }, updates);
 
   await mpWebhook(request(), response());
 
-  assert.equal(updates[0].update.subscriptionExpiresAt.toISOString(), "2027-01-10T15:00:00.000Z");
+  assert.equal(updates[0].update.subscriptionExpiresAt.toISOString(), expectedExpiry);
   const transaction = paymentContext.getTransaction();
   assert.equal(transaction.operation, "renewal");
   assert.equal(
     transaction.subscriptionExpiresAtBefore.toISOString(),
-    "2026-10-10T15:00:00.000Z"
+    currentExpiry.toISOString()
   );
   assert.equal(
     transaction.subscriptionExpiresAtAfter.toISOString(),
-    "2027-01-10T15:00:00.000Z"
+    expectedExpiry
   );
 });
 
@@ -1054,19 +1073,21 @@ test("renovación vencida comienza desde la aprobación", async (t) => {
 });
 
 test("un reintento del mismo webhook conserva el mismo vencimiento", async (t) => {
+  const currentExpiry = futureExpiry();
+  const expectedExpiry = plusMonths(currentExpiry, 6).toISOString();
   const paymentContext = mockCommon(t, approvedPayment({
     metadata: {
       plan_id: "pro",
       months: 6,
       type: "upgrade",
       payment_mode: "renewal",
-      renewal_base: "2026-12-15T15:00:00.000Z",
+      renewal_base: currentExpiry.toISOString(),
     },
   }));
   const updates = [];
   mockExistingUser(t, {
     subscription: "pro",
-    subscriptionExpiresAt: new Date("2026-12-15T15:00:00.000Z"),
+    subscriptionExpiresAt: new Date(currentExpiry),
   }, updates);
 
   await mpWebhook(request(), response());
@@ -1075,7 +1096,7 @@ test("un reintento del mismo webhook conserva el mismo vencimiento", async (t) =
   const transactionAfterRetry = paymentContext.getTransaction();
 
   assert.equal(updates.length, 1);
-  assert.equal(updates[0].update.subscriptionExpiresAt.toISOString(), "2027-06-15T15:00:00.000Z");
+  assert.equal(updates[0].update.subscriptionExpiresAt.toISOString(), expectedExpiry);
   assert.equal(paymentContext.crmUpdates.length, 1);
   const snapshotWrites = paymentContext.transactionWrites.filter(
     ({ options }) => options.upsert
@@ -1089,22 +1110,24 @@ test("un reintento del mismo webhook conserva el mismo vencimiento", async (t) =
   );
   assert.equal(
     transactionAfterRetry.subscriptionExpiresAtBefore.toISOString(),
-    "2026-12-15T15:00:00.000Z"
+    currentExpiry.toISOString()
   );
   assert.equal(
     transactionAfterRetry.subscriptionExpiresAtAfter.toISOString(),
-    "2027-06-15T15:00:00.000Z"
+    expectedExpiry
   );
 });
 
 test("un reintento recupera una finalización fallida sin duplicar el CRM", async (t) => {
+  const currentExpiry = futureExpiry();
+  const expectedExpiry = plusMonths(currentExpiry, 6).toISOString();
   const paymentContext = mockCommon(t, approvedPayment({
     metadata: {
       plan_id: "pro",
       months: 6,
       type: "upgrade",
       payment_mode: "renewal",
-      renewal_base: "2026-12-15T15:00:00.000Z",
+      renewal_base: currentExpiry.toISOString(),
     },
   }), {
     markAppliedErrorOnce: new Error("Falla al finalizar la transacción"),
@@ -1112,7 +1135,7 @@ test("un reintento recupera una finalización fallida sin duplicar el CRM", asyn
   const updates = [];
   mockExistingUser(t, {
     subscription: "pro",
-    subscriptionExpiresAt: new Date("2026-12-15T15:00:00.000Z"),
+    subscriptionExpiresAt: new Date(currentExpiry),
   }, updates);
 
   const firstResponse = response();
@@ -1125,11 +1148,11 @@ test("un reintento recupera una finalización fallida sin duplicar el CRM", asyn
   assert.equal(pendingTransaction.entitlementStatus, "pending");
   assert.equal(
     pendingTransaction.subscriptionExpiresAtBefore.toISOString(),
-    "2026-12-15T15:00:00.000Z"
+    currentExpiry.toISOString()
   );
   assert.equal(
     pendingTransaction.subscriptionExpiresAtAfter.toISOString(),
-    "2027-06-15T15:00:00.000Z"
+    expectedExpiry
   );
 
   const recoveryResponse = response();
@@ -1147,7 +1170,7 @@ test("un reintento recupera una finalización fallida sin duplicar el CRM", asyn
   assert.equal(recoveredTransaction.entitlementReason, null);
   assert.equal(
     recoveredTransaction.subscriptionExpiresAtBefore.toISOString(),
-    "2026-12-15T15:00:00.000Z"
+    currentExpiry.toISOString()
   );
   const appliedAt = recoveredTransaction.entitlementAppliedAt.getTime();
 
