@@ -245,6 +245,29 @@ test("newUser normaliza el username a minúsculas antes de chequear disponibilid
   assert.equal(res.body.message, "El username ya está en uso");
 });
 
+test("newUser rechaza un email que ya tiene otra cuenta, comparando en minúsculas", async (t) => {
+  const filters = [];
+  t.mock.method(User, "findOne", async (filter) => {
+    filters.push(filter);
+    // Username libre; el email ya está registrado.
+    return filter["contactInfo.mail"] ? { _id: "alguien-mas" } : null;
+  });
+
+  const res = response();
+  await newUser({
+    body: {
+      username: "nuevolocal",
+      password: "password-seguro",
+      acceptedTerms: true,
+      contactInfo: { ...activeContact, mail: "Dueno@Example.com" },
+    },
+  }, res);
+
+  assert.equal(filters.at(-1)["contactInfo.mail"], "dueno@example.com");
+  assert.equal(res.statusCode, 409);
+  assert.match(res.body.message, /email ya está registrado/i);
+});
+
 test("newUser rechaza un email de contacto ausente o inválido antes de tocar la base", async () => {
   for (const mail of [undefined, "", "ididid", "sin-arroba.com"]) {
     const res = response();

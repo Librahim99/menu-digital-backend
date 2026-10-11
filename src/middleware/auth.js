@@ -10,9 +10,17 @@ const { handleError } = require("../utils/handleError");
  * Verifica que el request tenga un JWT válido en el header Authorization.
  * Si es válido, adjunta el user al objeto req para uso en controllers.
  *
+ * Además corta con 403 `EMAIL_NOT_VERIFIED` a las cuentas que todavía no
+ * confirmaron el código de email: antes ese bloqueo vivía solo en el
+ * frontend (UserRoutes), así que con el token en la mano se podía usar toda
+ * la API igual. Se compara contra `false` a propósito — las cuentas viejas
+ * sin el campo quedan verificadas por el default del modelo. Las pocas rutas
+ * que una cuenta sin verificar sí necesita (GET /users/me y las de
+ * verify-email) usan protectAllowUnverified.
+ *
  * Uso: router.get("/ruta-protegida", protect, controller)
  */
-const protect = async (req, res, next) => {
+const buildProtect = ({ allowUnverified }) => async (req, res, next) => {
   let token;
 
   // El token debe venir en el header: Authorization: Bearer <token>
@@ -47,6 +55,13 @@ const protect = async (req, res, next) => {
       return res.status(403).json({ message: "Cuenta desactivada" });
     }
 
+    if (!allowUnverified && req.user.emailVerified === false && !req.user.admin) {
+      return res.status(403).json({
+        code: "EMAIL_NOT_VERIFIED",
+        message: "Verificá tu email para seguir usando tu cuenta.",
+      });
+    }
+
     // El resto de los middlewares/controllers recibe siempre el plan vigente.
     // No modificamos la base acá: preservamos el plan comprado como historial.
     const subscriptionState = getSubscriptionState(
@@ -61,6 +76,9 @@ const protect = async (req, res, next) => {
     return res.status(401).json({ message: "Token inválido o expirado" });
   }
 };
+
+const protect = buildProtect({ allowUnverified: false });
+const protectAllowUnverified = buildProtect({ allowUnverified: true });
 
 
 /**
@@ -274,6 +292,7 @@ const denyInfluencer = (req, res, next) => {
 module.exports = {
   denyInfluencer,
   protect,
+  protectAllowUnverified,
   isAdmin,
   requireFeature,
   protectSellerOrAdmin,

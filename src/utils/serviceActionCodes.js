@@ -40,6 +40,17 @@ const createPendingServiceAction = async ({ action, userID, email, paymentID = n
   return pending;
 };
 
+// Código vigente (sin usar y sin vencer) de un flujo autenticado, o null.
+// Lo usan la pantalla de verificación para saber si hay algo que ingresar y
+// el reenvío para su espera mínima.
+const findLivePendingServiceAction = ({ userID, action }) =>
+  PendingServiceAction.findOne({
+    userID,
+    action,
+    consumed: false,
+    expiresAt: { $gt: new Date() },
+  });
+
 // Busca el código pendiente, valida vencimiento/intentos y lo marca
 // consumido de forma atómica (evita doble ejecución por doble click/retry).
 //
@@ -86,5 +97,6 @@ module.exports = {
   hashCode,
   maskEmail,
   createPendingServiceAction,
+  findLivePendingServiceAction,
   claimPendingServiceAction,
 };
