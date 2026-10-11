@@ -15,18 +15,27 @@ const MULTICAST_LIMIT = 500;
 /**
  * Manda la push a todos los dispositivos del dueño.
  * @param {string} ownerId
- * @param {{ title: string, body?: string, url?: string, tag?: string }} alert
+ * @param {{ title: string, body?: string, url?: string, tag?: string, kind?: string }} alert
  *   `tag` agrupa avisos en el dispositivo (el de la misma mesa reemplaza al anterior).
+ *   `kind` decide a qué dispositivos va: solo a los que activaron ese feature
+ *   (reservation → Reservas; order / table → Pedidos). Sin `kind` (la prueba) va
+ *   a todos los que tengan algún feature activado.
  * @returns {Promise<{ enabled: boolean, devices: number, delivered: number, failed: number, removed: number, error: string|null }>}
  */
-const notifyOwner = async (ownerId, { title, body = "", url = "/pedidos", tag = "" }) => {
+const featureOf = (kind) => (kind === "reservation" ? "reservations" : kind ? "orders" : null);
+
+const notifyOwner = async (ownerId, { title, body = "", url = "/pedidos", tag = "", kind = null }) => {
   const summary = { enabled: false, devices: 0, delivered: 0, failed: 0, removed: 0, error: null };
   try {
     const fcm = getMessaging();
     summary.enabled = Boolean(fcm);
     if (!fcm || !ownerId) return summary;
 
-    const tokens = await OwnerPushToken.find({ userID: ownerId }).distinct("token");
+    const feature = featureOf(kind);
+    const tokens = await OwnerPushToken.find({
+      userID: ownerId,
+      features: feature ?? { $exists: true, $ne: [] },
+    }).distinct("token");
     summary.devices = tokens.length;
     if (tokens.length === 0) return summary;
 

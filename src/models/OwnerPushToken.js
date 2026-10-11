@@ -7,6 +7,10 @@ const mongoose = require("mongoose");
 //
 // El token es único: si otro dueño inicia sesión en el mismo navegador, el
 // registro se reasigna a él (ver registerToken en ownerPushController.js).
+// Features cuyos avisos recibe cada dispositivo. Vacío por defecto: el dueño
+// activa a mano los de Pedidos (pedido nuevo, mesa abierta) y/o los de Reservas.
+const OWNER_PUSH_FEATURES = ["orders", "reservations"];
+
 const ownerPushTokenSchema = new mongoose.Schema(
   {
     token: { type: String, required: true, unique: true },
@@ -16,6 +20,7 @@ const ownerPushTokenSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    features: { type: [{ type: String, enum: OWNER_PUSH_FEATURES }], default: [] },
     userAgent: { type: String, default: null },
     lastSeenAt: { type: Date, default: Date.now },
   },
@@ -23,3 +28,4 @@ const ownerPushTokenSchema = new mongoose.Schema(
 );
 
 module.exports = mongoose.model("OwnerPushToken", ownerPushTokenSchema);
+module.exports.OWNER_PUSH_FEATURES = OWNER_PUSH_FEATURES;
