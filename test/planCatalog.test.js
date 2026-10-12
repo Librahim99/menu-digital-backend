@@ -35,7 +35,8 @@ test("features es obligatorio y rechaza límites o listas de templates inválida
     // Prueba que menu_styles entró a BOOLEAN_FEATURES (de donde sale el schema)
     // y no solo a INITIAL_PLANS: si faltara de la lista, esto no rechazaría.
     { ...catalog.INITIAL_PLANS[0].features, menu_styles: undefined },
-    { ...catalog.INITIAL_PLANS[0].features, premium_menu_styles: undefined }]) {
+    { ...catalog.INITIAL_PLANS[0].features, premium_menu_styles: undefined },
+    { ...catalog.INITIAL_PLANS[0].features, page_layouts: undefined }]) {
     await assert.rejects(document("free", { features }).validate(), { name: "ValidationError" });
   }
 });
@@ -106,6 +107,10 @@ test("el DTO expone los permisos reales y no filtra metadatos internos", () => {
   assert.equal(dto.features.premium_menu_styles, false);
   assert.equal(catalog.planToDTO(document("free")).features.premium_menu_styles, false);
   assert.equal(catalog.planToDTO(document("pro")).features.premium_menu_styles, true);
+  // Plantillas de página: misma regla, con su propia clave.
+  assert.equal(dto.features.page_layouts, false);
+  assert.equal(catalog.planToDTO(document("free")).features.page_layouts, false);
+  assert.equal(catalog.planToDTO(document("pro")).features.page_layouts, true);
 });
 
 test("el DTO conserva los multiplicadores editados al serializar el mapa de MongoDB", () => {
@@ -338,7 +343,7 @@ test("inicializar completa features legadas sin tocar precios ni configuraciones
 // de que un catálogo ya guardado en MongoDB (que no la tiene) se completa
 // solo al arrancar. Sin el backfill, featuresSchema la exige como required y
 // con strict:"throw" todo el catálogo deja de validar.
-for (const featureKey of ["image_manager", "menu_styles", "premium_menu_styles"]) {
+for (const featureKey of ["image_manager", "menu_styles", "premium_menu_styles", "page_layouts"]) {
 test(`inicializar completa la clave de feature ${featureKey} en catálogos que ya tenían features, sin tocar el resto`, async (t) => {
   // Simula un plan guardado ANTES de agregar la clave a BOOLEAN_FEATURES:
   // ya tiene features, pero le falta justo esa.
