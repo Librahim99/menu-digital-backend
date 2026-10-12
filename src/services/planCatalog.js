@@ -34,6 +34,10 @@ const INITIAL_PLANS = [
     // Diseños premium (Neobrutalismo, Maximalismo táctil): clave aparte de
     // menu_styles, también exclusiva de Pro al lanzarla.
     premium_menu_styles: plan.name === "pro",
+    // Plantillas de página (ver config/pageLayouts.js): la composición de la
+    // portada y la carta en escritorio. Exclusiva de Pro al lanzarla; Estándar
+    // no depende de esta clave.
+    page_layouts: plan.name === "pro",
     item_limit: plan.name === "free" ? 15 : plan.name === "basic" ? 50 : null,
     templateIds: Array.from({ length: plan.name === "free" ? 1 : plan.name === "basic" ? 5 : 25 }, (_, i) => i + 1),
   },

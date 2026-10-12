@@ -15,6 +15,9 @@ const { getPlanForUser, getRequestPlan } = require("../services/planCatalog");
 const {
   MENU_STYLES, MENU_STYLE_LABELS, getMenuStyle, getMenuStyleFeature, getMenuStyleForFeatures,
 } = require("../config/menuStyles");
+const {
+  PAGE_LAYOUTS, PAGE_LAYOUT_LABELS, getPageLayout, getPageLayoutFeature, getPageLayoutForFeatures,
+} = require("../config/pageLayouts");
 const { buenosAiresDateStr } = require("../utils/dates");
 const { buildStatsPeriod } = require("../utils/statsPeriod");
 const {
@@ -792,6 +795,8 @@ const getAuthUser = async (req, res) => {
       features: plan.features,
       template: getTemplateForFeatures(user.template, plan.features),
       menuStyle: getMenuStyleForFeatures(user.menuStyle, plan.features),
+
+      pageLayout: getPageLayoutForFeatures(user.pageLayout, plan.features),
       itemCount,
       categoryCount: categorias.length,
     });
@@ -855,7 +860,7 @@ const getAuthUserSummary = async (req, res) => {
 // ──────────────────────────────────────────────
 const PUBLIC_MENU_USER_SELECT = [
   "contactInfo.businessName", "contactInfo.number", "contactInfo.whatsappNumbers", "contactInfo.address", "contactInfo.orderMessage", "contactInfo.takeAwayMessage",
-  "media", "hasDelivery", "hasTakeAway", "template", "menuStyle",
+  "media", "hasDelivery", "hasTakeAway", "template", "menuStyle", "pageLayout",
   "subscription", "subscriptionExpiresAt", "panelSettings.menuDisplay",
 ].join(" ");
 const PUBLIC_MENU_MENU_SELECT = "title section sectionID";
@@ -932,6 +937,8 @@ const fetchPublicMenuV2 = async (req, res) => {
         hasTakeAway: user.hasTakeAway === true,
         template: getTemplateForFeatures(user.template, features),
         menuStyle: getMenuStyleForFeatures(user.menuStyle, features),
+
+        pageLayout: getPageLayoutForFeatures(user.pageLayout, features),
         features: toPublicFeatures(features),
         menuDisplay,
       },
@@ -1504,6 +1511,8 @@ const fetchUser = async (req, res) => {
       template: getTemplateForFeatures(user.template, plan.features),
       schedule: landingVisibility.schedule ? user.schedule : undefined,
       menuStyle: getMenuStyleForFeatures(user.menuStyle, plan.features),
+
+      pageLayout: getPageLayoutForFeatures(user.pageLayout, plan.features),
       subscription: effectivePlan,
       features: plan.features,
       landingVisibility,
@@ -1877,10 +1886,14 @@ const deleteFavicon = async (req, res) => {
 // ──────────────────────────────────────────────
 const useTemplate = async (req, res) => {
   try {
-    const { template, menuStyle } = req.body;
+    const { template, menuStyle, pageLayout } = req.body;
 
     if (menuStyle !== undefined && !MENU_STYLES.includes(menuStyle)) {
       return res.status(400).json({ message: "Diseño de carta inválido" });
+    }
+
+    if (pageLayout !== undefined && !PAGE_LAYOUTS.includes(pageLayout)) {
+      return res.status(400).json({ message: "Plantilla de página inválida" });
     }
 
     if (typeof template !== "number") {
@@ -1912,11 +1925,27 @@ const useTemplate = async (req, res) => {
       });
     }
 
+    // Misma guarda para la plantilla de página, con su propia feature. Estándar
+    // no pasa por acá, y sin pageLayout en el body tampoco: quien tiene una
+    // plantilla guardada de un plan vencido puede seguir cambiando de paleta.
+    const layoutFeature = pageLayout !== undefined ? getPageLayoutFeature(pageLayout) : null;
+    if (layoutFeature && features[layoutFeature] !== true) {
+      return res.status(403).json({
+        code: "FEATURE_NOT_INCLUDED",
+        feature: layoutFeature,
+        message: "Tu plan no incluye las plantillas de página.",
+      });
+    }
+
     const previousTemplate = req.user.template;
 
     const user = await User.findByIdAndUpdate(
       req.user._id,
-      { template, ...(menuStyle !== undefined ? { menuStyle } : {}) },
+      {
+        template,
+        ...(menuStyle !== undefined ? { menuStyle } : {}),
+        ...(pageLayout !== undefined ? { pageLayout } : {}),
+      },
       { new: true, runValidators: true }
     );
 
@@ -1930,13 +1959,19 @@ const useTemplate = async (req, res) => {
       await logCrmEvent(req.user._id, `Cambió el diseño de carta a ${MENU_STYLE_LABELS[menuStyle]}`);
     }
 
+    if (pageLayout !== undefined && getPageLayout(req.user.pageLayout) !== pageLayout) {
+      await logCrmEvent(req.user._id, `Cambió la plantilla de página a ${PAGE_LAYOUT_LABELS[pageLayout]}`);
+    }
+
     // El template va crudo: la guarda de arriba ya probó que está permitido.
-    // El estilo se recorta igual porque el body puede no traerlo (cambio de
+    // El estilo y la plantilla se recortan igual porque el body puede no traerlo (cambio de
     // paleta a secas) y el guardado en Mongo puede ser una familia de un plan
     // ya vencido; sin recortar, el panel se contradiría con GET /me.
     res.json({
       template: user.template,
       menuStyle: getMenuStyleForFeatures(user.menuStyle, features),
+
+      pageLayout: getPageLayoutForFeatures(user.pageLayout, features),
     });
   } catch (error) {
     handleError(res, error);

@@ -254,12 +254,13 @@ test("v2: el bloque user es una whitelist y la carta trae solo lo que se dibuja"
     hasTakeAway: true,
     template: 3,
     menuStyle: "bistro",
+    pageLayout: "standard",
     features: { sin_publicidad: true, landing_page: true, pedido_whatsapp: true },
     menuDisplay: { featuredSection: false, collapsibleCategories: false, hidePrices: false },
   });
   assert.deepEqual(
     Object.keys(res.body.user).sort(),
-    ["contactInfo", "features", "hasDelivery", "hasTakeAway", "media", "menuDisplay", "menuStyle", "template"],
+    ["contactInfo", "features", "hasDelivery", "hasTakeAway", "media", "menuDisplay", "menuStyle", "pageLayout", "template"],
   );
 });
 
@@ -380,7 +381,7 @@ test("v2: user sin lean y con proyección mínima; menús e items lean, con proy
   const userFields = userCall.select.split(/\s+/);
   for (const field of [
     "contactInfo.businessName", "contactInfo.number", "contactInfo.address", "contactInfo.orderMessage",
-    "media", "hasDelivery", "hasTakeAway", "template", "menuStyle", "subscription", "subscriptionExpiresAt", "panelSettings.menuDisplay",
+    "media", "hasDelivery", "hasTakeAway", "template", "menuStyle", "pageLayout", "subscription", "subscriptionExpiresAt", "panelSettings.menuDisplay",
   ]) {
     assert.ok(userFields.includes(field), `el user debe pedir ${field}`);
   }
@@ -712,6 +713,7 @@ test("v2: un local sin nada guardado en panelSettings ni en el resto de los camp
     hasTakeAway: false,
     template: 1,
     menuStyle: "classic",
+    pageLayout: "standard",
     features: { sin_publicidad: false, landing_page: true, pedido_whatsapp: true },
     menuDisplay: { featuredSection: false, collapsibleCategories: false, hidePrices: false },
   });

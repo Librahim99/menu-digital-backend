@@ -73,7 +73,7 @@ for (const [grupo, estilos, subscription] of [
       const res = response();
       await useTemplate({ user, body: { template: 1, menuStyle } }, res);
       assert.equal(res.statusCode, 200);
-      assert.deepEqual(res.body, { template: 1, menuStyle });
+      assert.deepEqual(res.body, { template: 1, menuStyle, pageLayout: "standard" });
       assert.ok(event.$push.notes.$each[0].text.includes(MENU_STYLE_LABELS[menuStyle]));
     });
   }

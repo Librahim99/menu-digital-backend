@@ -16,6 +16,7 @@ const BOOLEAN_FEATURES = [
   "menu_editor", "qr", "pedido_whatsapp", "landing_page", "sin_publicidad",
   "carga_masiva_excel", "programacion_productos", "menu_pdf", "estadisticas",
   "image_manager", "menu_templates", "menu_styles", "premium_menu_styles",
+  "page_layouts",
 ];
 // Las paletas las define el frontend (lib/templates.ts + globals.css): acá solo
 // se valida la forma del ID, sin tope, para que sumar una no exija un deploy

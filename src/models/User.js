@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const { isValidImageUrl } = require("../utils/imageUrl");
 const { MENU_STYLES } = require("../config/menuStyles");
+const { PAGE_LAYOUTS } = require("../config/pageLayouts");
 
 // Un turno del horario de atención; mismo shape que los rangos de Item.
 const TimeRangeSchema = new mongoose.Schema(
@@ -148,6 +149,13 @@ const UserSchema = new mongoose.Schema(
       type: String,
       enum: MENU_STYLES,
       default: "classic",
+    },
+
+    // Composición de la portada y la carta en escritorio (config/pageLayouts.js).
+    pageLayout: {
+      type: String,
+      enum: PAGE_LAYOUTS,
+      default: "standard",
     },
 
     acceptedTerms: {
