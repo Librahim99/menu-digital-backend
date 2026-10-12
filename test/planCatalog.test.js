@@ -30,7 +30,8 @@ test("los tres planes iniciales validan sin alterar sus importes actuales", asyn
 test("features es obligatorio y rechaza límites o listas de templates inválidas", async () => {
   for (const features of [undefined, { ...catalog.INITIAL_PLANS[0].features, item_limit: undefined },
     { ...catalog.INITIAL_PLANS[0].features, templateIds: [] },
-    { ...catalog.INITIAL_PLANS[0].features, templateIds: [1, 16] },
+    { ...catalog.INITIAL_PLANS[0].features, templateIds: [1, 0] },
+    { ...catalog.INITIAL_PLANS[0].features, templateIds: [1, 2.5] },
     // Prueba que menu_styles entró a BOOLEAN_FEATURES (de donde sale el schema)
     // y no solo a INITIAL_PLANS: si faltara de la lista, esto no rechazaría.
     { ...catalog.INITIAL_PLANS[0].features, menu_styles: undefined },

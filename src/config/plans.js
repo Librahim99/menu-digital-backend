@@ -17,7 +17,10 @@ const BOOLEAN_FEATURES = [
   "carga_masiva_excel", "programacion_productos", "menu_pdf", "estadisticas",
   "image_manager", "menu_templates", "menu_styles", "premium_menu_styles",
 ];
-const TEMPLATE_IDS = Array.from({ length: 15 }, (_, index) => index + 1);
+// Las paletas las define el frontend (lib/templates.ts + globals.css): acá solo
+// se valida la forma del ID, sin tope, para que sumar una no exija un deploy
+// del backend. Qué paletas puede usar cada local lo decide features.templateIds.
+const isTemplateId = (id) => Number.isSafeInteger(id) && id >= 1;
 const hasSubscriptionExpiry = (value) => value !== null && value !== undefined && value !== "";
 
 const isValidFeatures = (features) => features && typeof features === "object"
@@ -27,7 +30,7 @@ const isValidFeatures = (features) => features && typeof features === "object"
   && (features.item_limit === null || (Number.isSafeInteger(features.item_limit) && features.item_limit > 0))
   && Array.isArray(features.templateIds) && features.templateIds.length > 0
   && new Set(features.templateIds).size === features.templateIds.length
-  && features.templateIds.every(id => TEMPLATE_IDS.includes(id));
+  && features.templateIds.every(isTemplateId);
 
 const isValidPeriodMultipliers = (multipliers) => multipliers && typeof multipliers === "object"
   && !Array.isArray(multipliers)
@@ -119,7 +122,7 @@ function isTrialCurrentlyActive(trialActive, subscriptionExpiresAt, now = new Da
 }
 
 module.exports = {
-  PLAN_MAP, PLAN_ORDER, BOOLEAN_FEATURES, TEMPLATE_IDS,
+  PLAN_MAP, PLAN_ORDER, BOOLEAN_FEATURES, isTemplateId,
   isValidFeatures, isValidPeriodMultipliers, getTemplateForFeatures,
   getEffectivePlan, getSubscriptionState, isTrialCurrentlyActive,
 };

@@ -13,7 +13,7 @@ const PAYMENT_PLANS = {
   pro: {
     title: "Menú Digital — Plan Pro",
     unitPrice: 49999,
-    description: "Productos ilimitados, métricas y 15 diseños",
+    description: "Productos ilimitados, métricas y 25 diseños",
   },
 };
 
