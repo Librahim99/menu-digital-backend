@@ -35,7 +35,7 @@ const INITIAL_PLANS = [
     // menu_styles, también exclusiva de Pro al lanzarla.
     premium_menu_styles: plan.name === "pro",
     item_limit: plan.name === "free" ? 15 : plan.name === "basic" ? 50 : null,
-    templateIds: Array.from({ length: plan.name === "free" ? 1 : plan.name === "basic" ? 5 : 15 }, (_, i) => i + 1),
+    templateIds: Array.from({ length: plan.name === "free" ? 1 : plan.name === "basic" ? 5 : 25 }, (_, i) => i + 1),
   },
 }));
 

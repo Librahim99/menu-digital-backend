@@ -9,7 +9,7 @@ const ItemView = require("../models/ItemView");
 const {
   getSubscriptionState,
   getTemplateForFeatures,
-  TEMPLATE_IDS,
+  isTemplateId,
 } = require("../config/plans");
 const { getPlanForUser, getRequestPlan } = require("../services/planCatalog");
 const {
@@ -1887,8 +1887,8 @@ const useTemplate = async (req, res) => {
       return res.status(400).json({ message: "Template debe ser un número" });
     }
 
-    // La lista técnica valida el ID; MongoDB decide si el usuario puede usarlo.
-    if (!TEMPLATE_IDS.includes(template)) {
+    // Acá solo se valida la forma del ID; MongoDB decide si el usuario puede usarlo.
+    if (!isTemplateId(template)) {
       return res.status(400).json({ message: "Template inválido" });
     }
     const { features } = await getRequestPlan(req);

@@ -1,5 +1,5 @@
 const mongoose = require("mongoose");
-const { PLAN_ORDER, BOOLEAN_FEATURES, TEMPLATE_IDS, isValidPeriodMultipliers } = require("../config/plans");
+const { PLAN_ORDER, BOOLEAN_FEATURES, isTemplateId, isValidPeriodMultipliers } = require("../config/plans");
 
 const featuresSchema = new mongoose.Schema({
   ...Object.fromEntries(BOOLEAN_FEATURES.map(key => [key, { type: Boolean, required: true }])),
@@ -11,7 +11,7 @@ const featuresSchema = new mongoose.Schema({
   templateIds: {
     type: [Number], required: true, default: undefined,
     validate: ids => Array.isArray(ids) && ids.length > 0
-      && new Set(ids).size === ids.length && ids.every(id => TEMPLATE_IDS.includes(id)),
+      && new Set(ids).size === ids.length && ids.every(isTemplateId),
   },
 }, { _id: false, strict: "throw" });
 

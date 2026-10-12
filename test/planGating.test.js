@@ -163,7 +163,7 @@ test("el administrador puede editar Free y desactivar funcionalidades en cualqui
 test("la API no acepta tipos ambiguos, claves desconocidas ni templates inexistentes", async (t) => {
   t.mock.method(Plan, "findOne", async () => assert.fail("No debe leer ni escribir"));
   const valid = document("basic").toObject().features;
-  for (const change of [{ qr: "false" }, { item_limit: 0 }, { item_limit: -1 }, { templateIds: [] }, { templateIds: [16] }, { templateIds: [1, 1] }, { feature_inventada: true }]) {
+  for (const change of [{ qr: "false" }, { item_limit: 0 }, { item_limit: -1 }, { templateIds: [] }, { templateIds: [0] }, { templateIds: [2.5] }, { templateIds: ["2"] }, { templateIds: [1, 1] }, { feature_inventada: true }]) {
     const res = response();
     await plans.updatePlan({ params: { name: "basic" }, user: {}, body: {
       version: 0, label: "Básico", description: "Prueba", price: 100, discountPrice: null, features: { ...valid, ...change },
