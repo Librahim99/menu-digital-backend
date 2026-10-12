@@ -45,7 +45,7 @@ test("cuentas nuevas usan Estándar y el schema rechaza plantillas desconocidas"
 // Espejo de PAGE_LAYOUTS del frontend (src/lib/pageLayouts.ts): si divergen,
 // el selector ofrece una plantilla que el PATCH rechaza.
 test("Estándar es la única plantilla abierta; el resto usa page_layouts", () => {
-  assert.deepEqual(PAGE_LAYOUTS, ["standard", "immersive"]);
+  assert.deepEqual(PAGE_LAYOUTS, ["standard", "immersive", "split"]);
   assert.equal(getPageLayoutFeature("standard"), null);
   for (const layout of GATED_LAYOUTS) assert.equal(getPageLayoutFeature(layout), "page_layouts");
   assert.equal(getPageLayoutFeature("unknown"), null);
