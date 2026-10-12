@@ -14,6 +14,7 @@
 const PAGE_LAYOUT_CATALOG = {
   standard: { label: "Estándar", feature: null },
   immersive: { label: "Inmersiva", feature: "page_layouts" },
+  split: { label: "Partida", feature: "page_layouts" },
 };
 const PAGE_LAYOUTS = Object.keys(PAGE_LAYOUT_CATALOG);
 const PAGE_LAYOUT_LABELS = Object.fromEntries(PAGE_LAYOUTS.map(layout => [layout, PAGE_LAYOUT_CATALOG[layout].label]));
