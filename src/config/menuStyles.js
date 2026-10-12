@@ -10,6 +10,10 @@ const MENU_STYLE_LABELS = {
   bakery: "Pastelería / Bakery",
   "neo-brutalism": "Neobrutalismo",
   tactile: "Maximalismo táctil",
+  "retro-diner": "Retro diner",
+  neon: "Neón nocturno",
+  swiss: "Editorial suizo",
+  "art-deco": "Art déco",
 };
 const MENU_STYLES = Object.keys(MENU_STYLE_LABELS);
 
@@ -27,7 +31,7 @@ const isVisualFamily = (value) => VISUAL_FAMILIES.includes(value);
 // paleta), pero se habilitan con su propia feature para poder abrir las
 // familias comunes en otro plan sin regalar estas. Espejo de
 // PREMIUM_MENU_STYLES en el frontend (src/lib/menuStyles.ts).
-const PREMIUM_MENU_STYLES = ["neo-brutalism", "tactile"];
+const PREMIUM_MENU_STYLES = ["neo-brutalism", "tactile", "retro-diner", "neon", "swiss", "art-deco"];
 const isPremiumMenuStyle = (value) => PREMIUM_MENU_STYLES.includes(value);
 
 // Feature del catálogo que habilita un diseño; null = abierto a todos los planes.
