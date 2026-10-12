@@ -125,7 +125,7 @@ test("las familias se habilitan por documento del catálogo, no por el nombre de
 // Espejo de PREMIUM_MENU_STYLES del frontend: si divergen, el selector ofrece
 // un diseño que el PATCH rechaza (o candadea uno que el plan ya incluye).
 test("los diseños premium son familias con su propia feature", () => {
-  assert.deepEqual(PREMIUM_MENU_STYLES, ["neo-brutalism", "tactile"]);
+  assert.deepEqual(PREMIUM_MENU_STYLES, ["neo-brutalism", "tactile", "retro-diner", "neon", "swiss", "art-deco"]);
   for (const style of PREMIUM_MENU_STYLES) {
     assert.ok(VISUAL_FAMILIES.includes(style));
     assert.equal(getMenuStyleFeature(style), "premium_menu_styles");
