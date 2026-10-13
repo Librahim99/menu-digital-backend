@@ -251,8 +251,29 @@ const listOpenCash = route(async (req, res) => {
   res.json({ sessions: await cashService.listOpenSessions(ownerIdOf(req)) });
 });
 
+// Todo lo de la pantalla de caja en una sola consulta.
+const getCashOverview = route(async (req, res) => {
+  res.json(await cashService.getOverview(ownerIdOf(req)));
+});
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const dayParam = (value) => {
+  if (value === undefined || value === "") return null;
+  if (typeof value !== "string" || !DAY_RE.test(value) || Number.isNaN(Date.parse(value))) throw new OrdersError(400, "Fecha inválida.");
+  return value;
+};
+
+// Cajas cerradas (?page=&register=&cashier=&result=exact|short|over|uncounted&from=&to=).
 const listClosedCash = route(async (req, res) => {
-  res.json(await cashService.listClosedSessions(ownerIdOf(req), { page: pageParam(req) }));
+  const { register, cashier, result, from, to } = req.query;
+  res.json(await cashService.listClosedSessions(ownerIdOf(req), {
+    page: pageParam(req),
+    registerId: optionalPositiveInt(register, { field: "Caja" }),
+    cashier: cleanText(cashier, LIMITS.cashierNameLength),
+    result: result === undefined || result === "" ? null : result,
+    from: dayParam(from),
+    to: dayParam(to),
+  }));
 });
 
 // ── Reportes ─────────────────────────────────
@@ -277,18 +298,39 @@ const openCash = route(async (req, res) => {
   res.status(201).json({
     session: await cashService.openSession(ownerIdOf(req), {
       registerId: optionalPositiveInt(body.registerId, { field: "Caja" }),
+      cashierId: body.cashierId,
       cashierName: body.cashierName,
       openingAmount: body.openingAmount,
-    }),
+    }, panelActor(req)),
   });
 });
 
 const updateCash = route(async (req, res) => {
-  res.json({ session: await cashService.updateSession(ownerIdOf(req), idParam(req), req.body ?? {}) });
+  res.json({ session: await cashService.updateSession(ownerIdOf(req), idParam(req), req.body ?? {}, panelActor(req)) });
 });
 
 const closeCash = route(async (req, res) => {
-  res.json({ session: await cashService.closeSession(ownerIdOf(req), idParam(req), req.body ?? {}) });
+  res.json({ session: await cashService.closeSession(ownerIdOf(req), idParam(req), req.body ?? {}, panelActor(req)) });
+});
+
+// Libro de una caja (?type=&cashOnly=1&page=).
+const getCashLedger = route(async (req, res) => {
+  const { type, cashOnly } = req.query;
+  res.json(await cashService.getLedger(ownerIdOf(req), idParam(req), {
+    type: type === undefined || type === "" ? null : type,
+    cashOnly: cashOnly === "1" || cashOnly === "true",
+    page: pageParam(req),
+  }));
+});
+
+// Ingreso, egreso o retiro. Devuelve la caja con el resultado ya actualizado.
+const addCashMovement = route(async (req, res) => {
+  const result = await cashService.addMovement(ownerIdOf(req), idParam(req), req.body ?? {}, panelActor(req));
+  res.status(result.duplicate ? 200 : 201).json(result);
+});
+
+const voidCashMovement = route(async (req, res) => {
+  res.json(await cashService.voidMovement(ownerIdOf(req), idParam(req), req.body ?? {}, panelActor(req)));
 });
 
 // ── Operadores ───────────────────────────────
@@ -357,8 +399,12 @@ module.exports = {
   listCashRegisters,
   createCashRegister,
   updateCashRegister,
+  getCashOverview,
   listOpenCash,
   listClosedCash,
+  getCashLedger,
+  addCashMovement,
+  voidCashMovement,
   getSalesReport,
   getCashSession,
   openCash,
