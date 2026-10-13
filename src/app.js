@@ -295,6 +295,21 @@ app.use(
 
 
 // ──────────────────────────────────────────────
+// Juegos para comensales (MongoDB + WebSocket)
+// ──────────────────────────────────────────────
+//
+// Módulo aparte en src/games/: la configuración por local vive
+// en MongoDB y el juego multijugador usa su propio WebSocket
+// (/api/games/ws), que se engancha al arrancar (ver start()).
+//
+
+app.use(
+  "/api/games",
+  require("./games/routes")
+);
+
+
+// ──────────────────────────────────────────────
 // Sitemap
 // ──────────────────────────────────────────────
 
@@ -482,9 +497,13 @@ const start = async () => {
     // propio path del mismo servidor y se corta cualquier otro upgrade.
     const reservationsRealtime = require("./reservations/realtime");
     const ordersRealtime = require("./orders/delivery/realtime");
+    const gamesRealtime = require("./games/realtime");
     reservationsRealtime.attach(server);
     ordersRealtime.attach(server);
-    reservationsRealtime.closeUnknownUpgrades(server, [reservationsRealtime.WS_PATH, ordersRealtime.WS_PATH]);
+    gamesRealtime.attach(server);
+    reservationsRealtime.closeUnknownUpgrades(server, [
+      reservationsRealtime.WS_PATH, ordersRealtime.WS_PATH, gamesRealtime.WS_PATH,
+    ]);
 
     // Avisos a los admins por planes que vencen (revisión periódica).
     require("./services/adminSubscriptionNotices").startSubscriptionNotices();
