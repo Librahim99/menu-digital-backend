@@ -28,7 +28,7 @@ function userFindByIdQuery(user, calls) {
   };
 }
 
-test("getAuthUserSummary devuelve solo los 8 campos livianos del dashboard, sin password ni el resto del user", async (t) => {
+test("getAuthUserSummary devuelve solo los campos livianos del dashboard, sin password ni el resto del user", async (t) => {
   t.mock.method(Plan, "findOne", async ({ name }) => new Plan(INITIAL_PLANS.find(plan => plan.name === name)));
 
   const user = {
@@ -63,6 +63,7 @@ test("getAuthUserSummary devuelve solo los 8 campos livianos del dashboard, sin 
     categoryCount: 1,
     contactInfo: { businessName: "Café de prueba" },
     media: { backgroundPicture: "https://example.com/fondo.jpg" },
+    showDashboardActivity: true,
   });
 
   // La proyección no debe pedir password ni el resto de campos sensibles/no usados.
@@ -70,4 +71,51 @@ test("getAuthUserSummary devuelve solo los 8 campos livianos del dashboard, sin 
   assert.equal(res.body.password, undefined);
   assert.equal(res.body.subscription, undefined);
   assert.equal(res.body.subscriptionExpiresAt, undefined);
+});
+
+test("getAuthUserSummary avisa cuando el dueño apagó los datos de pedidos y reservas del inicio", async (t) => {
+  t.mock.method(Plan, "findOne", async ({ name }) => new Plan(INITIAL_PLANS.find(plan => plan.name === name)));
+  const user = {
+    _id: "64f000000000000000000123",
+    slug: "cafe-de-prueba",
+    subscription: "pro",
+    subscriptionExpiresAt: null,
+    panelSettings: { showDashboardActivity: false },
+  };
+  const calls = {};
+  t.mock.method(User, "findById", () => userFindByIdQuery(user, calls));
+  t.mock.method(Menu, "find", async () => []);
+  t.mock.method(Item, "countDocuments", async () => 0);
+
+  const res = response();
+  await getAuthUserSummary({ user: { _id: user._id } }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.showDashboardActivity, false);
+  assert.ok(calls.select.includes("panelSettings.showDashboardActivity"));
+});
+
+test("PATCH /me/settings guarda el toggle del inicio solo si es booleano; sin guardar vale true", async (t) => {
+  const { updatePanelSettings } = require("../src/controllers/userController");
+  let received;
+  const update = t.mock.method(User, "findByIdAndUpdate", async (_id, change) => {
+    received = change.$set;
+    return { panelSettings: { showDashboardActivity: false } };
+  });
+
+  const res = response();
+  await updatePanelSettings({ user: { _id: "64f000000000000000000123" }, body: { showDashboardActivity: false } }, res);
+  assert.deepEqual(received, { "panelSettings.showDashboardActivity": false });
+  assert.equal(res.body.showDashboardActivity, false);
+
+  const invalid = response();
+  await updatePanelSettings({ user: { _id: "64f000000000000000000123" }, body: { showDashboardActivity: "no" } }, invalid);
+  assert.equal(invalid.statusCode, 400);
+  assert.equal(update.mock.callCount(), 1);
+
+  // Cuenta anterior a la opción: el campo no está guardado.
+  update.mock.mockImplementation(async () => ({ panelSettings: {} }));
+  const legacy = response();
+  await updatePanelSettings({ user: { _id: "64f000000000000000000123" }, body: { autoGenerateCodes: true } }, legacy);
+  assert.equal(legacy.body.showDashboardActivity, true);
 });

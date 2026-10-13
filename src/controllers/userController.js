@@ -815,7 +815,7 @@ const getAuthUser = async (req, res) => {
 const getAuthUserSummary = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select(
-      "slug hasDelivery hasTakeAway template subscription subscriptionExpiresAt contactInfo.businessName media.backgroundPicture"
+      "slug hasDelivery hasTakeAway template subscription subscriptionExpiresAt contactInfo.businessName media.backgroundPicture panelSettings.showDashboardActivity"
     );
     if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
 
@@ -842,6 +842,10 @@ const getAuthUserSummary = async (req, res) => {
       categoryCount: categorias.length,
       contactInfo: getContactInfo(user.contactInfo),
       media: { backgroundPicture: user.media?.backgroundPicture || "" },
+      // Toggle de Configuración: el inicio lo lee de acá porque /me/settings
+      // es la pantalla con contraseña. `!== false`: sin el campo guardado
+      // (cuenta anterior a la opción) se muestra.
+      showDashboardActivity: user.panelSettings?.showDashboardActivity !== false,
     });
   } catch (error) {
     handleError(res, error);
@@ -2018,6 +2022,8 @@ const getPanelSettingsValues = (user) => ({
   autoGenerateCodes: user?.panelSettings?.autoGenerateCodes === true,
   disableMenuDelete: user?.panelSettings?.disableMenuDelete === true,
   deleteMenusWithContent: user?.panelSettings?.deleteMenusWithContent === true,
+  // `!== false`: arranca encendido (ver models/User.js).
+  showDashboardActivity: user?.panelSettings?.showDashboardActivity !== false,
   landingVisibility: getLandingVisibility(user),
   menuDisplay: getMenuDisplay(user),
 });
@@ -2133,12 +2139,15 @@ const changePanelSettingsPassword = async (req, res) => {
 // ──────────────────────────────────────────────
 const updatePanelSettings = async (req, res) => {
   try {
-    const { autoGenerateCodes, disableMenuDelete, deleteMenusWithContent } = req.body;
+    const { autoGenerateCodes, disableMenuDelete, deleteMenusWithContent, showDashboardActivity } = req.body;
     const updates = {};
     if (typeof autoGenerateCodes === "boolean") updates["panelSettings.autoGenerateCodes"] = autoGenerateCodes;
     if (typeof disableMenuDelete === "boolean") updates["panelSettings.disableMenuDelete"] = disableMenuDelete;
     if (typeof deleteMenusWithContent === "boolean") {
       updates["panelSettings.deleteMenusWithContent"] = deleteMenusWithContent;
+    }
+    if (typeof showDashboardActivity === "boolean") {
+      updates["panelSettings.showDashboardActivity"] = showDashboardActivity;
     }
     // Edición parcial (el panel manda solo el toggle que cambió): se toman
     // únicamente las claves conocidas con valor booleano. landingVisibility y
