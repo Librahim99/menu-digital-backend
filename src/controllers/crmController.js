@@ -10,6 +10,7 @@ const PageView = require("../models/PageView");
 const Seller = require("../models/Seller");
 const { buenosAiresDateStr, startOfMonthBA } = require("../utils/dates");
 const { getSubscriptionState, isTrialCurrentlyActive } = require("../config/plans");
+const { EXCLUDE_TEST_USERS } = require("../utils/testUsers");
 const { STAGES } = CrmProfile;
 
 const STAGE_LABEL = {
@@ -93,7 +94,9 @@ const summarizeAttention = (clients) => ({
 // (onboarding, pagos, tráfico), así que se documenta como trade-off aceptado
 // en vez de bifurcar la lógica.
 const buildClientsWithAttention = async (req) => {
-  const users = await User.find(scopedUserMatch(req, { admin: false }))
+  // Sin usuarios de prueba: de acá salen la cartera del CRM, el resumen del
+  // dashboard y los totales de cada vendedor.
+  const users = await User.find(scopedUserMatch(req, { admin: false, ...EXCLUDE_TEST_USERS }))
     .select(
       "username slug subscription subscriptionExpiresAt active createdAt lastConnectionAt sellerID assignedSeller assignedSellerAt influencerReferral menu " +
       "trialActive contactInfo.businessName contactInfo.mail contactInfo.number contactInfo.address " +
@@ -573,7 +576,7 @@ const getOverdueCount = async (req, res) => {
 
     let newAssignments = 0;
     if (req.seller) {
-      const clientIDs = await User.find(scopedUserMatch(req, { admin: false })).distinct("_id");
+      const clientIDs = await User.find(scopedUserMatch(req, { admin: false, ...EXCLUDE_TEST_USERS })).distinct("_id");
       match.userID = { $in: clientIDs };
 
       const seller = await Seller.findById(req.seller._id).select("crmAlertsSeenAt");
@@ -677,7 +680,7 @@ const exportClients = async (req, res) => {
       return res.status(400).json({ message: "Etapa inválida" });
     }
 
-    const users = await User.find({ admin: false })
+    const users = await User.find({ admin: false, ...EXCLUDE_TEST_USERS })
       .select("username slug subscription subscriptionExpiresAt active createdAt contactInfo.businessName")
       .sort({ createdAt: -1 });
 

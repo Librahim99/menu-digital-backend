@@ -1,5 +1,10 @@
 const Seller = require("../models/Seller");
+const User = require("../models/User");
 const { handleError } = require("../utils/handleError");
+const { isValidEmail, isWeakPassword, isValidUsername } = require("../utils/validators");
+const { toStoredPhone } = require("../utils/phone");
+const { createUserWithUniqueSlug } = require("../utils/slug");
+const { getPlanForUser } = require("../services/planCatalog");
 
 // Campos del ABM (alta/baja/modificación de vendedores). Comisiones, métricas
 // de facturación y el CRM de cada vendedor viven en su propio panel
@@ -294,6 +299,103 @@ const resetSellerPassword = async (req, res) => {
   }
 };
 
+// Crea el usuario de prueba de un vendedor: una cuenta de comercio (User, no
+// Seller) para que la use en sus demos. Plan Pro sin vencimiento
+// (subscriptionExpiresAt:null, ver getEffectivePlan), con el mail y el
+// teléfono del vendedor y su sellerID. Por lo demás nace vacía, igual que un
+// alta normal: sin nombre de negocio, sin slug y sin menú. Va marcada con
+// testUser para no contar en ninguna estadística (utils/testUsers.js).
+const createSellerTestUser = async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    // Mismo chequeo de tipos que newUser: express-mongo-sanitize no bloquea
+    // un array o un objeto sin operadores.
+    if (typeof username !== "string" || typeof password !== "string") {
+      return res.status(400).json({ message: "Usuario y contraseña son obligatorios" });
+    }
+
+    const cleanUsername = username.trim().toLowerCase();
+    if (!cleanUsername) {
+      return res.status(400).json({ message: "Usuario y contraseña son obligatorios" });
+    }
+    if (!isValidUsername(cleanUsername)) {
+      return res.status(400).json({ message: "El usuario no puede contener guiones" });
+    }
+    if (isWeakPassword(password)) {
+      return res.status(400).json({
+        message: "La contraseña debe tener al menos 8 caracteres y no puede ser una demasiado común.",
+      });
+    }
+
+    const seller = await Seller.findById(req.params.id).select("name mail number active");
+    if (!seller) {
+      return res.status(404).json({ message: "Vendedor no encontrado" });
+    }
+    if (seller.active === false) {
+      return res.status(400).json({
+        message: "No se puede crear un usuario de prueba para un vendedor dado de baja",
+      });
+    }
+
+    const cleanMail = String(seller.mail || "").trim().toLowerCase();
+    if (!isValidEmail(cleanMail)) {
+      return res.status(400).json({
+        message: "El vendedor no tiene un mail válido. Corregilo antes de crear el usuario de prueba.",
+      });
+    }
+
+    // Un email, una cuenta — mismo criterio que las altas públicas: la baja y
+    // el arrepentimiento buscan la cuenta por mail. De paso evita crearle dos
+    // usuarios de prueba al mismo vendedor.
+    const existing = await User.findOne({
+      $or: [{ username: cleanUsername }, { "contactInfo.mail": cleanMail }],
+    }).select("username");
+    if (existing) {
+      return res.status(409).json({
+        message: existing.username === cleanUsername
+          ? "El username ya está en uso"
+          : `Ya existe una cuenta con el mail del vendedor (usuario ${existing.username}).`,
+      });
+    }
+
+    // Aborta temprano si el catálogo del plan Pro no está disponible.
+    await getPlanForUser({ subscription: "pro" });
+
+    const user = await createUserWithUniqueSlug({
+      username: cleanUsername,
+      password,
+      contactInfo: { mail: cleanMail, number: toStoredPhone(seller.number) },
+      // Nadie del otro lado para tipear un código: la crea un admin y tiene
+      // que servir para la demo apenas se entrega.
+      emailVerified: true,
+      subscription: "pro",
+      subscriptionExpiresAt: null,
+      sellerID: seller._id,
+      testUser: true,
+    });
+
+    res.status(201).json({
+      message: "Usuario de prueba creado correctamente",
+      user: {
+        _id: user._id,
+        username: user.username,
+        mail: user.contactInfo.mail,
+        number: user.contactInfo.number,
+        subscription: user.subscription,
+        subscriptionExpiresAt: user.subscriptionExpiresAt,
+        sellerID: user.sellerID,
+      },
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ message: "El username ya está en uso" });
+    }
+
+    handleError(res, error);
+  }
+};
+
 module.exports = {
   getSellers,
   getSellerById,
@@ -301,5 +403,6 @@ module.exports = {
   updateSeller,
   deleteSeller,
   resetSellerPassword,
+  createSellerTestUser,
 };
 

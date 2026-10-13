@@ -4,6 +4,7 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const { getSubscriptionState } = require("../config/plans");
 const { logCrmEvent } = require("../utils/crmEvents");
+const { EXCLUDE_TEST_USERS } = require("../utils/testUsers");
 
 const toAdminUserDTO = (user) => {
   const plain = typeof user.toObject === "function" ? user.toObject() : { ...user };
@@ -115,6 +116,17 @@ const setActiveUser = async (req, res) => {
 // ──────────────────────────────────────────────
 const getStats = async (req, res) => {
   try {
+    // Los usuarios de prueba de los vendedores no son clientes: quedan afuera
+    // de los conteos de cuentas y también de los de su contenido (Menu cuelga
+    // del user e Item del menú, así que se excluyen por esos ids).
+    const clients = { admin: false, ...EXCLUDE_TEST_USERS };
+    const testUserIDs = await User.find({ testUser: true }).distinct("_id");
+    const testMenuIDs = testUserIDs.length
+      ? await Menu.find({ userID: { $in: testUserIDs } }).distinct("_id")
+      : [];
+    const menus = testUserIDs.length ? { userID: { $nin: testUserIDs } } : {};
+    const items = testMenuIDs.length ? { menuID: { $nin: testMenuIDs } } : {};
+
     // Ejecutamos todas las queries en paralelo para mayor performance
     const [
       totalUsers,
@@ -129,18 +141,18 @@ const getStats = async (req, res) => {
       hiddenItems,
       recentUsers,
     ] = await Promise.all([
-      User.countDocuments({ admin: false }),
-      User.countDocuments({ admin: false, active: true }),
-      User.countDocuments({ admin: false, active: false }),
-      User.countDocuments({ admin: false, menu: true }),
-      Menu.countDocuments(),
-      Menu.countDocuments({ section: true }),
-      Menu.countDocuments({ section: false }),
-      Item.countDocuments(),
-      Item.countDocuments({ available: true, hidden: false }),
-      Item.countDocuments({ hidden: true }),
-      // Los 5 usuarios más recientes (sin admins)
-      User.find({ admin: false })
+      User.countDocuments(clients),
+      User.countDocuments({ ...clients, active: true }),
+      User.countDocuments({ ...clients, active: false }),
+      User.countDocuments({ ...clients, menu: true }),
+      Menu.countDocuments(menus),
+      Menu.countDocuments({ ...menus, section: true }),
+      Menu.countDocuments({ ...menus, section: false }),
+      Item.countDocuments(items),
+      Item.countDocuments({ ...items, available: true, hidden: false }),
+      Item.countDocuments({ ...items, hidden: true }),
+      // Los 5 usuarios más recientes (sin admins ni usuarios de prueba)
+      User.find(clients)
         .sort({ createdAt: -1 })
         .limit(5)
         .select("username slug active menu createdAt"),

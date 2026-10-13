@@ -349,7 +349,7 @@ const applyExistingUserEntitlement = async ({
 
   let userQuery = User.findById(associatedID);
   if (session) userQuery = userQuery.session(session);
-  const previousUser = await userQuery.select("subscription subscriptionExpiresAt sellerID");
+  const previousUser = await userQuery.select("subscription subscriptionExpiresAt sellerID testUser");
   if (!previousUser) {
     await markPaymentNotApplied({
       paymentID,

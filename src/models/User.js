@@ -115,6 +115,15 @@ const UserSchema = new mongoose.Schema(
     // sin necesidad de backfill; mismo criterio lazy que emailVerified).
     assignedSellerAt: { type: Date, default: null },
 
+    // Usuario de prueba de un vendedor: la cuenta de comercio que usa en sus
+    // demos (la crea un admin desde el ABM de vendedores, ver
+    // createSellerTestUser). No es un cliente: queda afuera de todas las
+    // estadísticas y del CRM (utils/testUsers.js) y sus pagos no comisionan.
+    testUser: {
+      type: Boolean,
+      default: false,
+    },
+
     // Marca histórica: la cuenta se originó vía prueba gratuita de 7 días
     // (código de promoción). No se resetea al vencer el trial por tiempo —
     // solo cuando el cliente paga un plan real (ver paymentController.js).
