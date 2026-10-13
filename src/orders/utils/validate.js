@@ -86,7 +86,14 @@ const optionalMoney = (value, field) => {
   return Math.round(number * 100) / 100;
 };
 
-const HHMM_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+// Importe obligatorio y mayor que cero (un pago).
+const positiveMoney = (value, field) => {
+  const number = optionalMoney(value, field);
+  if (number === null || number <= 0) throw new OrdersError(400, `${field} inválido.`);
+  return number;
+};
+
+const HHMM_RE =/^([01]\d|2[0-3]):[0-5]\d$/;
 
 // Turnos configurados: [{ name, from: "HH:MM", to: "HH:MM" }]. Un turno que
 // cruza la medianoche (20:00 → 02:00) es válido.
@@ -113,5 +120,6 @@ module.exports = {
   parseOrderLines,
   parseService,
   optionalMoney,
+  positiveMoney,
   parseShiftSchedule,
 };

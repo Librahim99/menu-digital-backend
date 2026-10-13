@@ -63,12 +63,15 @@ const EMPTY_CUSTOMER = { name: null, phone: null, address: null, deliveryNotes: 
  * @param {{lines:Array,total:number}|null} input.priced  líneas ya cotizadas por el servidor
  *        (pedidos online: se cobró ese importe, no se vuelve a cotizar)
  * @param {{mode:string,status:string}|null} input.payment  pago online ya acreditado
+ * @param {(client: object, order: object, tableSession: object|null) => Promise<void>} [input.onCreated]
+ *        corre dentro de la transacción del alta, con el pedido y sus líneas ya insertados
+ *        (pedido grupal: marca el carrito y vuelca a la cuenta). Si tira, no se crea nada.
  * @returns {{ order: object, duplicate: boolean }}
  */
 const createOrder = async ({
   owner, settings, source, lines, serviceType = "table", tableNumber = null, customer = EMPTY_CUSTOMER,
   waiter = null, waiterSessionId = null, notes = null, clientRequestId = null, fingerprint = null,
-  cooldownMs = LIMITS.customerCooldownMs, actor = null, priced: presetPriced = null, payment = null,
+  cooldownMs = LIMITS.customerCooldownMs, actor = null, priced: presetPriced = null, payment = null, onCreated = null,
 }) => {
   if (!SERVICE_TYPES.includes(serviceType)) throw new OrdersError(400, "Tipo de pedido inválido.");
   if (serviceType === "table" && !tableNumber) throw new OrdersError(400, "Indicá el número de mesa.");
@@ -146,13 +149,20 @@ const createOrder = async ({
         );
       }
 
+      let saved = order;
+      if (onCreated) {
+        await onCreated(client, order, tableSession);
+        // El enganche pudo completar datos del pedido: se devuelve como quedó.
+        ({ rows: [saved] } = await client.query("SELECT * FROM orders WHERE id = $1", [order.id]));
+      }
+
       await recordStatusEvent(client, {
         orderId: order.id, ownerId, from: null, to: status, actor: actor ?? { type: source === "customer" ? "customer" : source },
       });
       // Pedido del personal (entra confirmado): sale a los sectores ya.
       await syncTicketsWithOrder(client, { ownerId, orderId: order.id, from: null, to: status });
 
-      return { order: (await withItems([order], client))[0], duplicate: false, tableOpened: Boolean(tableSession?.opened) };
+      return { order: (await withItems([saved], client))[0], duplicate: false, tableOpened: Boolean(tableSession?.opened) };
     });
     // Pedido nuevo: el panel, los mozos y los sectores se enteran al instante
     // (y los repartidores, si es un delivery que ya entra confirmado). Si

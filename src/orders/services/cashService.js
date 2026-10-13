@@ -78,11 +78,11 @@ const computeSummary = async (runner, session) => {
   const paymentsBreakdown = payments.rows.map((row) => ({
     method: row.method_name, kind: row.method_kind, count: row.count, amount: Number(row.amount),
   }));
-  // Todavía no se registran cobros: sin cobros, se espera en caja todo lo
-  // vendido neto. Cuando existan, solo lo cobrado en efectivo.
-  const cashIn = paymentsBreakdown.length > 0
-    ? paymentsBreakdown.filter((row) => row.kind === "cash").reduce((sum, row) => sum + row.amount, 0)
-    : netAmount;
+  // Los pagos se registran a mano y solo en algunas mesas: lo que no se anotó
+  // con otro medio se asume en efectivo. En caja se espera lo vendido neto
+  // menos lo cobrado con tarjeta, transferencia, etc.
+  const nonCash = paymentsBreakdown.filter((row) => row.kind !== "cash").reduce((sum, row) => sum + row.amount, 0);
+  const cashIn = netAmount - nonCash;
 
   return {
     ordersCount: s.orders_count,

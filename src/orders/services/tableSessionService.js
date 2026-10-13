@@ -54,7 +54,9 @@ const selectWithTotals = (notBilled, active) => `
   SELECT ts.*,
          count(o.id) FILTER (WHERE NOT (o.status = ANY($${notBilled})))::int AS live_orders_count,
          coalesce(sum(o.total) FILTER (WHERE NOT (o.status = ANY($${notBilled}))), 0) AS live_total,
-         count(o.id) FILTER (WHERE o.status = ANY($${active}))::int AS active_orders
+         count(o.id) FILTER (WHERE o.status = ANY($${active}))::int AS active_orders,
+         (SELECT coalesce(sum(p.amount), 0) FROM payments p
+          WHERE p.table_session_id = ts.id AND p.status = 'approved') AS live_paid
   FROM table_sessions ts
   LEFT JOIN orders o ON o.table_session_id = ts.id`;
 
@@ -72,6 +74,9 @@ const toSessionDTO = (row, orders) => ({
   ordersCount: row.closed_at ? row.orders_count ?? 0 : row.live_orders_count ?? 0,
   totalAmount: row.closed_at ? num(row.total_amount) ?? 0 : num(row.live_total) ?? 0,
   activeOrders: row.active_orders ?? 0,
+  // Cuenta: cómo se divide y cuánto se cobró con pagos registrados.
+  splitMode: row.split_mode ?? "none",
+  paidAmount: (row.closed_at ? num(row.paid_amount) : num(row.live_paid)) ?? 0,
   ...(orders ? { orders } : {}),
 });
 
@@ -152,7 +157,10 @@ const assertWaiterCanManage = (session, waiterId) => {
 };
 
 /**
- * Cierra la mesa y congela su consumo. Con pedidos sin entregar pide `force`.
+ * Cierra la mesa y congela su consumo. Con pedidos sin entregar pide `force`;
+ * también si se empezó a cobrar la cuenta (hay pagos registrados) y falta
+ * plata. Una mesa sin pagos registrados se cierra como siempre. El pedido
+ * grupal de la mesa, si hay, se cierra con ella.
  * @param {{ force?: boolean, actor: { type: "waiter"|"panel", name: string|null }, waiterId?: number|null }} options
  */
 const closeSession = async (ownerId, sessionId, { force = false, actor, waiterId = null }) => {
@@ -171,10 +179,24 @@ const closeSession = async (ownerId, sessionId, { force = false, actor, waiterId
     if (totals.active > 0 && !force) {
       throw new OrdersError(409, `La mesa tiene ${totals.active} pedido(s) sin entregar.`, "ACTIVE_ORDERS");
     }
+    const { rows: [payments] } = await client.query(
+      `SELECT count(*)::int AS count, coalesce(sum(amount), 0) AS amount
+       FROM payments WHERE table_session_id = $1 AND status = 'approved'`,
+      [session.id]
+    );
+    const pendingCents = Math.round(Number(totals.amount) * 100) - Math.round(Number(payments.amount) * 100);
+    if (payments.count > 0 && pendingCents > 0 && !force) {
+      throw new OrdersError(409, `Faltan cobrar $${pendingCents / 100} de la cuenta.`, "BILL_PENDING");
+    }
     await client.query(
       `UPDATE table_sessions SET closed_at = now(), updated_at = now(), closed_by_type = $2, closed_by_name = $3,
-         orders_count = $4, total_amount = $5 WHERE id = $1`,
-      [session.id, actor.type, actor.name, totals.count, totals.amount]
+         orders_count = $4, total_amount = $5, paid_amount = $6 WHERE id = $1`,
+      [session.id, actor.type, actor.name, totals.count, totals.amount, payments.amount]
+    );
+    await client.query(
+      `UPDATE group_sessions SET closed_at = now(), updated_at = now(), closed_reason = 'table_closed'
+       WHERE owner_id = $1 AND table_number = $2 AND closed_at IS NULL`,
+      [ownerId, session.table_number]
     );
   });
   realtime.emit({ ownerId, event: "table", staff: true });
@@ -203,4 +225,6 @@ module.exports = {
   getSession,
   closeSession,
   setGuests,
+  getSessionRow,
+  assertWaiterCanManage,
 };

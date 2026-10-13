@@ -184,8 +184,9 @@ const publish = (ownerId, code, ownerReservation, customerReservation, alert = n
 };
 
 /**
- * Engancha el WebSocket al servidor HTTP de la API. Solo atiende
- * WS_PATH; cualquier otro upgrade se rechaza.
+ * Engancha el WebSocket al servidor HTTP de la API. Solo atiende WS_PATH: los
+ * demás paths son de otros módulos (pedidos, juegos), que comparten el
+ * servidor. Los que no son de nadie los corta closeUnknownUpgrades.
  */
 const attach = (server) => {
   const { WebSocketServer } = require("ws");
@@ -194,7 +195,8 @@ const attach = (server) => {
 
   server.on("upgrade", (request, socket, head) => {
     const { pathname } = new URL(request.url, "http://localhost");
-    if (pathname !== WS_PATH) return socket.destroy();
+    // No se destruye el socket: cortaba también los WebSocket de los otros módulos.
+    if (pathname !== WS_PATH) return;
 
     const origin = request.headers.origin;
     if (origin && !allowedOrigins().includes(origin.replace(/\/$/, ""))) {
