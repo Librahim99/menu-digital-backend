@@ -6,7 +6,7 @@
 // devueltos. Solo lectura: no abre turnos ni cajas.
 
 const { query } = require("../db/sql");
-const { NOT_BILLED_STATUSES } = require("../constants");
+const { NOT_BILLED_STATUSES, CASH_MOVEMENT_TYPES, CASH_MOVEMENT_CATEGORIES } = require("../constants");
 const { TIMEZONE_BA } = require("../../utils/dates");
 const { listSessionsClosedBetween } = require("./cashService");
 
@@ -197,17 +197,172 @@ const listOrdersBetween = async (ownerId, from, to, { limit = 5000 } = {}) => {
   };
 };
 
+// ── Caja ─────────────────────────────────────
+// Los reportes de caja salen de las cajas CERRADAS en el período (según el
+// día del cierre): son números congelados, así todo cierra contra la lista de
+// cierres. Lo de una caja todavía abierta entra cuando se cierra.
+
+const closedInRange = `s.owner_id = $1 AND ${inRange("s.closed_at")}`;
+// Los cierres anteriores a la migración 010 no guardaron las ventas en
+// efectivo: son el efectivo esperado menos el fondo.
+const CASH_SALES = "coalesce(s.cash_sales_amount, s.expected_cash - s.opening_amount, 0)";
+const CLOSING_RESULT = `
+  count(*)::int AS closings,
+  coalesce(sum(s.net_amount), 0) AS net_amount,
+  count(s.difference)::int AS counted_count,
+  coalesce(sum(s.difference), 0) AS difference,
+  count(*) FILTER (WHERE s.difference = 0)::int AS exact_count,
+  count(*) FILTER (WHERE s.difference < 0)::int AS short_count,
+  coalesce(sum(s.difference) FILTER (WHERE s.difference < 0), 0) AS short_amount,
+  count(*) FILTER (WHERE s.difference > 0)::int AS over_count,
+  coalesce(sum(s.difference) FILTER (WHERE s.difference > 0), 0) AS over_amount`;
+
+const toClosingResult = (row) => ({
+  closings: row.closings,
+  netAmount: round(row.net_amount),
+  // Cierres con el efectivo contado: la diferencia solo se mide en esos.
+  countedCount: row.counted_count,
+  difference: round(row.difference),
+  exactCount: row.exact_count,
+  shortCount: row.short_count,
+  shortAmount: round(row.short_amount),
+  overCount: row.over_count,
+  overAmount: round(row.over_amount),
+});
+
+/**
+ * Reporte de caja entre `from` y `to` (días de Buenos Aires, inclusive):
+ * totales, cómo se cobró, movimientos por concepto y resultado por cajero y
+ * por caja. Todo agregado acá: el panel y el Excel solo lo muestran.
+ */
+const cashReport = async (ownerId, from, to) => {
+  const params = [ownerId, from, to];
+  const [totals, byCashier, byRegister, payments, movements] = await Promise.all([
+    query(
+      `SELECT ${CLOSING_RESULT},
+              coalesce(sum(${CASH_SALES}), 0) AS cash_sales_amount,
+              coalesce(sum(s.online_amount), 0) AS online_amount,
+              coalesce(sum(s.income_amount), 0) AS income_amount,
+              coalesce(sum(s.expense_amount), 0) AS expense_amount,
+              coalesce(sum(s.withdrawal_amount), 0) AS withdrawal_amount,
+              count(*) FILTER (WHERE s.cash_withdrawn > 0)::int AS closing_withdrawn_count,
+              coalesce(sum(s.cash_withdrawn), 0) AS closing_withdrawn_amount
+       FROM cash_sessions s WHERE ${closedInRange}`,
+      params
+    ),
+    query(
+      `SELECT coalesce(s.cashier_name, '') AS name, ${CLOSING_RESULT}
+       FROM cash_sessions s WHERE ${closedInRange} GROUP BY 1 ORDER BY net_amount DESC, name`,
+      params
+    ),
+    query(
+      `SELECT s.register_name AS name, ${CLOSING_RESULT}
+       FROM cash_sessions s WHERE ${closedInRange} GROUP BY 1 ORDER BY net_amount DESC, name`,
+      params
+    ),
+    query(
+      `SELECT p.method_kind AS kind, max(p.method_name) AS label, count(*)::int AS count, coalesce(sum(p.amount), 0) AS amount
+       FROM payments p JOIN cash_sessions s ON s.id = p.cash_session_id
+       WHERE ${closedInRange} AND p.status = 'approved' AND p.method_kind <> 'cash'
+       GROUP BY 1 ORDER BY amount DESC, kind`,
+      params
+    ),
+    query(
+      `SELECT m.type, m.category, count(*)::int AS count, coalesce(sum(m.amount), 0) AS amount
+       FROM cash_movements m JOIN cash_sessions s ON s.id = m.cash_session_id
+       WHERE ${closedInRange} AND m.voided_at IS NULL AND m.type <> 'fund_adjustment'
+       GROUP BY 1, 2 ORDER BY amount DESC, m.category`,
+      params
+    ),
+  ]);
+
+  const t = totals.rows[0];
+  // Cómo entró lo vendido: efectivo (lo que no tiene otro cobro anotado), los
+  // medios que anotó el personal y lo cobrado online. Suma el neto.
+  const byMethod = [
+    { kind: "cash", label: "Efectivo", count: null, amount: round(t.cash_sales_amount) },
+    ...payments.rows.map((row) => ({ kind: row.kind, label: row.label, count: row.count, amount: round(row.amount) })),
+    { kind: "mercadopago", label: "Mercado Pago (online)", count: null, amount: round(t.online_amount) },
+  ].filter((row) => row.amount !== 0);
+
+  const movementRows = movements.rows.map((row) => ({
+    type: row.type,
+    typeLabel: CASH_MOVEMENT_TYPES[row.type] ?? row.type,
+    category: row.category,
+    label: CASH_MOVEMENT_CATEGORIES[row.type]?.[row.category] ?? "Otro",
+    count: row.count,
+    amount: round(row.amount),
+  }));
+  // Lo que se retira al cerrar también sale del cajón: va con los retiros.
+  if (Number(t.closing_withdrawn_amount) > 0) {
+    movementRows.push({
+      type: "withdrawal", typeLabel: CASH_MOVEMENT_TYPES.withdrawal, category: "closing", label: "Retiro al cerrar la caja",
+      count: t.closing_withdrawn_count, amount: round(t.closing_withdrawn_amount),
+    });
+  }
+
+  const named = (result, fallback) => result.rows.map((row) => ({ name: row.name || fallback, ...toClosingResult(row) }));
+  return {
+    from,
+    to,
+    totals: {
+      ...toClosingResult(t),
+      cashSalesAmount: round(t.cash_sales_amount),
+      onlineAmount: round(t.online_amount),
+      incomeAmount: round(t.income_amount),
+      expenseAmount: round(t.expense_amount),
+      // Retiros con la caja abierta + lo retirado al cerrar.
+      withdrawalAmount: round(Number(t.withdrawal_amount) + Number(t.closing_withdrawn_amount)),
+    },
+    byMethod,
+    movements: movementRows.sort((a, b) => b.amount - a.amount),
+    byCashier: named(byCashier, "Sin cajero"),
+    byRegister: named(byRegister, "Caja"),
+  };
+};
+
+const MOVEMENT_TYPE_LABEL = { ...CASH_MOVEMENT_TYPES, fund_adjustment: "Cambio de fondo" };
+
+/** Movimientos de las cajas cerradas en el rango, uno por fila (para el Excel). Incluye los anulados. */
+const listCashMovementsBetween = async (ownerId, from, to, { limit = 5000 } = {}) => {
+  const { rows } = await query(
+    `SELECT m.id, m.created_at, m.type, m.category, m.amount, m.notes, m.actor_name, m.voided_at, m.void_reason,
+            s.register_name, s.cashier_name
+     FROM cash_movements m JOIN cash_sessions s ON s.id = m.cash_session_id
+     WHERE ${closedInRange}
+     ORDER BY m.created_at, m.id LIMIT $4`,
+    [ownerId, from, to, limit + 1]
+  );
+  return {
+    truncated: rows.length > limit,
+    movements: rows.slice(0, limit).map((row) => ({
+      id: Number(row.id),
+      createdAt: row.created_at,
+      registerName: row.register_name,
+      cashierName: row.cashier_name,
+      type: MOVEMENT_TYPE_LABEL[row.type] ?? row.type,
+      category: row.type === "fund_adjustment" ? null : CASH_MOVEMENT_CATEGORIES[row.type]?.[row.category] ?? "Otro",
+      notes: row.notes,
+      amount: round(row.amount),
+      actorName: row.actor_name,
+      voided: row.voided_at !== null,
+      voidReason: row.void_reason,
+    })),
+  };
+};
+
 /**
  * Lo que muestra Estadísticas: el período de días completos, el anterior de
  * igual largo para comparar y hoy aparte (ver utils/statsPeriod).
  */
 const salesDashboard = async (ownerId, period, { serviceType = null } = {}) => {
   const { dates, previousDates, ...meta } = period;
-  const [allDays, breakdown, cashSessions] = await Promise.all([
+  const [allDays, breakdown, cashSessions, cash] = await Promise.all([
     salesByDay(ownerId, [...previousDates, ...dates, meta.todayDate], { serviceType }),
     // El panel muestra la tabla de productos completa (con buscador), no solo el top.
     salesBreakdown(ownerId, meta.periodStart, meta.periodEnd, { productLimit: 300, serviceType }),
     listSessionsClosedBetween(ownerId, meta.periodStart, meta.todayDate),
+    cashReport(ownerId, meta.periodStart, meta.todayDate),
   ]);
   const previousDays = allDays.slice(0, previousDates.length);
   const days = allDays.slice(previousDates.length, -1);
@@ -222,7 +377,11 @@ const salesDashboard = async (ownerId, period, { serviceType = null } = {}) => {
     previousDays: previousDays.map(({ date, orders, amount }) => ({ date, orders, amount })),
     ...breakdown,
     cashSessions,
+    // Mismo rango que cashSessions: del inicio del período hasta hoy.
+    cash,
   };
 };
 
-module.exports = { salesByDay, sumDays, salesBreakdown, listOrdersBetween, salesDashboard };
+module.exports = {
+  salesByDay, sumDays, salesBreakdown, listOrdersBetween, cashReport, listCashMovementsBetween, salesDashboard,
+};

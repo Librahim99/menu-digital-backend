@@ -45,9 +45,32 @@ const salesData = () => {
     cashSessions: [{
       registerName: "Caja principal", cashierName: "Carla", openingAmount: 20000,
       openedAt: "2026-09-01T15:00:00.000Z", closedAt: "2026-09-02T03:30:00.000Z",
-      cashCounted: 49500, difference: -500, closingNotes: null,
-      summary: { salesCount: 2, salesAmount: 30000, cancelledAmount: 5000, returnedAmount: 0, discountsAmount: 0, netAmount: 30000, expectedCash: 50000 },
+      cashCounted: 49500, difference: -500, closingNotes: null, cashWithdrawn: 29500, cashLeft: 20000,
+      summary: {
+        salesCount: 2, salesAmount: 30000, cancelledAmount: 5000, returnedAmount: 0, discountsAmount: 0, netAmount: 30000,
+        onlineAmount: 0, cashSalesAmount: 34000, incomeAmount: 0, expenseAmount: 4000, withdrawalAmount: 0, expectedCash: 50000,
+      },
     }],
+    cash: {
+      totals: {
+        closings: 1, netAmount: 30000, countedCount: 1, difference: -500, exactCount: 0, shortCount: 1, shortAmount: -500,
+        overCount: 0, overAmount: 0, cashSalesAmount: 24000, onlineAmount: 0, incomeAmount: 0, expenseAmount: 4000, withdrawalAmount: 29500,
+      },
+      byMethod: [{ kind: "cash", label: "Efectivo", count: null, amount: 24000 }, { kind: "credit", label: "Crédito", count: 1, amount: 6000 }],
+      movements: [
+        { type: "withdrawal", typeLabel: "Retiro", category: "closing", label: "Retiro al cerrar la caja", count: 1, amount: 29500 },
+        { type: "expense", typeLabel: "Egreso", category: "supplier", label: "Proveedor", count: 1, amount: 4000 },
+      ],
+      byCashier: [{ name: "Carla", closings: 1, netAmount: 30000, countedCount: 1, difference: -500, exactCount: 0, shortCount: 1, shortAmount: -500, overCount: 0, overAmount: 0 }],
+      byRegister: [{ name: "Caja principal", closings: 1, netAmount: 30000, countedCount: 1, difference: -500, exactCount: 0, shortCount: 1, shortAmount: -500, overCount: 0, overAmount: 0 }],
+    },
+    cashMovements: {
+      truncated: false,
+      movements: [{
+        id: 1, createdAt: "2026-09-01T23:30:00.000Z", registerName: "Caja principal", cashierName: "Carla", type: "Egreso",
+        category: "Proveedor", notes: "Verdulería", amount: 4000, actorName: "Panel", voided: false, voidReason: null,
+      }],
+    },
   };
 };
 
@@ -74,7 +97,7 @@ test("libro completo: una hoja por reporte, con fechas e importes como valores",
   });
   assert.deepEqual(sheetNames(workbook), [
     "Resumen", "Ventas por día", "Productos vendidos", "Desgloses", "Pedidos", "Cierres de caja",
-    "Visitas por día", "Productos vistos",
+    "Desgloses de caja", "Movimientos de caja", "Visitas por día", "Productos vistos",
   ]);
 
   const sales = workbook.getWorksheet("Ventas por día");
@@ -90,7 +113,29 @@ test("libro completo: una hoja por reporte, con fechas e importes como valores",
   assert.equal(orders.getCell("C2").value, "Entregado");
 
   const cash = workbook.getWorksheet("Cierres de caja");
-  assert.equal(cash.getCell("N2").value, -500);
+  assert.equal(cash.getCell("O1").value, "Egresos");
+  assert.equal(cash.getCell("O2").value, 4000);
+  assert.equal(cash.getCell("S1").value, "Diferencia");
+  assert.equal(cash.getCell("S2").value, -500);
+  assert.equal(cash.getCell("U2").value, 20000, "lo que quedó en la caja");
+
+  const breakdown = workbook.getWorksheet("Desgloses de caja");
+  const rows = [];
+  breakdown.eachRow((row, index) => { if (index > 1) rows.push([row.getCell(1).value, row.getCell(2).value, row.getCell(4).value]); });
+  assert.deepEqual(rows, [
+    ["Cómo se cobró", "Efectivo", 24000],
+    ["Cómo se cobró", "Crédito", 6000],
+    ["Retiro", "Retiro al cerrar la caja", 29500],
+    ["Egreso", "Proveedor", 4000],
+    ["Por cajero (cierres y neto)", "Carla", 30000],
+    ["Por caja (cierres y neto)", "Caja principal", 30000],
+  ]);
+
+  const movements = workbook.getWorksheet("Movimientos de caja");
+  assert.equal(movements.getCell("A2").value.toISOString(), "2026-09-01T20:30:00.000Z");
+  assert.equal(movements.getCell("E2").value, "Proveedor");
+  assert.equal(movements.getCell("G2").value, 4000);
+  assert.equal(movements.getCell("I2").value, "Vigente");
   // Un día sin medición de audiencia queda en blanco, no en cero.
   assert.equal(workbook.getWorksheet("Visitas por día").getCell("C2").value, null);
 });
@@ -98,7 +143,11 @@ test("libro completo: una hoja por reporte, con fechas e importes como valores",
 test("solo arma las hojas pedidas y disponibles", () => {
   const base = { businessName: "La Perla", from: "2026-09-01", to: "2026-09-03", generatedAt: new Date() };
   const onlyCash = buildReportWorkbook({ ...base, sheets: new Set(["caja"]), sales: salesData(), visits: null });
-  assert.deepEqual(sheetNames(onlyCash), ["Resumen", "Cierres de caja"]);
+  assert.deepEqual(sheetNames(onlyCash), ["Resumen", "Cierres de caja", "Desgloses de caja"]);
+  // Un servidor que no calculó el reporte de caja (datos viejos) no rompe el libro.
+  const { cash: _cash, cashMovements: _movements, ...legacy } = salesData();
+  const withoutReport = buildReportWorkbook({ ...base, sheets: new Set(["caja", "movimientos"]), sales: legacy, visits: null });
+  assert.deepEqual(sheetNames(withoutReport), ["Resumen", "Cierres de caja"]);
   const noSales = buildReportWorkbook({
     ...base, sheets: new Set(["ventas", "visitas"]), sales: null, visits: { days: [], items: [] },
   });
