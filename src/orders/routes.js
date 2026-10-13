@@ -17,8 +17,10 @@ const rateLimit = require("express-rate-limit");
 const { protect } = require("../middleware/auth");
 const { authLimiter } = require("../middleware/rateLimiters");
 const {
-  requireOrdersDb, requireProPlan, loadSettings, protectWaiter, protectStation, protectCourier,
+  requireOrdersDb, requireProPlan, loadSettings, protectWaiter, protectStation, protectCourier, protectGroupMember,
 } = require("./middleware");
+const bill = require("./controllers/billController");
+const groups = require("./controllers/groupController");
 const courierApp = require("./delivery/courierController");
 const delivery = require("./delivery/deliveryController");
 const sectors = require("./controllers/sectorController");
@@ -62,6 +64,16 @@ const deliveryCodeLimiter = rateLimit({
   message: { message: "Demasiados intentos. Esperá unos minutos e intentá de nuevo." },
 });
 
+// Abrir un pedido grupal o sumarse con un código: tope por IP para que no se
+// puedan probar códigos. Holgado: toda una mesa se suma desde el mismo wifi.
+const groupJoinLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Demasiados intentos. Esperá unos minutos e intentá de nuevo." },
+});
+
 router.use(requireOrdersDb);
 
 // ── Carta pública ────────────────────────────
@@ -74,6 +86,18 @@ router.get("/public/:slug/online-checkout/:ref", onlinePayments.getCheckoutStatu
 // Envío del pedido: si ya salió y el código de entrega que le da al repartidor.
 router.get("/public/:slug/online-checkout/:ref/delivery", delivery.customerDelivery);
 
+// ── Pedido grupal (comensales de una mesa) ───
+// Abrirlo pide el QR del local; sumarse, el código o el QR del grupo. Después
+// cada celular se identifica con su token de integrante.
+router.post("/public/:slug/group", groupJoinLimiter, groups.openFromVenue);
+router.post("/public/:slug/group/join", groupJoinLimiter, groups.join);
+router.get("/group/me", protectGroupMember, groups.me);
+router.post("/group/items", protectGroupMember, groups.addItems);
+router.patch("/group/items/:itemId", protectGroupMember, groups.updateItem);
+router.delete("/group/items/:itemId", protectGroupMember, groups.removeItem);
+router.post("/group/send", customerOrderLimiter, protectGroupMember, groups.send);
+router.post("/group/leave", protectGroupMember, groups.leave);
+
 // ── Tomador de pedidos (operadores) ──────────
 router.post("/waiter/pair", authLimiter, waiter.pair);
 router.get("/waiter/me", protectWaiter, waiter.me);
@@ -84,6 +108,21 @@ router.get("/waiter/tables", protectWaiter, waiter.myTables);
 router.patch("/waiter/tables/:id", protectWaiter, waiter.updateTable);
 router.post("/waiter/tables/:id/close", protectWaiter, waiter.closeTable);
 router.get("/waiter/history", protectWaiter, waiter.myHistory);
+// Cuenta de una de sus mesas: dividirla y registrar pagos (a mano, sin cobro online).
+router.get("/waiter/tables/:id/bill", protectWaiter, bill.waiter.getBill);
+router.post("/waiter/tables/:id/bill/guests", protectWaiter, bill.waiter.addGuests);
+router.patch("/waiter/tables/:id/bill/guests/:guestId", protectWaiter, bill.waiter.renameGuest);
+router.delete("/waiter/tables/:id/bill/guests/:guestId", protectWaiter, bill.waiter.removeGuest);
+router.put("/waiter/tables/:id/bill/split", protectWaiter, bill.waiter.setSplit);
+router.put("/waiter/tables/:id/bill/items/:itemId/shares", protectWaiter, bill.waiter.setItemShares);
+router.post("/waiter/tables/:id/bill/payments", protectWaiter, bill.waiter.recordPayment);
+router.post("/waiter/tables/:id/bill/payments/:paymentId/void", protectWaiter, bill.waiter.voidPayment);
+// Pedidos grupales de las mesas.
+router.get("/waiter/groups", protectWaiter, groups.waiter.list);
+router.post("/waiter/groups", protectWaiter, groups.waiter.open);
+router.post("/waiter/groups/:id/send", protectWaiter, groups.waiter.send);
+router.delete("/waiter/groups/:id/items/:itemId", protectWaiter, groups.waiter.removeItem);
+router.post("/waiter/groups/:id/close", protectWaiter, groups.waiter.close);
 
 // ── Repartidores (dispositivo vinculado) ─────
 router.post("/courier/pair", authLimiter, courierApp.pair);
@@ -160,6 +199,22 @@ router.get("/table-sessions", ownerOnly, owner.listTableSessions);
 router.get("/table-sessions/:id", ownerOnly, owner.getTableSession);
 router.patch("/table-sessions/:id", ownerOnly, owner.updateTableSession);
 router.post("/table-sessions/:id/close", ownerOnly, owner.closeTableSession);
+// Cuenta de la mesa: dividirla y registrar pagos (a mano, sin cobro online).
+router.get("/table-sessions/:id/bill", ownerOnly, bill.owner.getBill);
+router.post("/table-sessions/:id/bill/guests", ownerOnly, bill.owner.addGuests);
+router.patch("/table-sessions/:id/bill/guests/:guestId", ownerOnly, bill.owner.renameGuest);
+router.delete("/table-sessions/:id/bill/guests/:guestId", ownerOnly, bill.owner.removeGuest);
+router.put("/table-sessions/:id/bill/split", ownerOnly, bill.owner.setSplit);
+router.put("/table-sessions/:id/bill/items/:itemId/shares", ownerOnly, bill.owner.setItemShares);
+router.post("/table-sessions/:id/bill/payments", ownerOnly, bill.owner.recordPayment);
+router.post("/table-sessions/:id/bill/payments/:paymentId/void", ownerOnly, bill.owner.voidPayment);
+
+// Pedidos grupales de las mesas.
+router.get("/groups", ownerOnly, groups.owner.list);
+router.post("/groups", ownerOnly, groups.owner.open);
+router.post("/groups/:id/send", ownerOnly, groups.owner.send);
+router.delete("/groups/:id/items/:itemId", ownerOnly, groups.owner.removeItem);
+router.post("/groups/:id/close", ownerOnly, groups.owner.close);
 
 // Turnos (el cierre de turno no cierra la caja)
 router.get("/shifts", ownerOnly, owner.listShifts);

@@ -17,12 +17,23 @@ const isTokenShape = (value) => typeof value === "string" && /^[A-Za-z0-9_-]{16,
 const PAIRING_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 const PAIRING_LENGTH = 8;
 
-const randomPairingCode = () => {
+const randomCode = (length) => {
   let code = "";
-  for (let index = 0; index < PAIRING_LENGTH; index += 1) {
+  for (let index = 0; index < length; index += 1) {
     code += PAIRING_ALPHABET[crypto.randomInt(PAIRING_ALPHABET.length)];
   }
   return code;
+};
+
+const randomPairingCode = () => randomCode(PAIRING_LENGTH);
+
+// Código que tipea un comensal para sumarse a un pedido grupal: mismo
+// alfabeto, del largo que se pida. null si lo tipeado no puede serlo.
+const normalizeCode = (value, length) => {
+  if (typeof value !== "string" || value.length > 40) return null;
+  const code = value.toUpperCase().replace(/[\s-]/g, "");
+  if (code.length !== length) return null;
+  return [...code].every((char) => PAIRING_ALPHABET.includes(char)) ? code : null;
 };
 
 // Lo que tipeó la persona → el código canónico (o null si no puede serlo).
@@ -38,4 +49,5 @@ const formatPairingCode = (code) => `${code.slice(0, 4)}-${code.slice(4)}`;
 
 module.exports = {
   randomToken, hashToken, isTokenShape, randomPairingCode, normalizePairingCode, formatPairingCode,
+  randomCode, normalizeCode,
 };

@@ -20,6 +20,9 @@ const toItemDTO = (row) => ({
   sectorName: row.ticket_sector_name ?? null,
   // Entrega en partes: cuándo se entregó esta línea (null si todavía no).
   deliveredAt: row.delivered_at ?? null,
+  // Pedido grupal: quién lo pidió y si es para compartir (null / false en el resto).
+  authorName: row.author_name ?? null,
+  shared: row.shared === true,
 });
 
 // Línea quitada del pedido (falta de stock, error…): no suma al total.
@@ -63,6 +66,8 @@ const toOrderDTO = (row, items = [], tickets = [], { removedItems = [], refundDu
     : (row.table_number ? "table" : "counter"),
   tableNumber: row.table_number,
   tableSessionId: optionalId(row.table_session_id),
+  // Pedido que salió de un pedido grupal (null en el resto).
+  groupSessionId: optionalId(row.group_session_id),
   cashSessionId: optionalId(row.cash_session_id),
   customerName: row.customer_name ?? null,
   customerPhone: row.customer_phone ?? null,

@@ -4,6 +4,7 @@ const { getOrCreateSettings } = require("./services/settingsService");
 const { authenticateSession } = require("./services/waiterService");
 const { authenticateSession: authenticateStation } = require("./services/sectorService");
 const { authenticateSession: authenticateCourier } = require("./delivery/courierService");
+const { authenticateMember } = require("./services/groupService");
 const { findOwnerById, isProOwner } = require("./services/menuCatalog");
 
 // Sin DATABASE_URL (o sin Neon) el resto de la API sigue igual: solo estas
@@ -111,4 +112,31 @@ const protectCourier = async (req, res, next) => {
   }
 };
 
-module.exports = { requireOrdersDb, requireProPlan, loadSettings, protectWaiter, protectStation, protectCourier };
+// Integrante de un pedido grupal: su celular se identifica con
+// "Authorization: Group <token>" (el token se lo dio abrir el grupo o sumarse).
+// Solo ve y cambia el pedido grupal del que es parte.
+const protectGroupMember = async (req, res, next) => {
+  try {
+    const [scheme, token] = (req.headers.authorization ?? "").split(" ");
+    if (scheme !== "Group" || !token) throw new OrdersError(401, "Sumate al pedido grupal con el QR o el código.");
+
+    const member = await authenticateMember(token);
+    if (!member) throw new OrdersError(401, "Ya no sos parte de este pedido grupal.", "GROUP_MEMBER_INVALID");
+
+    const owner = await findOwnerById(member.ownerId);
+    if (!owner || !owner.active || !isProOwner(owner)) {
+      throw new OrdersError(403, "El local no tiene la gestión de pedidos habilitada.");
+    }
+
+    req.groupMember = member;
+    req.owner = owner;
+    req.orderSettings = await getOrCreateSettings(member.ownerId);
+    next();
+  } catch (error) {
+    sendError(res, error);
+  }
+};
+
+module.exports = {
+  requireOrdersDb, requireProPlan, loadSettings, protectWaiter, protectStation, protectCourier, protectGroupMember,
+};

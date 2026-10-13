@@ -77,6 +77,30 @@ const LIMITS = {
   // Comandas preparadas o anuladas que el sector sigue viendo (para consultar).
   recentTicketsWindowMs: 2 * 60 * 60_000,
   recentTicketsLimit: 20,
+  // Cuenta de la mesa.
+  billGuests: 30,
+  billGuestNameLength: 40,
+  payerNameLength: 60,
+  paymentReferenceLength: 60,
+  shareWeight: 100,
+  billEventsShown: 60,
+  // Pedidos grupales.
+  groupMembers: 30,
+  groupMemberNameLength: 30,
+  groupCodeLength: 6,
+  // Un grupo sin mesa abierta se da por abandonado pasado este tiempo.
+  groupIdleMs: 6 * 60 * 60_000,
+};
+
+// Medios con los que se registra un pago a mano (kind de payment_methods).
+// No hay cobro online: "transfer" cubre transferencias y QR que el cliente
+// paga por su cuenta y el personal solo anota.
+const PAYMENT_KINDS = {
+  cash: "Efectivo",
+  debit: "Débito",
+  credit: "Crédito",
+  transfer: "Transferencia / QR",
+  other: "Otro",
 };
 
 module.exports = {
@@ -91,4 +115,5 @@ module.exports = {
   PRINT_MODES,
   PAPER_WIDTHS,
   LIMITS,
+  PAYMENT_KINDS,
 };

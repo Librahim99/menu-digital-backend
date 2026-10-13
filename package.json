@@ -33,6 +33,7 @@
     "ws": "^8.21.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.9",
     "nodemon": "^3.0.1"
   },
   "overrides": {
