@@ -92,6 +92,16 @@ const addSummary = (workbook, { businessName, from, to, generatedAt, sales, visi
     const counted = cashSessions.filter((session) => session.difference !== null);
     metric("Cierres con efectivo contado", counted.length, INTEGER);
     metric("Diferencia acumulada", counted.reduce((sum, session) => sum + session.difference, 0), MONEY);
+    if (sales.cash) {
+      const cash = sales.cash.totals;
+      metric("Faltantes", cash.shortAmount, MONEY);
+      metric("Sobrantes", cash.overAmount, MONEY);
+      metric("Ventas en efectivo", cash.cashSalesAmount, MONEY);
+      metric("Cobrado online", cash.onlineAmount, MONEY);
+      metric("Ingresos de caja", cash.incomeAmount, MONEY);
+      metric("Egresos de caja", cash.expenseAmount, MONEY);
+      metric("Retiros de caja", cash.withdrawalAmount, MONEY);
+    }
   }
   if (visits) {
     const total = visits.days.reduce((sum, day) => sum + day.count, 0);
@@ -106,7 +116,8 @@ const addSummary = (workbook, { businessName, from, to, generatedAt, sales, visi
  * @param {object} data
  *   businessName, from, to ("YYYY-MM-DD"), generatedAt (Date)
  *   sheets: Set con las hojas pedidas (ver SHEET_KEYS)
- *   sales:  null | { days, totals, breakdown, orders: { orders, truncated }, cashSessions }
+ *   sales:  null | { days, totals, breakdown, orders: { orders, truncated }, cashSessions,
+ *                    cash?: reportService.cashReport, cashMovements?: { movements, truncated } }
  *   visits: null | { days, items }
  */
 const buildReportWorkbook = (data) => {
@@ -215,9 +226,16 @@ const buildReportWorkbook = (data) => {
       { header: "Devuelto", key: "returnedAmount", width: 14, numFmt: MONEY },
       { header: "Descuentos", key: "discountsAmount", width: 14, numFmt: MONEY },
       { header: "Neto", key: "netAmount", width: 15, numFmt: MONEY },
+      { header: "Cobrado online", key: "onlineAmount", width: 15, numFmt: MONEY },
+      { header: "Ventas en efectivo", key: "cashSalesAmount", width: 17, numFmt: MONEY },
+      { header: "Ingresos", key: "incomeAmount", width: 14, numFmt: MONEY },
+      { header: "Egresos", key: "expenseAmount", width: 14, numFmt: MONEY },
+      { header: "Retiros", key: "withdrawalAmount", width: 14, numFmt: MONEY },
       { header: "Efectivo esperado", key: "expectedCash", width: 17, numFmt: MONEY },
       { header: "Efectivo contado", key: "cashCounted", width: 17, numFmt: MONEY },
       { header: "Diferencia", key: "difference", width: 14, numFmt: MONEY },
+      { header: "Retirado al cerrar", key: "cashWithdrawn", width: 17, numFmt: MONEY },
+      { header: "Quedó en la caja", key: "cashLeft", width: 16, numFmt: MONEY },
       { header: "Notas", key: "closingNotes", width: 34 },
     ], sales.cashSessions.map((session) => ({
       ...session.summary,
@@ -228,8 +246,54 @@ const buildReportWorkbook = (data) => {
       openingAmount: session.openingAmount,
       cashCounted: session.cashCounted,
       difference: session.difference,
+      cashWithdrawn: session.cashWithdrawn,
+      cashLeft: session.cashLeft,
       closingNotes: session.closingNotes,
     })));
+  }
+
+  if (sales?.cash && sheets.has("caja")) {
+    const { cash } = sales;
+    const closings = (name) => (row) => ({
+      group: name, detail: row.name, count: row.closings, amount: row.netAmount, difference: row.difference,
+      short: row.shortAmount, over: row.overAmount,
+    });
+    addSheet(workbook, "Desgloses de caja", [
+      { header: "Desglose", key: "group", width: 28 },
+      { header: "Detalle", key: "detail", width: 30 },
+      { header: "Cantidad", key: "count", width: 10, numFmt: INTEGER },
+      { header: "Importe", key: "amount", width: 16, numFmt: MONEY },
+      { header: "Diferencia", key: "difference", width: 14, numFmt: MONEY },
+      { header: "Faltantes", key: "short", width: 14, numFmt: MONEY },
+      { header: "Sobrantes", key: "over", width: 14, numFmt: MONEY },
+    ], [
+      ...cash.byMethod.map((row) => ({ group: "Cómo se cobró", detail: row.label, count: row.count, amount: row.amount })),
+      ...cash.movements.map((row) => ({ group: row.typeLabel, detail: row.label, count: row.count, amount: row.amount })),
+      ...cash.byCashier.map(closings("Por cajero (cierres y neto)")),
+      ...cash.byRegister.map(closings("Por caja (cierres y neto)")),
+    ]);
+  }
+
+  if (sales?.cashMovements && sheets.has("movimientos")) {
+    const sheet = addSheet(workbook, "Movimientos de caja", [
+      { header: "Fecha y hora", key: "createdAt", width: 18, numFmt: DATE_TIME },
+      { header: "Caja", key: "registerName", width: 18 },
+      { header: "Cajero", key: "cashierName", width: 18 },
+      { header: "Tipo", key: "type", width: 16 },
+      { header: "Concepto", key: "category", width: 26 },
+      { header: "Detalle", key: "notes", width: 34 },
+      { header: "Importe", key: "amount", width: 15, numFmt: MONEY },
+      { header: "Registró", key: "actorName", width: 16 },
+      { header: "Estado", key: "state", width: 11 },
+      { header: "Motivo de la anulación", key: "voidReason", width: 30 },
+    ], sales.cashMovements.movements.map((movement) => ({
+      ...movement,
+      createdAt: instantCell(movement.createdAt),
+      state: movement.voided ? "Anulado" : "Vigente",
+    })));
+    if (sales.cashMovements.truncated) {
+      sheet.addRow({ notes: `Se muestran los primeros ${sales.cashMovements.movements.length} movimientos: elegí un período más corto para verlos todos.` });
+    }
   }
 
   if (visits && sheets.has("visitas")) {
@@ -256,7 +320,7 @@ const buildReportWorkbook = (data) => {
   return workbook;
 };
 
-const SALES_SHEETS = ["ventas", "productos", "desgloses", "pedidos", "caja"];
+const SALES_SHEETS = ["ventas", "productos", "desgloses", "pedidos", "caja", "movimientos"];
 const VISIT_SHEETS = ["visitas", "vistos"];
 
 module.exports = { buildReportWorkbook, SALES_SHEETS, VISIT_SHEETS };

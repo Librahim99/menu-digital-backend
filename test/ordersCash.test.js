@@ -22,6 +22,7 @@ let orders;
 let bill;
 let settings;
 let waiters;
+let reports;
 let seq = 0;
 
 test.before(async () => {
@@ -31,6 +32,7 @@ test.before(async () => {
   bill = db.load("services/billService");
   settings = db.load("services/settingsService");
   waiters = db.load("services/waiterService");
+  reports = db.load("services/reportService");
 });
 test.after(() => db.close());
 
@@ -311,4 +313,93 @@ test("historial de cajas cerradas: filtros y totales del servidor", async () => 
   const paged = await cash.listClosedSessions(v.ownerId, { page: 2, pageSize: 2 });
   assert.equal(paged.sessions.length, 1);
   assert.equal(paged.total, 3, "los totales son de todo el filtro, no de la página");
+});
+
+test("reporte de caja: totales, medios de cobro, conceptos, cajeros y cajas", async () => {
+  const v = await venue();
+  await cash.listRegisters(v.ownerId);
+  const bar = await cash.createRegister(v.ownerId, { name: "Barra" });
+
+  // Caja principal, Ana: mesa de 15.000 con 6.000 en tarjeta, un pedido online de 5.000,
+  // un proveedor, un ingreso, un retiro y un egreso anulado. Cierra con 500 de menos.
+  const first = await cash.openSession(v.ownerId, { cashierName: "Ana", openingAmount: 1000 }, PANEL);
+  const table = await order(v, [line(PIZZA), line(BEER, 2)], { serviceType: "table", tableNumber: 2 });
+  await bill.recordPayment(v.ownerId, table.tableSessionId, { amount: 6000, methodKind: "credit" }, BILL);
+  await order(v, [line(BEER, 2)], { source: "customer", serviceType: "takeaway", payment: { mode: "mercadopago", status: "APPROVED" } });
+  await cash.addMovement(v.ownerId, first.id, { type: "expense", category: "supplier", amount: 2000, notes: "Verdulería" }, PANEL);
+  await cash.addMovement(v.ownerId, first.id, { type: "income", category: "change", amount: 500 }, PANEL);
+  await cash.addMovement(v.ownerId, first.id, { type: "withdrawal", category: "owner", amount: 1000 }, PANEL);
+  const mistake = await cash.addMovement(v.ownerId, first.id, { type: "expense", category: "tips", amount: 9999 }, PANEL);
+  const ledger = await cash.getLedger(v.ownerId, first.id, { type: "expense" });
+  await cash.voidMovement(v.ownerId, ledger.entries.find((entry) => entry.amount === 9999).movementId, { reason: "Error" }, PANEL);
+  assert.equal(mistake.session.summary.expenseAmount, 11999);
+  // Esperado: 1.000 + (20.000 − 5.000 − 6.000) + 500 − 2.000 − 1.000 = 7.500
+  const closedFirst = await cash.closeSession(v.ownerId, first.id, { cashCounted: 7000, cashWithdrawn: 6000 }, PANEL);
+  assert.equal(closedFirst.difference, -500);
+
+  // Barra, Luis: un pedido de 10.000 en efectivo. Cierra justo.
+  const second = await cash.openSession(v.ownerId, { registerId: bar.id, cashierName: "Luis", openingAmount: 0 }, PANEL);
+  await order(v, [line(PIZZA)]);
+  await cash.closeSession(v.ownerId, second.id, { cashCounted: 10000 }, PANEL);
+
+  // Una caja todavía abierta no entra en el reporte.
+  const open = await cash.openSession(v.ownerId, { cashierName: "Ana", openingAmount: 0 }, PANEL);
+  await cash.addMovement(v.ownerId, open.id, { type: "expense", amount: 300 }, PANEL);
+
+  const report = await reports.cashReport(v.ownerId, "2000-01-01", "2100-01-01");
+  assert.deepEqual(report.totals, {
+    closings: 2, netAmount: 30000, countedCount: 2, difference: -500,
+    exactCount: 1, shortCount: 1, shortAmount: -500, overCount: 0, overAmount: 0,
+    cashSalesAmount: 19000, onlineAmount: 5000, incomeAmount: 500, expenseAmount: 2000, withdrawalAmount: 7000,
+  });
+  assert.deepEqual(report.byMethod, [
+    { kind: "cash", label: "Efectivo", count: null, amount: 19000 },
+    { kind: "credit", label: "Crédito", count: 1, amount: 6000 },
+    { kind: "mercadopago", label: "Mercado Pago (online)", count: null, amount: 5000 },
+  ]);
+  assert.equal(report.byMethod.reduce((sum, row) => sum + row.amount, 0), report.totals.netAmount, "los medios suman el neto");
+  assert.deepEqual(report.movements.map((row) => [row.typeLabel, row.label, row.count, row.amount]), [
+    ["Retiro", "Retiro al cerrar la caja", 1, 6000],
+    ["Egreso", "Proveedor", 1, 2000],
+    ["Retiro", "Retiro del dueño", 1, 1000],
+    ["Ingreso", "Cambio / refuerzo de fondo", 1, 500],
+  ]);
+  assert.deepEqual(report.byCashier.map((row) => [row.name, row.closings, row.netAmount, row.difference, row.shortCount]), [
+    ["Ana", 1, 20000, -500, 1],
+    ["Luis", 1, 10000, 0, 0],
+  ]);
+  assert.deepEqual(report.byRegister.map((row) => [row.name, row.netAmount]), [["Caja principal", 20000], ["Barra", 10000]]);
+
+  const empty = await reports.cashReport(v.ownerId, "2000-01-01", "2000-01-31");
+  assert.equal(empty.totals.closings, 0);
+  assert.deepEqual([empty.byMethod, empty.movements, empty.byCashier, empty.byRegister], [[], [], [], []]);
+
+  // El Excel lista cada movimiento de las cajas cerradas, también el anulado.
+  const listed = await reports.listCashMovementsBetween(v.ownerId, "2000-01-01", "2100-01-01");
+  assert.equal(listed.truncated, false);
+  assert.deepEqual(listed.movements.map((row) => [row.type, row.category, row.amount, row.voided, row.cashierName]), [
+    ["Egreso", "Proveedor", 2000, false, "Ana"],
+    ["Ingreso", "Cambio / refuerzo de fondo", 500, false, "Ana"],
+    ["Retiro", "Retiro del dueño", 1000, false, "Ana"],
+    ["Egreso", "Propinas", 9999, true, "Ana"],
+  ]);
+  assert.equal((await reports.listCashMovementsBetween(v.ownerId, "2000-01-01", "2100-01-01", { limit: 2 })).truncated, true);
+});
+
+test("reporte de caja: los cierres viejos (sin los campos nuevos) siguen sumando", async () => {
+  const v = await venue();
+  const session = await cash.openSession(v.ownerId, { openingAmount: 1000 }, PANEL);
+  // Como quedaba un cierre antes de la migración 010.
+  await db.query(
+    `UPDATE cash_sessions SET closed_at = now(), net_amount = 8000, expected_cash = 9000, cash_counted = NULL, difference = NULL
+     WHERE id = $1`,
+    [session.id]
+  );
+  const report = await reports.cashReport(v.ownerId, "2000-01-01", "2100-01-01");
+  assert.equal(report.totals.closings, 1);
+  assert.equal(report.totals.countedCount, 0);
+  assert.equal(report.totals.cashSalesAmount, 8000, "esperado − fondo");
+  assert.equal(report.totals.withdrawalAmount, 0);
+  assert.deepEqual(report.byMethod, [{ kind: "cash", label: "Efectivo", count: null, amount: 8000 }]);
+  assert.equal(report.byCashier[0].name, "Sin cajero");
 });

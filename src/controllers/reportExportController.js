@@ -32,13 +32,18 @@ const count = (value) => (typeof value === "number" && Number.isFinite(value) ? 
 
 const loadSales = async (ownerId, dates, sheets) => {
   const [from, to] = [dates[0], dates.at(-1)];
-  const [days, breakdown, orders, cashSessions] = await Promise.all([
+  const wantsCash = sheets.has("caja") || sheets.has("movimientos");
+  const [days, breakdown, orders, cashSessions, cash, cashMovements] = await Promise.all([
     reportService.salesByDay(ownerId, dates),
     reportService.salesBreakdown(ownerId, from, to, { productLimit: PRODUCT_ROWS }),
     sheets.has("pedidos") ? reportService.listOrdersBetween(ownerId, from, to) : { orders: [], truncated: false },
     listSessionsClosedBetween(ownerId, from, to),
+    wantsCash ? reportService.cashReport(ownerId, from, to) : null,
+    sheets.has("movimientos")
+      ? reportService.listCashMovementsBetween(ownerId, from, to)
+      : { movements: [], truncated: false },
   ]);
-  return { days, totals: reportService.sumDays(days), breakdown, orders, cashSessions };
+  return { days, totals: reportService.sumDays(days), breakdown, orders, cashSessions, cash, cashMovements };
 };
 
 const loadVisits = async (userId, dates, sheets) => {
@@ -85,7 +90,7 @@ const loadVisits = async (userId, dates, sheets) => {
 
 // ──────────────────────────────────────────────
 // @desc    Reporte en Excel del período pedido: ventas, productos vendidos,
-//          desgloses, pedidos y cierres de caja (plan Pro, Postgres) y
+//          desgloses, pedidos, cierres y movimientos de caja (plan Pro, Postgres) y
 //          visitas y productos vistos (feature "estadisticas", Mongo).
 //          Arma solo lo que el plan del local incluye.
 // @route   GET /api/users/me/reports/export?from=YYYY-MM-DD&to=YYYY-MM-DD&sheets=ventas,caja
