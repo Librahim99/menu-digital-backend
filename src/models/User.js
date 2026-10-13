@@ -376,6 +376,15 @@ const UserSchema = new mongoose.Schema(
         collapsibleCategories: { type: Boolean, default: false }, // categorías desplegables
         hidePrices: { type: Boolean, default: false }, // carta, PDF y pedido por WhatsApp sin precios
       },
+      // Muestra en el inicio del panel los datos de pedidos y reservas
+      // (agenda, estado de pedidos y pedidos en curso). Default `true`, mismo
+      // criterio que landingVisibility: las cuentas anteriores a la opción
+      // siguen viendo lo que ya veían. Es solo de presentación: no cambia el
+      // acceso a Pedidos ni a Reservas (viaja en GET /me/summary).
+      showDashboardActivity: {
+        type: Boolean,
+        default: true,
+      },
     },
   },
   {
