@@ -4,7 +4,11 @@ const SellerSale = require("../models/SellerSale");
 // tiene el User en ese momento (el vendedor normal, o el vendedor influencer
 // cuando el lead vino referido) — assignedSeller es solo el responsable de
 // seguimiento en el CRM y nunca participa de la atribución de una venta.
-const attributionForUser = (user) => ({ sellerID: user?.sellerID || null });
+// Un usuario de prueba lleva el sellerID de su vendedor, pero no es una venta
+// suya: si esa cuenta de demo llega a pagar, no comisiona ni suma al ranking.
+const attributionForUser = (user) => ({
+  sellerID: user?.testUser === true ? null : user?.sellerID || null,
+});
 
 const createSaleSnapshot = ({ attribution, plan, months, amount, subscriptionDate }) => {
   if (!attribution?.sellerID) return undefined;

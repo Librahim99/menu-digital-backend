@@ -9,6 +9,7 @@ const {
   getEffectivePlan,
 } = require("../config/plans");
 const { handleError } = require("../utils/handleError");
+const { EXCLUDE_TEST_USERS } = require("../utils/testUsers");
 
 const listPlans = async (_req, res) => {
   try {
@@ -33,7 +34,7 @@ const getPlanUsage = async (_req, res) => {
     const revenueWindowStart = new Date(now.getTime() - THIRTY_DAYS_MS);
 
     const [users, revenueRows] = await Promise.all([
-      User.find({ admin: false }).select("subscription subscriptionExpiresAt active"),
+      User.find({ admin: false, ...EXCLUDE_TEST_USERS }).select("subscription subscriptionExpiresAt active"),
       PaymentTransaction.aggregate([
         // Solo plata que efectivamente entró y se acreditó: un pago aprobado
         // cuyo plan nunca se aplicó no es facturación de ese plan.
