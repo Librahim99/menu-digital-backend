@@ -227,12 +227,16 @@ router.get("/shifts/:id/summary", ownerOnly, owner.getShiftSummary);
 router.get("/cash/registers", ownerOnly, owner.listCashRegisters);
 router.post("/cash/registers", ownerOnly, owner.createCashRegister);
 router.put("/cash/registers/:id", ownerOnly, owner.updateCashRegister);
+router.get("/cash/overview", ownerOnly, owner.getCashOverview);
 router.get("/cash/sessions/open", ownerOnly, owner.listOpenCash);
 router.get("/cash/sessions", ownerOnly, owner.listClosedCash);
 router.post("/cash/sessions", ownerOnly, owner.openCash);
 router.get("/cash/sessions/:id", ownerOnly, owner.getCashSession);
 router.patch("/cash/sessions/:id", ownerOnly, owner.updateCash);
 router.post("/cash/sessions/:id/close", ownerOnly, owner.closeCash);
+router.get("/cash/sessions/:id/ledger", ownerOnly, owner.getCashLedger);
+router.post("/cash/sessions/:id/movements", ownerOnly, owner.addCashMovement);
+router.post("/cash/movements/:id/void", ownerOnly, owner.voidCashMovement);
 
 // Reportes de ventas para Estadísticas (?days=7|30&serviceType=). El Excel sale por
 // /api/users/me/reports/export, que junta ventas y visitas.

@@ -251,10 +251,26 @@ const applyStatusChange = async (client, ownerId, order, status, { reason = null
   } else {
     sets.push("status_reason = NULL");
   }
-  if (status === "returned") {
+  const sessionClosed = async (sessionId) =>
+    Boolean((await client.query("SELECT closed_at FROM cash_sessions WHERE id = $1", [sessionId])).rows[0]?.closed_at);
+  // Una devolución se descuenta en la caja abierta ahora. Lo mismo al anular un
+  // pedido cuya caja ya cerró (quedó en curso al cerrarla): ese cierre ya lo
+  // contó como venta y no se reescribe.
+  const lateCancel = status === "cancelled" && order.cash_session_id != null && await sessionClosed(order.cash_session_id);
+  if (status === "returned" || lateCancel) {
     const cash = await lockOrOpenCashSession(client, ownerId);
     params.push(cash.id);
     sets.push(`returned_cash_session_id = $${params.length}`);
+  } else if (order.status === "cancelled" && order.returned_cash_session_id != null) {
+    // Se reactiva un pedido anulado después del cierre de su caja: si la caja
+    // que lo descontó sigue abierta, se saca el descuento; si también cerró,
+    // el pedido vuelve a contar en la que esté abierta ahora.
+    if (await sessionClosed(order.returned_cash_session_id)) {
+      const cash = await lockOrOpenCashSession(client, ownerId);
+      params.push(cash.id);
+      sets.push(`cash_session_id = $${params.length}`);
+    }
+    sets.push("returned_cash_session_id = NULL");
   }
 
   const { rows } = await client.query(

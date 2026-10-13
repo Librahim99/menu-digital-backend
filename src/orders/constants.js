@@ -69,6 +69,8 @@ const LIMITS = {
   itemReasonLength: 120,
   cashierNameLength: 60,
   registerNameLength: 40,
+  cashNotesLength: 200,
+  cashLedgerPageSize: 30,
   maxGuests: 200,
   sectorNameLength: 40,
   maxSectors: 12,
@@ -103,7 +105,25 @@ const PAYMENT_KINDS = {
   other: "Otro",
 };
 
+// Movimientos de caja que carga el personal y sus conceptos. "withdrawal" es
+// plata que sale del cajón pero sigue siendo del local (no es un gasto).
+const CASH_MOVEMENT_TYPES = {
+  income: "Ingreso",
+  expense: "Egreso",
+  withdrawal: "Retiro",
+};
+const CASH_MOVEMENT_CATEGORIES = {
+  income: { change: "Cambio / refuerzo de fondo", debt: "Cobro de una deuda", other: "Otro ingreso" },
+  expense: {
+    supplier: "Proveedor", supplies: "Insumos / compras", salary: "Sueldos y adelantos", services: "Servicios e impuestos",
+    delivery: "Envíos / cadetería", tips: "Propinas", other: "Otro gasto",
+  },
+  withdrawal: { owner: "Retiro del dueño", bank: "Depósito en el banco", safe: "A caja fuerte", other: "Otro retiro" },
+};
+
 module.exports = {
+  CASH_MOVEMENT_TYPES,
+  CASH_MOVEMENT_CATEGORIES,
   ORDER_STATUSES,
   ACTIVE_STATUSES,
   STATUS_TRANSITIONS,
