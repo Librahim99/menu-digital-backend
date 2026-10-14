@@ -28,7 +28,7 @@ const {
   uploadBackground,
   uploadFavicon,
   removeImage,
-  deleteBackground,
+  deleteBackground, useGalleryAsBackground,
   deleteFavicon,
   useTemplate,
   setActive,
@@ -94,6 +94,7 @@ router.post("/upload-image", protect, uploadUser.single("image"), uploadImage);
 router.post("/upload-background", protect, uploadUser.single("image"), uploadBackground);
 router.delete("/remove-image", protect, removeImage);
 router.delete("/background", protect, deleteBackground);
+router.patch("/background/from-gallery", protect, useGalleryAsBackground);
 router.post("/upload-favicon", protect, acceptFavicon, uploadFavicon);
 router.delete("/favicon", protect, deleteFavicon);
 router.patch("/template", protect, useTemplate);

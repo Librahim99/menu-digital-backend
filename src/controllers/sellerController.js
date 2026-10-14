@@ -396,6 +396,41 @@ const createSellerTestUser = async (req, res) => {
   }
 };
 
+// ──────────────────────────────────────────────
+// @desc    Usuarios de prueba de un vendedor (menú contextual del ABM): no
+//          aparecen en el CRM ni en las estadísticas, así que no hay otra
+//          pantalla que los liste. La baja usa PATCH /admin/users/:id/active.
+// @route   GET /api/admin/sellers/:id/test-user
+// @access  Admin
+// ──────────────────────────────────────────────
+const getSellerTestUsers = async (req, res) => {
+  try {
+    const seller = await Seller.findById(req.params.id).select("_id");
+    if (!seller) return res.status(404).json({ message: "Vendedor no encontrado" });
+
+    const users = await User.find({ sellerID: seller._id, testUser: true })
+      .select("username slug contactInfo subscription subscriptionExpiresAt active createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({
+      users: users.map((user) => ({
+        _id: user._id,
+        username: user.username,
+        slug: user.slug ?? null,
+        mail: user.contactInfo?.mail ?? "",
+        number: user.contactInfo?.number ?? null,
+        subscription: user.subscription,
+        subscriptionExpiresAt: user.subscriptionExpiresAt ?? null,
+        active: user.active !== false,
+        createdAt: user.createdAt,
+      })),
+    });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
 module.exports = {
   getSellers,
   getSellerById,
@@ -404,5 +439,6 @@ module.exports = {
   deleteSeller,
   resetSellerPassword,
   createSellerTestUser,
+  getSellerTestUsers,
 };
 

@@ -1787,6 +1787,40 @@ const uploadBackground = async (req, res) => {
 };
 
 // ──────────────────────────────────────────────
+// @desc    Usar una foto de la galería como portada (menú contextual del
+//          editor del negocio). Se elige por índice: solo puede ser una foto
+//          que ya está en la galería del local, nunca una URL suelta.
+// @route   PATCH /api/users/background/from-gallery
+// @access  Private
+// @body    { index: number }
+// ──────────────────────────────────────────────
+const useGalleryAsBackground = async (req, res) => {
+  try {
+    const { index } = req.body ?? {};
+    if (!Number.isInteger(index)) {
+      return res.status(400).json({ message: "Falta la foto de la galería a usar" });
+    }
+
+    const user = await User.findById(req.user._id).select("media");
+    if (!user) return res.status(404).json({ message: "Usuario no encontrado" });
+
+    const pictures = user.media?.pictures ?? [];
+    if (index < 0 || index >= pictures.length) {
+      return res.status(400).json({ message: "Esa foto ya no está en la galería" });
+    }
+
+    const updated = await User.findByIdAndUpdate(
+      req.user._id,
+      { "media.backgroundPicture": pictures[index] },
+      { new: true }
+    );
+    res.json({ media: updated.media });
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
 // @desc    Eliminar una foto puntual de la galería (media.pictures) por índice.
 //          Solo quita la referencia en MongoDB, no borra el archivo en Cloudinary.
 // @route   DELETE /api/users/remove-image
@@ -2211,6 +2245,7 @@ module.exports = {
   uploadFavicon,
   removeImage,
   deleteBackground,
+  useGalleryAsBackground,
   deleteFavicon,
   useTemplate,
   setActive,

@@ -1,6 +1,7 @@
 // Panel de Gestión de pedidos del dueño del local (JWT + plan PRO).
 
 const { route, OrdersError } = require("../errors");
+const { cashCloseWorkbook, cashCloseFileName } = require("../services/cashExport");
 const settingsService = require("../services/settingsService");
 const shiftService = require("../services/shiftService");
 const orderService = require("../services/orderService");
@@ -313,6 +314,25 @@ const closeCash = route(async (req, res) => {
   res.json({ session: await cashService.closeSession(ownerIdOf(req), idParam(req), req.body ?? {}, panelActor(req)) });
 });
 
+// Excel del cierre de una caja: resumen, cobros por medio y el libro entero.
+const MAX_EXPORT_LEDGER_PAGES = 100;
+const exportCashSession = route(async (req, res) => {
+  const ownerId = ownerIdOf(req);
+  const sessionId = idParam(req);
+  const session = await cashService.getSession(ownerId, sessionId);
+  const entries = [];
+  for (let page = 1; page <= MAX_EXPORT_LEDGER_PAGES; page += 1) {
+    const ledger = await cashService.getLedger(ownerId, sessionId, { page });
+    entries.push(...ledger.entries);
+    if (entries.length >= ledger.total || ledger.entries.length === 0) break;
+  }
+  const workbook = cashCloseWorkbook(session, entries);
+  res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  res.setHeader("Content-Disposition", `attachment; filename=${cashCloseFileName(session)}`);
+  await workbook.xlsx.write(res);
+  res.end();
+});
+
 // Libro de una caja (?type=&cashOnly=1&page=).
 const getCashLedger = route(async (req, res) => {
   const { type, cashOnly } = req.query;
@@ -403,6 +423,7 @@ module.exports = {
   listOpenCash,
   listClosedCash,
   getCashLedger,
+  exportCashSession,
   addCashMovement,
   voidCashMovement,
   getSalesReport,

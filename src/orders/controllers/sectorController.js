@@ -77,6 +77,18 @@ const ownerTickets = route(async (req, res) => {
   });
 });
 
+// Comandas de un pedido para reimprimirlas desde el panel, con la
+// configuración de impresión de cada sector.
+const orderTickets = route(async (req, res) => {
+  const ownerId = ownerIdOf(req);
+  const [tickets, sectors] = await Promise.all([
+    ticketService.listOrderTickets(ownerId, idParam(req)),
+    sectorService.listSectors(ownerId),
+  ]);
+  const involved = new Set(tickets.map((ticket) => ticket.sectorId));
+  res.json({ tickets, sectors: sectors.filter((sector) => involved.has(sector.id)) });
+});
+
 const ownerTicketStatus = route(async (req, res) => {
   res.json({
     ticket: await ticketService.updateTicketStatus(ownerIdOf(req), idParam(req), idParam(req, "ticketId"), req.body?.status),
@@ -149,6 +161,7 @@ module.exports = {
   revokeSessions,
   revokeSession,
   ownerTickets,
+  orderTickets,
   ownerTicketStatus,
   ownerTicketPrinted,
   pair,
