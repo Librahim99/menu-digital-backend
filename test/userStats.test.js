@@ -63,10 +63,9 @@ test("visitas: ceros, total actual/anterior y hoy separados, consulta solo el us
   assert.equal(res.body.periodStart, "2026-08-17");
 });
 
-test("ranking: agrupa ambos períodos del mismo local, excluye hoy y conserva productos eliminados", async (t) => {
+test("ranking: agrupa ambos períodos del mismo local, excluye hoy y deja afuera los productos eliminados", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now });
   const itemId = new mongoose.Types.ObjectId();
-  const deletedId = new mongoose.Types.ObjectId();
   const orderedOnlyId = new mongoose.Types.ObjectId();
   t.mock.method(ItemView, "aggregate", async pipeline => {
     assert.deepEqual(pipeline[0].$match, {
@@ -76,26 +75,25 @@ test("ranking: agrupa ambos períodos del mismo local, excluye hoy y conserva pr
     assert.deepEqual(pipeline[1].$group.previousViews.$sum.$cond, [{ $lt: ["$date", "2026-09-09"] }, "$count", 0]);
     assert.deepEqual(pipeline[1].$group.orders.$sum.$cond, [{ $gte: ["$date", "2026-09-09"] }, { $ifNull: ["$orders", 0] }, 0]);
     assert.deepEqual(pipeline.at(-1), { $limit: 10 });
+    // El cruce con Item descarta los eliminados antes de ordenar y cortar:
+    // un producto eliminado no ocupa lugar en el top 10.
+    assert.deepEqual(pipeline[3].$lookup, {
+      from: Item.collection.name, localField: "_id", foreignField: "_id",
+      pipeline: [{ $project: { title: 1, image: 1 } }], as: "item",
+    });
+    assert.deepEqual(pipeline[4], { $unwind: "$item" });
+    const empanadas = { _id: itemId, totalViews: 20, previousViews: 8, orders: 3, item: { _id: itemId, title: "Empanadas" } };
     if (pipeline[2].$match.orders) {
-      assert.deepEqual(pipeline[3], { $sort: { orders: -1, totalViews: -1, _id: 1 } });
-      return [{ _id: orderedOnlyId, totalViews: 0, previousViews: 0, orders: 4 }, { _id: itemId, totalViews: 20, previousViews: 8, orders: 3 }];
+      assert.deepEqual(pipeline[5], { $sort: { orders: -1, totalViews: -1, _id: 1 } });
+      return [{ _id: orderedOnlyId, totalViews: 0, previousViews: 0, orders: 4, item: { _id: orderedOnlyId, title: "Flan", image: "flan.jpg" } }, empanadas];
     }
     assert.deepEqual(pipeline[2], { $match: { totalViews: { $gt: 0 } } });
-    return [{ _id: itemId, totalViews: 20, previousViews: 8, orders: 3 }, { _id: deletedId, totalViews: 5, previousViews: 0, orders: 0 }];
-  });
-  t.mock.method(Item, "find", query => {
-    // Una sola búsqueda para los dos rankings, sin repetir productos.
-    assert.deepEqual(query._id.$in, [itemId, deletedId, orderedOnlyId]);
-    return { select: async () => [
-      { _id: itemId, title: "Empanadas", image: "" },
-      { _id: orderedOnlyId, title: "Flan", image: "flan.jpg" },
-    ] };
+    assert.deepEqual(pipeline[5], { $sort: { totalViews: -1, _id: 1 } });
+    return [empanadas];
   });
   const res = response();
   await fetchItemStats({ user, query: { days: "7", userID: "otro-local" } }, res);
-  assert.equal(res.body.topItems[0].previousViews, 8);
-  assert.equal(res.body.topItems[0].orders, 3);
-  assert.equal(res.body.topItems[1].title, "(producto eliminado)");
+  assert.deepEqual(res.body.topItems, [{ itemID: itemId, title: "Empanadas", image: "", totalViews: 20, previousViews: 8, orders: 3 }]);
   assert.deepEqual(res.body.topOrdered.map(item => [item.title, item.orders]), [["Flan", 4], ["Empanadas", 3]]);
   assert.equal(res.body.windowDays, 7);
 });
@@ -232,7 +230,6 @@ test("el contrato anterior sin days sigue disponible", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now });
   t.mock.method(PageView, "find", async () => [{ date: "2026-09-16", count: 9 }]);
   t.mock.method(ItemView, "aggregate", async () => []);
-  t.mock.method(Item, "find", () => ({ select: async () => [] }));
   const visits = response(), items = response();
   await fetchStats({ user }, visits);
   await fetchItemStats({ user }, items);

@@ -1,3 +1,4 @@
+const Item = require("../models/Item");
 const { buenosAiresHour } = require("./dates");
 
 // ──────────────────────────────────────────────
@@ -93,7 +94,23 @@ const summarizeWindow = (rows, dates) => {
   return { hours, hoursFrom, audience };
 };
 
+// Etapas para los rankings de ItemView ya agrupados por itemID: suman en
+// `item` el título y la imagen actuales y descartan los productos que se
+// eliminaron. Van antes del $limit, así un producto eliminado no le saca el
+// lugar a uno vigente.
+const EXISTING_ITEM_STAGES = [
+  { $lookup: {
+    from: Item.collection.name,
+    localField: "_id",
+    foreignField: "_id",
+    pipeline: [{ $project: { title: 1, image: 1 } }],
+    as: "item",
+  } },
+  { $unwind: "$item" },
+];
+
 module.exports = {
+  EXISTING_ITEM_STAGES,
   parseVisit,
   buildVisitUpdate,
   summarizeWindow,

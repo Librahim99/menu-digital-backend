@@ -1,9 +1,9 @@
 const PageView = require("../models/PageView");
 const ItemView = require("../models/ItemView");
-const Item = require("../models/Item");
 const { getPool } = require("../config/postgres");
 const { getRequestPlan } = require("../services/planCatalog");
 const { buenosAiresDateStr } = require("../utils/dates");
+const { EXISTING_ITEM_STAGES } = require("../utils/menuAnalytics");
 const { handleError } = require("../utils/handleError");
 const { buildReportWorkbook, SALES_SHEETS, VISIT_SHEETS } = require("../services/reportWorkbook");
 const reportService = require("../orders/services/reportService");
@@ -54,16 +54,13 @@ const loadVisits = async (userId, dates, sheets) => {
       ? ItemView.aggregate([
         { $match: { userID: userId, date: range } },
         { $group: { _id: "$itemID", views: { $sum: "$count" }, orders: { $sum: { $ifNull: ["$orders", 0] } } } },
+        ...EXISTING_ITEM_STAGES,
         { $sort: { views: -1, _id: 1 } },
         { $limit: PRODUCT_ROWS },
       ])
       : [],
   ]);
   const byDate = new Map(rows.map((row) => [row.date, row]));
-  const titles = itemRows.length > 0
-    ? new Map((await Item.find({ _id: { $in: itemRows.map((row) => row._id) } }).select("title"))
-      .map((item) => [item._id.toString(), item.title]))
-    : new Map();
   return {
     // Un día sin las métricas del protocolo de sesiones queda en blanco, no
     // en cero: no se midió (ver models/PageView).
@@ -81,7 +78,7 @@ const loadVisits = async (userId, dates, sheets) => {
       };
     }),
     items: itemRows.map((row) => ({
-      title: titles.get(row._id.toString()) || "(producto eliminado)",
+      title: row.item.title,
       views: row.views,
       orders: row.orders,
     })),

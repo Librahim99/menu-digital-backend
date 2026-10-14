@@ -21,7 +21,7 @@ const {
 const { buenosAiresDateStr } = require("../utils/dates");
 const { buildStatsPeriod } = require("../utils/statsPeriod");
 const {
-  parseVisit, buildVisitUpdate, summarizeWindow, MENU_EVENTS, ORDER_ITEMS_MAX,
+  parseVisit, buildVisitUpdate, summarizeWindow, MENU_EVENTS, ORDER_ITEMS_MAX, EXISTING_ITEM_STAGES,
 } = require("../utils/menuAnalytics");
 const { logCrmEvent } = require("../utils/crmEvents");
 const { buildMenuHTML, buildFooterTemplate } = require("../utils/menuPdfTemplate");
@@ -1388,10 +1388,9 @@ const trackMenuEvent = async (req, res) => {
 
 // ──────────────────────────────────────────────
 // @desc    Top de productos más vistos en los últimos 30 días. Mismo gate
-//          de plan que fetchStats. Agrega ItemView por itemID y después
-//          busca el título/imagen actual en Item — un producto borrado
-//          desde entonces se muestra igual, con un texto genérico en vez
-//          de romper la lista.
+//          de plan que fetchStats. Agrega ItemView por itemID con el
+//          título/imagen actual de Item — un producto eliminado desde
+//          entonces no entra en el ranking.
 // @route   GET /api/users/me/item-stats
 // @access  Private (pro+)
 // ──────────────────────────────────────────────
@@ -1421,23 +1420,22 @@ const fetchItemStats = async (req, res) => {
         ItemView.aggregate([
           ...grouped,
           { $match: { totalViews: { $gt: 0 } } },
+          ...EXISTING_ITEM_STAGES,
           { $sort: { totalViews: -1, _id: 1 } },
           { $limit: 10 },
         ]),
         ItemView.aggregate([
           ...grouped,
           { $match: { orders: { $gt: 0 } } },
+          ...EXISTING_ITEM_STAGES,
           { $sort: { orders: -1, totalViews: -1, _id: 1 } },
           { $limit: 10 },
         ]),
       ]);
-      const ids = [...new Map([...rows, ...orderedRows].map(row => [row._id.toString(), row._id])).values()];
-      const items = await Item.find({ _id: { $in: ids } }).select("title image");
-      const byId = new Map(items.map(item => [item._id.toString(), item]));
       const toStat = row => ({
         itemID: row._id,
-        title: byId.get(row._id.toString())?.title || "(producto eliminado)",
-        image: byId.get(row._id.toString())?.image || "",
+        title: row.item.title,
+        image: row.item.image || "",
         totalViews: row.totalViews,
         previousViews: row.previousViews,
         orders: row.orders ?? 0,
@@ -1457,23 +1455,17 @@ const fetchItemStats = async (req, res) => {
     const rows = await ItemView.aggregate([
       { $match: { userID: req.user._id, date: { $gte: sinceStr } } },
       { $group: { _id: "$itemID", totalViews: { $sum: "$count" } } },
+      ...EXISTING_ITEM_STAGES,
       { $sort: { totalViews: -1 } },
       { $limit: 10 },
     ]);
 
-    const items = await Item.find({ _id: { $in: rows.map((r) => r._id) } }).select("title image");
-    const byId = {};
-    items.forEach((it) => { byId[it._id.toString()] = it; });
-
-    const topItems = rows.map((r) => {
-      const item = byId[r._id.toString()];
-      return {
-        itemID: r._id,
-        title: item?.title || "(producto eliminado)",
-        image: item?.image || "",
-        totalViews: r.totalViews,
-      };
-    });
+    const topItems = rows.map((r) => ({
+      itemID: r._id,
+      title: r.item.title,
+      image: r.item.image || "",
+      totalViews: r.totalViews,
+    }));
 
     res.json({ topItems, windowDays: 30 });
   } catch (error) {
