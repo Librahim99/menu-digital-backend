@@ -389,3 +389,30 @@ test("local sin pedidos directos del comensal: el grupo arma el carrito y lo env
   assert.equal((await call("POST", `/groups/${groupId}/close`, { headers: other.panel })).status, 404);
   assert.equal((await call("GET", "/waiter/groups")).status, 401);
 });
+
+test("salón del operador: ve qué mesas atienden los demás, sin su cuenta", async () => {
+  const v = await venue();
+  const juan = await waiterDevice(v, "Juan");
+  const ana = await waiterDevice(v, "Ana");
+  const order = (device, tableNumber) => call("POST", "/waiter/orders", {
+    headers: device.auth,
+    body: { tableNumber, items: [{ itemId: PIZZA, quantity: 1 }], clientRequestId: crypto.randomUUID() },
+  });
+  assert.equal((await order(juan, 2)).status, 201);
+  assert.equal((await order(ana, 7)).status, 201);
+
+  let res = await call("GET", "/waiter/tables", { headers: juan.auth });
+  assert.deepEqual(res.body.sessions.map((session) => session.tableNumber), [2]);
+  assert.equal(res.body.occupied.length, 1);
+  assert.equal(res.body.occupied[0].tableNumber, 7);
+  assert.equal(res.body.occupied[0].waiterName, "Ana");
+  assert.equal(res.body.occupied[0].totalAmount, undefined, "sin la cuenta de la mesa ajena");
+
+  res = await call("GET", "/waiter/tables", { headers: ana.auth });
+  assert.deepEqual(res.body.occupied.map((table) => [table.tableNumber, table.waiterName]), [[2, "Juan"]]);
+
+  // Otro local no aparece.
+  const other = await venue();
+  const pedro = await waiterDevice(other, "Pedro");
+  assert.deepEqual((await call("GET", "/waiter/tables", { headers: pedro.auth })).body.occupied, []);
+});

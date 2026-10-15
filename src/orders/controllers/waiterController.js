@@ -78,16 +78,22 @@ const myOrders = route(async (req, res) => {
 });
 
 // "Mis mesas": las mesas abiertas del operador y las que no tomó nadie
-// todavía (ej. abiertas por un pedido del comensal), con sus pedidos.
+// todavía (ej. abiertas por un pedido del comensal), con sus pedidos. Para
+// el salón, también cuáles atienden los demás operadores (sin su cuenta).
 const myTables = route(async (req, res) => {
-  const { sessions } = await tableSessionService.listSessions(ownerIdOf(req), {
-    status: "open",
-    waiterId: req.waiterSession.waiterId,
-    includeUnassigned: true,
-    withOrders: true,
-    pageSize: 100,
-  });
-  res.json({ sessions });
+  const ownerId = ownerIdOf(req);
+  const { waiterId } = req.waiterSession;
+  const [{ sessions }, occupied] = await Promise.all([
+    tableSessionService.listSessions(ownerId, {
+      status: "open",
+      waiterId,
+      includeUnassigned: true,
+      withOrders: true,
+      pageSize: 100,
+    }),
+    tableSessionService.listOccupiedByOthers(ownerId, waiterId),
+  ]);
+  res.json({ sessions, occupied });
 });
 
 const closeTable = route(async (req, res) => {

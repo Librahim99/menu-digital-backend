@@ -131,6 +131,20 @@ const listSessions = async (ownerId, {
   return { sessions, total: count.rows[0].total, page, pageSize };
 };
 
+/**
+ * Mesas abiertas que atienden otros operadores: solo cuál y quién, sin la
+ * cuenta. Con esto el salón del operador no las muestra como libres.
+ */
+const listOccupiedByOthers = async (ownerId, waiterId) => {
+  const { rows } = await query(
+    `SELECT table_number, waiter_name, opened_at FROM table_sessions
+     WHERE owner_id = $1 AND closed_at IS NULL AND waiter_id IS NOT NULL AND waiter_id <> $2
+     ORDER BY table_number`,
+    [ownerId, waiterId]
+  );
+  return rows.map((row) => ({ tableNumber: row.table_number, waiterName: row.waiter_name, openedAt: row.opened_at }));
+};
+
 const getSessionRow = async (runner, ownerId, sessionId, { lock = false } = {}) => {
   const { rows } = await runner.query(
     `SELECT * FROM table_sessions WHERE owner_id = $1 AND id = $2${lock ? " FOR UPDATE" : ""}`,
@@ -222,6 +236,7 @@ const setGuests = async (ownerId, sessionId, guests, { waiterId = null } = {}) =
 module.exports = {
   lockOrOpenTableSession,
   listSessions,
+  listOccupiedByOthers,
   getSession,
   closeSession,
   setGuests,
