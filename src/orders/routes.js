@@ -169,6 +169,7 @@ router.get("/orders/:id/payment", ownerOnly, mpRefunds.getOrderPayment);
 router.post("/orders/:id/refund", ownerOnly, mpRefunds.requestRefund);
 router.post("/orders/:id/refunds/:refundId/retry", ownerOnly, mpRefunds.retryRefund);
 router.post("/orders/:id/dispatch", ownerOnly, owner.dispatchOrder);
+router.get("/orders/:id/tickets", ownerOnly, sectors.orderTickets);
 router.patch("/orders/:id/waiter", ownerOnly, owner.assignOrderWaiter);
 // Un producto del pedido: quitarlo (falta de stock…), restaurarlo o entregarlo antes que el resto.
 router.post("/orders/:id/items/:itemId/remove", ownerOnly, owner.removeOrderItem);
@@ -235,6 +236,7 @@ router.get("/cash/sessions/:id", ownerOnly, owner.getCashSession);
 router.patch("/cash/sessions/:id", ownerOnly, owner.updateCash);
 router.post("/cash/sessions/:id/close", ownerOnly, owner.closeCash);
 router.get("/cash/sessions/:id/ledger", ownerOnly, owner.getCashLedger);
+router.get("/cash/sessions/:id/export", ownerOnly, owner.exportCashSession);
 router.post("/cash/sessions/:id/movements", ownerOnly, owner.addCashMovement);
 router.post("/cash/movements/:id/void", ownerOnly, owner.voidCashMovement);
 

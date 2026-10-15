@@ -3,7 +3,7 @@ const router = express.Router();
 const { protect, requireFeature } = require("../middleware/auth");
 const { uploadMenu: uploadMenuMiddleware } = require("../config/cloudinary");
 const {
-  newMenu, editMenu, moveMenu, reorderMenus, hideMenu, deleteMenu, uploadImage, setMenusHiddenBulk, deleteMenusBulk,
+  newMenu, editMenu, duplicateMenu, moveMenu, reorderMenus, hideMenu, deleteMenu, uploadImage, setMenusHiddenBulk, deleteMenusBulk,
 } = require("../controllers/menuController");
 
 // Rutas privadas
@@ -14,6 +14,7 @@ router.patch("/reorder", protect, requireFeature("menu_editor"), reorderMenus);
 router.patch("/bulk/hidden", protect, requireFeature("menu_editor"), setMenusHiddenBulk);
 router.post("/bulk/delete", protect, requireFeature("menu_editor"), deleteMenusBulk);
 router.put("/:menuID", protect, requireFeature("menu_editor"), editMenu);
+router.post("/:menuID/duplicate", protect, requireFeature("menu_editor"), duplicateMenu);
 router.patch("/:menuID/move", protect, requireFeature("menu_editor"), moveMenu);
 router.patch("/:menuID/hidden", protect, requireFeature("menu_editor"), hideMenu);
 router.delete("/:menuID", protect, requireFeature("menu_editor"), deleteMenu);

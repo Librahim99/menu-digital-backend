@@ -3,7 +3,8 @@ const Menu = require("../models/Menu");
 const Item = require("../models/Item");
 const User = require("../models/User");
 const { generateAutoCode } = require("../utils/autoCode");
-const { recycleDeletedItemImages, MAX_BULK_ITEMS } = require("./itemController");
+const { recycleDeletedItemImages, buildCopyCode, MAX_BULK_ITEMS } = require("./itemController");
+const { getRequestPlan } = require("../services/planCatalog");
 const {
   getNextOrder, menuContainerFilter, isObjectIdString, parseReorderIds, buildReorder,
 } = require("../utils/menuOrder");
@@ -112,6 +113,95 @@ const editMenu = async (req, res) => {
     );
  
     res.json(updated);
+  } catch (error) {
+    handleError(res, error);
+  }
+};
+
+// ──────────────────────────────────────────────
+// @desc    Duplicar una categoría con todos sus productos (menú contextual
+//          del editor). La copia queda justo debajo de la original, en la
+//          misma sección, como "Copia de ...": igual en todo (descripción,
+//          imagen, visibilidad) salvo el código, que es el del original +
+//          "-COPIA" (o uno automático si el local los usa). Sus productos se
+//          copian tal cual, en el mismo orden y con el mismo criterio de
+//          código que duplicar un producto. Suma productos: respeta el tope
+//          del plan (todo o nada). Las secciones no se duplican.
+// @route   POST /api/menus/:menuID/duplicate
+// @access  Private
+// ──────────────────────────────────────────────
+const duplicateMenu = async (req, res) => {
+  try {
+    const original = await Menu.findById(req.params.menuID);
+    if (!original) return res.status(404).json({ message: "Categoría no encontrada" });
+    if (original.userID.toString() !== req.user._id.toString()) return res.status(403).json({ message: "No autorizado" });
+    if (original.section === true) return res.status(400).json({ message: "Solo se pueden duplicar categorías." });
+
+    const items = await Item.find({ menuID: original._id }).sort({ order: 1, _id: 1 });
+    const userMenus = await Menu.find({ userID: req.user._id }).select("_id code");
+    const userMenuIDs = userMenus.map((m) => m._id);
+
+    const { features } = await getRequestPlan(req);
+    const itemLimit = features.item_limit;
+    if (itemLimit !== null && items.length > 0) {
+      const itemCount = await Item.countDocuments({ menuID: { $in: userMenuIDs } });
+      if (itemCount + items.length > itemLimit) {
+        return res.status(403).json({
+          message: `Duplicar esta categoría suma ${items.length} producto${items.length !== 1 ? "s" : ""} y superaría el límite de ${itemLimit} productos de tu plan. Mejorá tu plan para agregar más productos.`,
+        });
+      }
+    }
+
+    const autoGenerate = req.user.panelSettings?.autoGenerateCodes === true;
+    const menuCodes = userMenus.map((m) => m.code);
+    const originalCode = (original.code || "").trim();
+
+    // Justo debajo de la original: se corren un lugar las que le siguen en su sección.
+    const container = menuContainerFilter(req.user._id, { section: false, sectionID: original.sectionID ?? null });
+    let order;
+    if (typeof original.order === "number" && Number.isFinite(original.order)) {
+      await Menu.updateMany({ ...container, order: { $gt: original.order } }, { $inc: { order: 1 } });
+      order = original.order + 1;
+    } else {
+      order = await getNextOrder(Menu, container);
+    }
+
+    const copy = new Menu({
+      userID: req.user._id,
+      title: `Copia de ${original.title}`,
+      description: original.description,
+      image: original.image,
+      hidden: original.hidden === true,
+      section: false,
+      sectionID: original.sectionID ?? null,
+      code: originalCode ? buildCopyCode(originalCode, menuCodes) : autoGenerate ? String(Date.now()) : "",
+      order,
+    });
+    await copy.save();
+    if (!originalCode && autoGenerate) {
+      copy.code = generateAutoCode(copy.title, copy._id.toString(), menuCodes);
+      await copy.save();
+    }
+
+    // Los códigos de producto se reservan a medida que se copian: dos copias no chocan entre sí.
+    const itemCodes = (await Item.find({ menuID: { $in: userMenuIDs } }).select("code")).map((i) => i.code);
+    for (const item of items) {
+      const data = item.toObject();
+      delete data._id;
+      delete data.__v;
+      delete data.createdAt;
+      delete data.updatedAt;
+      const itemCode = (item.code || "").trim();
+      const code = itemCode ? buildCopyCode(itemCode, itemCodes) : "";
+      const created = await Item.create({ ...data, menuID: copy._id, code: code || (autoGenerate ? String(Date.now()) : "") });
+      if (!code && autoGenerate) {
+        created.code = generateAutoCode(created.title, created._id.toString(), itemCodes);
+        await created.save();
+      }
+      itemCodes.push(created.code);
+    }
+
+    res.status(201).json({ menu: copy, itemCount: items.length });
   } catch (error) {
     handleError(res, error);
   }
@@ -450,5 +540,5 @@ const deleteMenusBulk = async (req, res) => {
 };
 
 module.exports = {
-  newMenu, editMenu, moveMenu, reorderMenus, hideMenu, deleteMenu, uploadImage, setMenusHiddenBulk, deleteMenusBulk,
+  newMenu, editMenu, duplicateMenu, moveMenu, reorderMenus, hideMenu, deleteMenu, uploadImage, setMenusHiddenBulk, deleteMenusBulk,
 };

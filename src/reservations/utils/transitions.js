@@ -18,8 +18,10 @@ const OWNER_ACTIONS = {
   cancel: { from: ["pending", "confirmed", "rejected"], to: "cancelled" },
   complete: { from: ["confirmed"], to: "completed" },
   no_show: { from: ["confirmed"], to: "no_show" },
-  // El local vuelve a dejar pendiente una reserva rechazada (ej. se liberó una mesa).
-  reopen: { from: ["rejected"], to: "pending" },
+  // El local vuelve a dejar pendiente una reserva rechazada (ej. se liberó una
+  // mesa) o una que cerró él mismo por error (completada / no asistió). Las
+  // canceladas no: al cliente ya se le avisó, y pudo cancelarla él.
+  reopen: { from: ["rejected", "completed", "no_show"], to: "pending" },
 };
 
 const assertFrom = (reservation, allowed) => {

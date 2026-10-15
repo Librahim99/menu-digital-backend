@@ -10,6 +10,7 @@ const  {
   deleteSeller,
   resetSellerPassword,
   createSellerTestUser,
+  getSellerTestUsers,
 } = require("../controllers/sellerController.js");
 // Obtener todos
 router.get("/", protect, isAdmin, getSellers);
@@ -28,6 +29,8 @@ router.patch("/:id/password", protect, isAdmin, resetSellerPassword);
 
 // Crear el usuario de prueba (cuenta de comercio Pro para las demos del vendedor)
 router.post("/:id/test-user", protect, isAdmin, createSellerTestUser);
+// Ver sus usuarios de prueba (para darlos de baja)
+router.get("/:id/test-user", protect, isAdmin, getSellerTestUsers);
 
 // Dar de baja (baja lógica: active:false)
 router.delete("/:id", protect, isAdmin, deleteSeller);

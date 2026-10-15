@@ -172,6 +172,20 @@ const listSectorTickets = async (ownerId, sectorId) => {
   return { tickets, recent: recentTickets };
 };
 
+/**
+ * Comandas vigentes de un pedido (no anuladas), con sus productos: el panel
+ * las usa para reimprimirlas sin abrir la pantalla de cada sector.
+ */
+const listOrderTickets = async (ownerId, orderId) => {
+  const { rows } = await query(
+    `${SELECT_TICKETS}
+     WHERE t.owner_id = $1 AND t.order_id = $2 AND t.status <> 'cancelled'
+     ORDER BY t.sector_id`,
+    [ownerId, orderId]
+  );
+  return withTicketItems(rows);
+};
+
 const TICKET_TIMESTAMPS = { preparing: "started_at", done: "done_at" };
 
 const getSectorTicket = async (runner, ownerId, sectorId, ticketId, { lock = false } = {}) => {
@@ -230,6 +244,7 @@ module.exports = {
   cancelEmptyTickets,
   syncTicketsWithOrder,
   listSectorTickets,
+  listOrderTickets,
   updateTicketStatus,
   markPrinted,
 };

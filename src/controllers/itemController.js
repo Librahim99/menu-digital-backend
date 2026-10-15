@@ -1163,5 +1163,6 @@ module.exports = {
   assignImages,
   deleteLibraryImage,
   recycleDeletedItemImages,
+  buildCopyCode,
   MAX_BULK_ITEMS
 };

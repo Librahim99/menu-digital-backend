@@ -154,6 +154,17 @@ test("la alternativa no puede ser el mismo horario ni venir sin hora", () => {
   assert.equal(otherDay.alt_date, "2026-10-13");
 });
 
+test("volver a pendiente: desde rechazada o un cierre del local, no desde cancelada", () => {
+  for (const status of ["rejected", "completed", "no_show"]) {
+    const update = ownerAction(reservation({ status, alt_time: "22:30" }), "reopen");
+    assert.equal(update.status, "pending", status);
+    assert.equal(update.alt_time, null);
+  }
+  for (const status of ["cancelled", "pending", "confirmed"]) {
+    assert.throws(() => ownerAction(reservation({ status }), "reopen"), (e) => e.status === 409, status);
+  }
+});
+
 test("transiciones inválidas devuelven 409", () => {
   assert.throws(() => ownerAction(reservation({ status: "cancelled" }), "confirm"), (e) => e.status === 409);
   assert.throws(() => ownerAction(reservation({ status: "pending" }), "complete"), (e) => e.status === 409);

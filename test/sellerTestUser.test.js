@@ -5,7 +5,7 @@ const Seller = require("../src/models/Seller");
 const User = require("../src/models/User");
 const Plan = require("../src/models/Plan");
 const { INITIAL_PLANS } = require("../src/services/planCatalog");
-const { createSellerTestUser } = require("../src/controllers/sellerController");
+const { createSellerTestUser, getSellerTestUsers } = require("../src/controllers/sellerController");
 const { generateAuthToken } = require("../src/utils/authToken");
 
 const SELLER_ID = "64f000000000000000000401";
@@ -232,4 +232,42 @@ test("POST /api/admin/sellers/:id/test-user exige sesión de admin", async (t) =
 
   assert.equal((await post()).status, 401);
   assert.equal((await post({ authorization: `Bearer ${generateAuthToken(plainUser._id)}` })).status, 403);
+});
+
+test("lista los usuarios de prueba del vendedor (solo los de prueba, el más nuevo primero)", async (t) => {
+  t.mock.method(Seller, "findById", () => ({ select: async () => ({ _id: SELLER_ID }) }));
+  let filter;
+  let order;
+  t.mock.method(User, "find", (query) => {
+    filter = query;
+    return {
+      select: () => ({
+        sort: (sort) => {
+          order = sort;
+          return {
+            lean: async () => [{
+              _id: "u9", username: "democarla", slug: "democarla", contactInfo: { mail: "carla@example.com", number: 1123 },
+              subscription: "pro", subscriptionExpiresAt: null, createdAt: "2026-10-01T00:00:00Z",
+            }],
+          };
+        },
+      }),
+    };
+  });
+  const res = response();
+  await getSellerTestUsers({ params: { id: SELLER_ID } }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(filter, { sellerID: SELLER_ID, testUser: true });
+  assert.deepEqual(order, { createdAt: -1 });
+  assert.equal(res.body.users[0].username, "democarla");
+  assert.equal(res.body.users[0].mail, "carla@example.com");
+  assert.equal(res.body.users[0].active, true, "sin el campo, está activo");
+});
+
+test("usuarios de prueba de un vendedor que no existe: 404", async (t) => {
+  t.mock.method(Seller, "findById", () => ({ select: async () => null }));
+  const res = response();
+  await getSellerTestUsers({ params: { id: SELLER_ID } }, res);
+  assert.equal(res.statusCode, 404);
 });
