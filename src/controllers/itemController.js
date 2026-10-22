@@ -9,6 +9,7 @@ const { cloudinary } = require("../config/cloudinary");
 const { isValidImageUrl } = require("../utils/imageUrl");
 const { generateAutoCode } = require("../utils/autoCode");
 const { getNextOrder, isObjectIdString, parseReorderIds, buildReorder } = require("../utils/menuOrder");
+const { validateAllergenFields, getAllergenCatalog } = require("../utils/allergens");
 
 // ──────────────────────────────────────────────
 // Helper: verifica que el menuID pertenezca al user autenticado.
@@ -122,6 +123,9 @@ const newItem = async (req, res) => {
       offerPrice, offerRange, offerSchedule, availabilitySchedule, options, isExtra, recommended, apt, hidden, available
     } = req.body;
 
+    const allergenValidation = validateAllergenFields(req.body);
+    if (allergenValidation.error) return res.status(400).json({ message: allergenValidation.error });
+
         if (req.body.price != null && Number(req.body.price) < 0) {
           return res.status(400).json({ message: "El precio no puede ser negativo" });
         }
@@ -193,7 +197,8 @@ const newItem = async (req, res) => {
         offerPrice: normalizedOffer.offerPrice, offerRange: normalizedOffer.offerRange,
         offerSchedule: normalizedOffer.offerSchedule,
         availabilitySchedule: normalizedAvailabilitySchedule,
-        options, isExtra, recommended, apt, hidden, available
+        options, isExtra, recommended, apt, hidden, available,
+        ...allergenValidation.updates,
       });
 
     if (autoGenerate) {
@@ -344,6 +349,12 @@ const editItem = async (req, res) => {
         return res.status(400).json({ message: `${field} debe ser un booleano` });
       }
     }
+
+    // Se validan contra lo ya guardado: mandar solo `dietary: ["sin_tacc"]`
+    // a un producto que tiene gluten también se rechaza.
+    const allergenValidation = validateAllergenFields(req.body, item);
+    if (allergenValidation.error) return res.status(400).json({ message: allergenValidation.error });
+    Object.assign(updates, allergenValidation.updates);
 
     if (updates.options !== undefined && hasNegativeOptionPrice(updates.options)) {
       return res.status(400).json({ message: "El precio de una variante no puede ser negativo" });
@@ -1141,7 +1152,20 @@ const deleteLibraryImage = async (req, res) => {
   }
 };
 
+// ──────────────────────────────────────────────
+// @desc    Catálogo fijo de alérgenos y etiquetas dietarias (códigos,
+//          nombres y orden), para el editor del panel y la carta pública.
+//          Es igual para todos los locales y casi nunca cambia.
+// @route   GET /api/items/allergens
+// @access  Public
+// ──────────────────────────────────────────────
+const getAllergens = (req, res) => {
+  res.set("Cache-Control", "public, max-age=3600");
+  res.json(getAllergenCatalog());
+};
+
 module.exports = {
+  getAllergens,
   newItem,
   duplicateItem,
   editItem,

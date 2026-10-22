@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const { isValidImageUrl } = require("../utils/imageUrl");
+const { ALLERGEN_CODES, DIETARY_CODES } = require("../utils/allergens");
 
 const TimeRangeSchema = new mongoose.Schema(
   {
@@ -147,6 +148,24 @@ const ItemSchema = new mongoose.Schema(
     order: {
       type: Number,
       min: 0,
+    },
+
+    // Alérgenos y etiquetas dietarias: códigos del catálogo fijo de
+    // utils/allergens.js (el nombre y el orden salen de ahí). `allergens` =
+    // lo que contiene; `mayContain` = posibles trazas; `dietary` = Sin TACC,
+    // vegano, etc. Las combinaciones inválidas (Sin TACC con gluten) las
+    // rechaza itemController con validateAllergenFields.
+    allergens: {
+      type: [{ type: String, enum: ALLERGEN_CODES }],
+      default: [],
+    },
+    mayContain: {
+      type: [{ type: String, enum: ALLERGEN_CODES }],
+      default: [],
+    },
+    dietary: {
+      type: [{ type: String, enum: DIETARY_CODES }],
+      default: [],
     },
 
     /**
