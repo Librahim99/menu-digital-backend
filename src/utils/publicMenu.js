@@ -13,7 +13,8 @@ const { isOfferActive } = require("./offers");
 // A diferencia del camino legacy (getPublicMenuItem en userController.js),
 // acá el JSON solo lleva lo que la carta dibuja:
 //   - lo vacío se OMITE (description '', image '', recommended false,
-//     apt {}, options {}, offerPrice null...): el front lo tolera ausente.
+//     apt {}, options {}, offerPrice null, allergens []...): el front lo
+//     tolera ausente.
 //   - los productos pausados (interruptor manual) o fuera de su horario
 //     programado SÍ viajan, con `available: false`, y la carta los muestra
 //     como "No disponible" (igual que el legacy). Los disponibles ahora no
@@ -113,6 +114,13 @@ const toPublicItem = (raw, { features = {}, hidePrices = false, now = new Date()
 
   if (item.recommended === true) publicItem.recommended = true;
   if (hasKeys(item.apt)) publicItem.apt = item.apt;
+
+  // Alérgenos y etiquetas dietarias: códigos del catálogo de
+  // utils/allergens.js (GET /api/items/allergens). Vacíos o ausentes (lean
+  // de productos anteriores a estos campos) se omiten, como el resto.
+  for (const field of ["allergens", "mayContain", "dietary"]) {
+    if (Array.isArray(item[field]) && item[field].length > 0) publicItem[field] = [...item[field]];
+  }
 
   return publicItem;
 };

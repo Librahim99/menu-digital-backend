@@ -871,6 +871,7 @@ const PUBLIC_MENU_MENU_SELECT = "title section sectionID";
 const PUBLIC_MENU_ITEM_SELECT = [
   "menuID", "title", "price", "offerPrice", "offerRange", "offerSchedule",
   "available", "availabilitySchedule", "description", "image", "options", "recommended", "apt",
+  "allergens", "mayContain", "dietary",
 ].join(" ");
 
 // Los items vienen en un solo batch: con el batchSize por defecto del driver

@@ -7,8 +7,11 @@ const {
   newItem, duplicateItem, editItem, moveItem, reorderItems, uploadImage, uploadDraftImage, setHidden, setAvailable, deleteItem,
   setAvailableBulk, setHiddenBulk, deleteItemsBulk,
   getLiteItems, getPendingImages, getPresetImages, checkImageQuota, uploadLibraryImage, assignImages,
-  deleteLibraryImage
+  deleteLibraryImage, getAllergens
 } = require("../controllers/itemController");
+
+// Público: el catálogo de alérgenos lo leen el editor y la carta.
+router.get("/allergens", getAllergens);
 
 router.post("/", protect, requireFeature("menu_editor"), newItem);
 // Antes que /:itemID/upload-image no hace falta (los paths no chocan), pero sí

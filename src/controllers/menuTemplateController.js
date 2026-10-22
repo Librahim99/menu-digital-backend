@@ -28,9 +28,12 @@ const pickCategoryFields = (menu) => {
 const pickItemFields = (item) => {
   const {
     title, description, price, offerPrice, offerRange, offerSchedule, options, image,
-    isExtra, recommended, apt, availabilitySchedule, code,
+    isExtra, recommended, apt, availabilitySchedule, code, allergens, mayContain, dietary,
   } = item.toObject();
-  return { title, description, price, offerPrice, offerRange, offerSchedule, options, image, isExtra, recommended, apt, availabilitySchedule, code };
+  return {
+    title, description, price, offerPrice, offerRange, offerSchedule, options, image, isExtra, recommended, apt, availabilitySchedule, code,
+    allergens, mayContain, dietary,
+  };
 };
 
 // Trae las categorías/secciones e items propios del usuario destino, para
