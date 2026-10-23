@@ -17,6 +17,7 @@ const {
   parseOrderLines, parseService, cleanText, optionalPositiveInt, positiveInt, optionalUuid,
 } = require("../utils/validate");
 const { LIMITS, ORDER_STATUSES, SERVICE_TYPES } = require("../constants");
+const { businessNameOf } = require("../services/menuCatalog");
 
 const ownerIdOf = (req) => String(req.user._id);
 const idParam = (req, name = "id") => positiveInt(req.params[name], { field: "Identificador" });
@@ -38,6 +39,8 @@ const getSettings = route(async (req, res) => {
     settings: settingsService.toSettingsDTO(req.orderSettings),
     tables,
     slug: req.user.slug,
+    // Encabezado de la cuenta impresa.
+    businessName: businessNameOf(req.user),
     openShift: shiftService.toShiftDTO(openShift),
   });
 });
@@ -50,7 +53,7 @@ const updateSettings = route(async (req, res) => {
     await deliveryService.releasePendingOnDisable(ownerIdOf(req));
   }
   const tables = await settingsService.listTables(ownerIdOf(req));
-  res.json({ settings: settingsService.toSettingsDTO(row), tables, slug: req.user.slug });
+  res.json({ settings: settingsService.toSettingsDTO(row), tables, slug: req.user.slug, businessName: businessNameOf(req.user) });
 });
 
 const regenerateQr = route(async (req, res) => {
@@ -59,7 +62,7 @@ const regenerateQr = route(async (req, res) => {
     settingsService.getOrCreateSettings(ownerIdOf(req)),
     settingsService.listTables(ownerIdOf(req)),
   ]);
-  res.json({ settings: settingsService.toSettingsDTO(settings), tables, slug: req.user.slug });
+  res.json({ settings: settingsService.toSettingsDTO(settings), tables, slug: req.user.slug, businessName: businessNameOf(req.user) });
 });
 
 // ── Panel de pedidos ─────────────────────────
